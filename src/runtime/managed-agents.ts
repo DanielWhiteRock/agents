@@ -100,7 +100,7 @@ export class ManagedAgentsRuntime implements AgentRuntime {
 
     const agent = await this.client.beta.agents.create({
       name: pack.name,
-      model: { id: pack.model, effort: pack.effort },
+      model: { id: pack.model, ...(pack.effort ? { effort: pack.effort } : {}) },
       system: composeSystemPrompt(pack),
       description: pack.tagline,
       tools,
@@ -123,7 +123,9 @@ export class ManagedAgentsRuntime implements AgentRuntime {
           type: "agent_with_overrides",
           id: opts.pack.runtimePackId,
           version: Number(opts.pack.version),
-          model: { id: opts.model, effort: opts.effort ?? "high" },
+          // Only send effort when the caller supplied one: some models reject
+          // the field entirely (Haiku 4.5 returns 400 for any effort level).
+          model: { id: opts.model, ...(opts.effort ? { effort: opts.effort } : {}) },
         }
       : { type: "agent", id: opts.pack.runtimePackId, version: Number(opts.pack.version) };
 

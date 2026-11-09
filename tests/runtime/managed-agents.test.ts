@@ -78,6 +78,10 @@ describe("createSession", () => {
       model: { id: "claude-haiku-4-5", effort: "low" },
     });
   });
+  it("omits effort entirely when none is given, since some models reject the field", async () => {
+    await runtime.createSession({ ...opts(), model: "claude-haiku-4-5" });
+    expect(fake.beta.sessions.create.mock.calls[0]![0].agent.model).toEqual({ id: "claude-haiku-4-5" });
+  });
   it("uses the plain pinned form when there is no override", async () => {
     await runtime.createSession(opts());
     expect(fake.beta.sessions.create.mock.calls[0]![0].agent)

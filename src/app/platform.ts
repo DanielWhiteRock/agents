@@ -67,6 +67,13 @@ export function ensureDemoOrg(): { orgId: string; userId: string } {
   return { orgId, userId };
 }
 
+/** Some models reject `effort` entirely, so it is a per-model capability, not a default. */
+export function effortFor(model: string, effort: string | null | undefined): PackDefinition["effort"] | undefined {
+  if (!effort) return undefined;
+  const excluded = setting("models_without_effort").split(",").map((s) => s.trim());
+  return excluded.includes(model) ? undefined : (effort as PackDefinition["effort"]);
+}
+
 export function listPacks(): PackRow[] {
   return getDb().prepare("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_cents DESC").all() as PackRow[];
 }
@@ -90,7 +97,7 @@ export function seedCatalog(): number {
   let n = 0;
   for (const p of SEED_PACKS) {
     const r = ins.run(id("pk"), p.slug, p.name, p.tagline, p.author, p.priceCents, p.upgradePoints,
-      p.model, p.effort, JSON.stringify(p.pinnedModels ?? []), p.instructions, now());
+      p.model, p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now());
     n += Number(r.changes);
   }
   return n;
@@ -102,7 +109,7 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
   if (!pack) throw new Error(`no such pack: ${slug}`);
   const def: PackDefinition = {
     slug: pack.slug, name: pack.name, tagline: pack.tagline, author: pack.author,
-    model: pack.model, effort: pack.effort as PackDefinition["effort"],
+    model: pack.model, effort: effortFor(pack.model, pack.effort),
     priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
   };
@@ -165,7 +172,7 @@ export async function startRun(args: {
     title: `${pack.name} — ${args.orgId}`,
     // Only override when it actually differs: an override replaces the model
     // object wholesale, so a needless one would drop the pack's effort setting.
-    ...(model !== pack.model ? { model, effort: pack.effort as PackDefinition["effort"] } : {}),
+    ...(model !== pack.model ? { model, effort: effortFor(model, pack.effort) } : {}),
   });
 
   const runId = id("run");

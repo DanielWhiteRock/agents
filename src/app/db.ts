@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS packs (
   price_cents INTEGER NOT NULL,
   upgrade_points INTEGER NOT NULL,
   model TEXT NOT NULL,
-  effort TEXT NOT NULL,
+  -- empty string means this model takes no effort setting
+  effort TEXT NOT NULL DEFAULT '',
   pinned_models TEXT NOT NULL DEFAULT '[]',
   instructions TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'listed',
@@ -164,6 +165,8 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   "tier.enterprise.concurrency": "999",
   // Models a buyer may pick. A pack may narrow this further via pinned_models.
   allowed_models: "claude-opus-5,claude-sonnet-5,claude-haiku-4-5",
+  // Models that reject the `effort` field outright (400). Effort is omitted for these.
+  models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
 };
 

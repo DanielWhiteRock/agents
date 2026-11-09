@@ -16,8 +16,12 @@ export type PackDefinition = {
   tagline: string;
   /** Default model. Buyers may override per session unless `pinnedModels` restricts it. */
   model: string;
-  /** Cost dial: low | medium | high | xhigh | max. */
-  effort: "low" | "medium" | "high" | "xhigh" | "max";
+  /**
+   * Cost dial: low | medium | high | xhigh | max.
+   * Optional because not every model accepts it — Haiku 4.5 rejects any effort
+   * level with a 400, so for those models it must be omitted, not defaulted.
+   */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** The expertise. This is the product and must never reach a buyer verbatim. */
   instructions: string;
   /** Author's name, shown in the catalog. */
