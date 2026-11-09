@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { runTurn } from "../../src/runtime/run.js";
+import { runTurn, resumeAfterDecision } from "../../src/runtime/run.js";
 import type { AgentRuntime, RuntimeEvent } from "../../src/runtime/types.js";
 
 const idle: RuntimeEvent = { type: "status", status: "idle", stopReason: null };
@@ -17,6 +17,7 @@ function fakeRuntime(events: RuntimeEvent[], order?: string[]): AgentRuntime {
     streamEvents: vi.fn(async () => { order?.push("stream"); return (async function* () { for (const e of events) yield e; })(); }),
     readSession: vi.fn(async () => session),
     raiseBudgetTo: vi.fn(),
+    confirmTool: vi.fn(),
     deleteSession: vi.fn(),
   } as unknown as AgentRuntime;
 }
@@ -34,6 +35,23 @@ describe("runTurn", () => {
     ]), "s1", "hi");
     const text = events.flatMap((e) => (e.type === "agent.text" ? [e.text] : [])).join("");
     expect(text).toBe("one two");
+  });
+  it("does not stop on a transient idle that is waiting on something", async () => {
+    const { events } = await runTurn(fakeRuntime([
+      { type: "status", status: "idle", stopReason: "requires_action" },
+      { type: "agent.text", text: "kept going" },
+      idle,
+    ]), "s1", "hi");
+    expect(events.some((e) => e.type === "agent.text" && e.text === "kept going")).toBe(true);
+  });
+  it("stops on an idle that is waiting for a decision it can surface", async () => {
+    const { pendingAsks, events } = await runTurn(fakeRuntime([
+      { type: "tool.use", eventId: "sevt_9", name: "bash", input: { command: "rm -rf /" }, permission: "ask", source: "builtin" },
+      { type: "status", status: "idle", stopReason: "requires_action" },
+      { type: "agent.text", text: "never" },
+    ]), "s1", "hi");
+    expect(pendingAsks).toEqual([{ eventId: "sevt_9", name: "bash", input: { command: "rm -rf /" } }]);
+    expect(events.some((e) => e.type === "agent.text")).toBe(false);
   });
   it("stops at terminated as well as idle", async () => {
     const { events } = await runTurn(fakeRuntime([
@@ -54,5 +72,19 @@ describe("runTurn", () => {
     const seen: string[] = [];
     await runTurn(fakeRuntime([{ type: "agent.text", text: "a" }, idle]), "s1", "hi", (e) => seen.push(e.type));
     expect(seen).toEqual(["agent.text", "status"]);
+  });
+});
+
+describe("resumeAfterDecision", () => {
+  it("opens the stream before sending the confirmation", async () => {
+    const order: string[] = [];
+    const rt = fakeRuntime([idle], order);
+    await resumeAfterDecision(rt, "s1", async () => { order.push("confirm"); });
+    expect(order).toEqual(["stream", "confirm"]);
+  });
+  it("returns the continuation the agent produced after the decision", async () => {
+    const { events } = await resumeAfterDecision(
+      fakeRuntime([{ type: "agent.text", text: "carried on" }, idle]), "s1", async () => {});
+    expect(events.some((e) => e.type === "agent.text" && e.text === "carried on")).toBe(true);
   });
 });

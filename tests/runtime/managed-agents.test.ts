@@ -68,9 +68,20 @@ describe("createSession", () => {
   it("refuses to create a session with no budget", async () => {
     await expect(runtime.createSession({ ...opts(), budget: undefined as never })).rejects.toThrow(BudgetRequiredError);
   });
-  it("restates effort alongside a model override, which replaces the object wholesale", async () => {
+  it("nests a model override inside agent_with_overrides, not at the top level", async () => {
     await runtime.createSession({ ...opts(), model: "claude-haiku-4-5", effort: "low" });
-    expect(fake.beta.sessions.create.mock.calls[0]![0].model).toEqual({ id: "claude-haiku-4-5", effort: "low" });
+    const body = fake.beta.sessions.create.mock.calls[0]![0];
+    // A top-level `model` is rejected by the API as an unknown field.
+    expect(body.model).toBeUndefined();
+    expect(body.agent).toEqual({
+      type: "agent_with_overrides", id: "agt_1", version: 1,
+      model: { id: "claude-haiku-4-5", effort: "low" },
+    });
+  });
+  it("uses the plain pinned form when there is no override", async () => {
+    await runtime.createSession(opts());
+    expect(fake.beta.sessions.create.mock.calls[0]![0].agent)
+      .toEqual({ type: "agent", id: "agt_1", version: 1 });
   });
   it("reports zero usage for a session that has not run", async () => {
     const s = await runtime.createSession(opts());

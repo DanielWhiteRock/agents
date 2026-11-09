@@ -29,11 +29,11 @@ describe("redactForBuyer", () => {
     expect(out[0]).toEqual({ type: "raw", payload: REDACTION_NOTICE });
   });
   it("keeps a tool-use event but scrubs instruction text from its input", () => {
-    const out = redactForBuyer([{ type: "tool.use", name: "write", input: { body: instructions }, spending: false }], pack);
+    const out = redactForBuyer([{ type: "tool.use", eventId: "sevt_1", name: "write", input: { body: instructions }, permission: "ask", source: "builtin" }], pack);
     expect(out[0]).toMatchObject({ type: "tool.use", name: "write", input: REDACTION_NOTICE });
   });
   it("leaves an innocent tool input alone", () => {
-    const out = redactForBuyer([{ type: "tool.use", name: "read", input: { path: "/tmp/a" }, spending: false }], pack);
+    const out = redactForBuyer([{ type: "tool.use", eventId: "sevt_2", name: "read", input: { path: "/tmp/a" }, permission: "allow", source: "builtin" }], pack);
     expect(out[0]).toMatchObject({ input: { path: "/tmp/a" } });
   });
   it("fails open on empty instructions rather than redacting everything", () => {

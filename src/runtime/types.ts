@@ -24,11 +24,21 @@ export type CreateSessionOptions = {
   effort?: PackDefinition["effort"];
 };
 
+/** allow = ran; ask = paused for a human; deny = the server refused it. */
+export type ToolDecision = "allow" | "ask" | "deny";
+
 export type RuntimeEvent =
   | { type: "agent.text"; text: string }
-  | { type: "tool.use"; name: string; input: unknown; spending: boolean }
+  | { type: "agent.thinking" }
+  | { type: "tool.use"; eventId: string; name: string; input: unknown; permission: ToolDecision; source: "builtin" | "mcp" | "custom" }
+  | { type: "tool.result"; name: string; isError: boolean; preview: string }
+  | { type: "model.usage"; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }
   | { type: "status"; status: SessionStatus; stopReason: string | null }
+  | { type: "error"; message: string }
   | { type: "raw"; payload: unknown };
+
+/** A tool call paused for a human decision. `eventId` is the sevt_ id to answer. */
+export type PendingAsk = { eventId: string; name: string; input: unknown };
 
 export interface AgentRuntime {
   ensureEnvironment(name: string): Promise<string>;
@@ -38,6 +48,7 @@ export interface AgentRuntime {
   streamEvents(sessionId: string): Promise<AsyncIterable<RuntimeEvent>>;
   readSession(sessionId: string): Promise<RuntimeSession>;
   raiseBudgetTo(sessionId: string, headroomCents: bigint): Promise<RuntimeSession>;
+  confirmTool(sessionId: string, eventId: string, result: "allow" | "deny", denyMessage?: string): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
 }
 

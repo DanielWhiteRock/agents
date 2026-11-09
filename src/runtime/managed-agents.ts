@@ -7,7 +7,7 @@ import { type Money, addCents, parseMoney } from "./money.js";
 import { parseUsage } from "./usage.js";
 import {
   type AgentRuntime, type CreateSessionOptions, type PublishedPack,
-  type RuntimeEvent, type RuntimeSession, type SessionStatus,
+  type RuntimeEvent, type RuntimeSession, type SessionStatus, type ToolDecision,
   BudgetExhaustedError, BudgetRemovalForbiddenError, BudgetRequiredError,
 } from "./types.js";
 import type { PackDefinition } from "../packs/types.js";
@@ -39,14 +39,29 @@ function toStatus(raw: unknown): SessionStatus {
   return STATUSES[String(raw)] ?? "idle";
 }
 
+/** stop_reason arrives as an object ({ type: "requires_action", ... }) or a string. */
+export function toStopReason(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "string") return raw;
+  const t = (raw as { type?: unknown }).type;
+  return typeof t === "string" ? t : null;
+}
+
 function toSession(raw: any): RuntimeSession {
   return {
     id: String(raw?.id ?? ""),
     status: toStatus(raw?.status),
-    stopReason: raw?.stop_reason ?? null,
+    stopReason: toStopReason(raw?.stop_reason),
     usage: parseUsage(raw?.usage),
   };
 }
+
+const DECISIONS: Record<string, ToolDecision> = { allow: "allow", ask: "ask", deny: "deny" };
+const decision = (raw: unknown): ToolDecision => DECISIONS[String(raw)] ?? "allow";
+const preview = (v: unknown): string => {
+  const s = typeof v === "string" ? v : JSON.stringify(v ?? null);
+  return s.length > 600 ? `${s.slice(0, 600)}…` : s;
+};
 
 function isBudgetReached(err: unknown): boolean {
   const e = err as { status?: number; message?: unknown };
@@ -100,12 +115,22 @@ export class ManagedAgentsRuntime implements AgentRuntime {
   async createSession(opts: CreateSessionOptions): Promise<RuntimeSession> {
     if (!opts.budget) throw new BudgetRequiredError();
     const budget = parseMoney(opts.budget);
+    // Overrides nest inside `agent` as `agent_with_overrides` — a top-level
+    // `model` is rejected as an unknown field. An override replaces the agent's
+    // model object in full, so effort is restated or it resets to the default.
+    const agent = opts.model
+      ? {
+          type: "agent_with_overrides",
+          id: opts.pack.runtimePackId,
+          version: Number(opts.pack.version),
+          model: { id: opts.model, effort: opts.effort ?? "high" },
+        }
+      : { type: "agent", id: opts.pack.runtimePackId, version: Number(opts.pack.version) };
+
     const raw = await this.client.beta.sessions.create({
-      agent: { type: "agent", id: opts.pack.runtimePackId, version: Number(opts.pack.version) },
+      agent,
       environment_id: opts.environmentId,
       ...(opts.title ? { title: opts.title } : {}),
-      // A model override replaces the object wholesale, so effort is restated.
-      ...(opts.model ? { model: { id: opts.model, effort: opts.effort ?? "high" } } : {}),
       budget: { type: "limit", max_list_cost: budget },
     });
     return toSession(raw);
@@ -132,14 +157,52 @@ export class ManagedAgentsRuntime implements AgentRuntime {
               if (b?.type === "text") yield { type: "agent.text", text: String(b.text) } as RuntimeEvent;
             }
             break;
+          case "agent.thinking":
+            // A progress signal only; it never carries the reasoning itself.
+            yield { type: "agent.thinking" };
+            break;
+          case "agent.tool_use":
+          case "agent.mcp_tool_use":
           case "agent.custom_tool_use":
-            yield { type: "tool.use", name: String(ev.name), input: ev.input, spending: false };
+            yield {
+              type: "tool.use",
+              // The id to answer a pause with is this EVENT id (sevt_), not a toolu_ id.
+              eventId: String(ev.id ?? ""),
+              name: String(ev.name ?? ev.tool_name ?? "tool"),
+              input: ev.input,
+              permission: decision(ev.evaluated_permission),
+              source: ev.type === "agent.mcp_tool_use" ? "mcp" : ev.type === "agent.custom_tool_use" ? "custom" : "builtin",
+            };
+            break;
+          case "agent.tool_result":
+          case "agent.mcp_tool_result":
+            yield {
+              type: "tool.result", name: String(ev.name ?? "tool"),
+              isError: Boolean(ev.is_error), preview: preview(ev.content ?? ev.output ?? ev.result),
+            };
+            break;
+          case "span.model_request_end": {
+            const u = ev.model_usage ?? {};
+            yield {
+              type: "model.usage",
+              inputTokens: Number(u.input_tokens ?? 0),
+              outputTokens: Number(u.output_tokens ?? 0),
+              cacheReadTokens: Number(u.cache_read_input_tokens ?? 0),
+              cacheCreationTokens: Number(u.cache_creation_input_tokens ?? u.cache_creation?.ephemeral_5m_input_tokens ?? 0),
+            };
+            break;
+          }
+          case "session.status_running":
+            yield { type: "status", status: "running", stopReason: null };
             break;
           case "session.status_idle":
-            yield { type: "status", status: "idle", stopReason: ev.stop_reason ?? null };
+            yield { type: "status", status: "idle", stopReason: toStopReason(ev.stop_reason) };
             break;
           case "session.status_terminated":
-            yield { type: "status", status: "terminated", stopReason: ev.stop_reason ?? null };
+            yield { type: "status", status: "terminated", stopReason: toStopReason(ev.stop_reason) };
+            break;
+          case "session.error":
+            yield { type: "error", message: String(ev.message ?? ev.error ?? "session error") };
             break;
           default:
             // Never dropped: the transcript is billing and dispute evidence.
@@ -163,6 +226,16 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       budget: { type: "limit", max_list_cost: next },
     });
     return toSession(raw);
+  }
+
+  /** Answer a tool call that paused. `eventId` is the sevt_ id of the tool.use event. */
+  async confirmTool(sessionId: string, eventId: string, result: "allow" | "deny", denyMessage?: string): Promise<void> {
+    await this.client.beta.sessions.events.send(sessionId, {
+      events: [{
+        type: "user.tool_confirmation", tool_use_id: eventId, result,
+        ...(result === "deny" && denyMessage ? { deny_message: denyMessage } : {}),
+      }],
+    });
   }
 
   async deleteSession(sessionId: string): Promise<void> {
