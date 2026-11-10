@@ -25,8 +25,29 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   role TEXT NOT NULL,
+  password_hash TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS user_sessions_user ON user_sessions(user_id);
+
+CREATE TABLE IF NOT EXISTS invites (
+  token TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('owner','member')),
+  invited_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  accepted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS invites_org ON invites(org_id);
 
 CREATE TABLE IF NOT EXISTS packs (
   id TEXT PRIMARY KEY,
@@ -152,15 +173,29 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   author_share_bps: "2000",
   "tier.personal.points_cents": "120",
   "tier.personal.concurrency": "5",
+  "tier.personal.seats": "1",
   "tier.team.points_cents": "360",
   "tier.team.concurrency": "15",
+  "tier.team.seats": "10",
   "tier.enterprise.points_cents": "720",
   "tier.enterprise.concurrency": "999",
+  "tier.enterprise.seats": "500",
   allowed_models: "claude-opus-5,claude-sonnet-5,claude-haiku-4-5",
   // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
 };
+
+/**
+ * Additive column migrations. CREATE TABLE IF NOT EXISTS cannot add a column,
+ * and SQLite has no ADD COLUMN IF NOT EXISTS, so each is attempted and a
+ * failure means it is already there.
+ */
+const MIGRATIONS = [
+  "ALTER TABLE users ADD COLUMN password_hash TEXT",
+  "ALTER TABLE runs ADD COLUMN billed_up_to_cents INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE packs ADD COLUMN author_org_id TEXT",
+];
 
 let ready: Promise<void> | null = null;
 
@@ -176,6 +211,9 @@ async function bootstrap(): Promise<void> {
     schema = schema.split(token).join(value);
   }
   await s.exec(schema);
+  for (const sqlText of MIGRATIONS) {
+    try { await s.exec(sqlText); } catch { /* already applied */ }
+  }
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     await s.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", [key, value]);
   }

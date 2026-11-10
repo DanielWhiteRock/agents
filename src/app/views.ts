@@ -60,23 +60,32 @@ footer{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid va
 form.inline{display:inline}
 `;
 
-export function layout(title: string, body: string, opts: { balance?: number } = {}): string {
+export type Viewer = { name: string; email: string; role: string; orgName: string } | null;
+
+export function layout(
+  title: string, body: string,
+  opts: { balance?: number; viewer?: Viewer } = {},
+): string {
+  const v = opts.viewer;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · agents.alphaceo.ai</title><style>${CSS}</style></head><body>
 <header class="top"><div class="wrap">
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
 <nav>
-  <a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  <a href="/authors">Authors</a><a href="/settings">Limits</a>
-  ${opts.balance !== undefined ? `<span class="tag">balance ${esc(fmt(opts.balance))}</span>` : ""}
+  ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
+  <a href="/authors">Authors</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/settings">Limits</a>` : ""}
+  ${opts.balance !== undefined ? `<span class="tag">${esc(fmt(opts.balance))}</span>` : ""}
+  <span class="tag" title="${esc(v.email)}">${esc(v.orgName)} · ${esc(v.name)}${v.role === "owner" ? " (owner)" : ""}</span>
+  <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
+  : `<a href="/login">Sign in</a><a href="/signup">Create an account</a>`}
 </nav></div></header>
 <div class="wrap">${body}
 <footer>Packs run on Anthropic Managed Agents. Spend is the platform's own <code>list_cost</code>, priced at public list rates. Seed pack instructions are placeholders, not an expert's work.</footer>
 </div></body></html>`;
 }
 
-export function catalogPage(packs: Array<PackRow & { published: boolean; owned: boolean }>, balance: number): string {
+export function catalogPage(packs: Array<PackRow & { published: boolean; owned: boolean }>, balance: number, viewer: Viewer = null): string {
   const cards = packs.map((p) => `<div class="card">
   <div class="spread"><h3>${esc(p.name)}</h3><span class="price">${p.price_cents === 0 ? "free" : esc(fmt(p.price_cents))}</span></div>
   <p class="by">by ${esc(p.author)} · <span class="tag">${esc(p.model)}</span> <span class="tag">effort ${esc(p.effort)}</span></p>
@@ -87,10 +96,10 @@ export function catalogPage(packs: Array<PackRow & { published: boolean; owned: 
   </div></div>`).join("");
   return layout("Catalog", `<h1>Hire a worker</h1>
 <p class="lede">Each pack is an expert's method, packaged. You buy it once, it runs here on your side of the fence, and you see exactly what every run cost.</p>
-<div class="grid">${cards}</div>`, { balance });
+<div class="grid">${cards}</div>`, { balance, viewer });
 }
 
-export function packPage(p: PackRow, v: PackVersionRow | undefined, owned: boolean, models: string[], balance: number, err?: string): string {
+export function packPage(p: PackRow, v: PackVersionRow | undefined, owned: boolean, models: string[], balance: number, err?: string, viewer: Viewer = null): string {
   const pinned: string[] = JSON.parse(p.pinned_models);
   const choices = (pinned.length ? pinned : models);
   return layout(p.name, `
@@ -120,10 +129,10 @@ ${v ? `
 <tr><td>A short turn (refusal, 288 output tokens, 6.5k cached prompt)</td><td class="num">$0.05</td></tr>
 <tr><td>Default budget per run, before it pauses</td><td class="num">$0.50</td></tr>
 <tr><td>Session running time</td><td class="num">$0.08/hr active</td></tr>
-</table>`, { balance });
+</table>`, { balance, viewer });
 }
 
-export function runsPage(runs: Array<RunRow & { pack: string }>, balance: number): string {
+export function runsPage(runs: Array<RunRow & { pack: string }>, balance: number, viewer: Viewer = null): string {
   return layout("Runs", `<h1>Runs</h1>
 <p class="lede">Every run, what it consumed, and what it cost you. The cost column is the platform's own figure.</p>
 <table><tr><th>Started</th><th>Pack</th><th>Model</th><th>Status</th><th class="num">In</th><th class="num">Out</th><th class="num">Active</th><th class="num">Cost</th><th></th></tr>
@@ -134,12 +143,12 @@ ${runs.map((r) => `<tr>
 <td class="num">${r.input_tokens}</td><td class="num">${r.output_tokens}</td>
 <td class="num">${r.active_seconds.toFixed(1)}s</td><td class="num">${esc(fmt(r.list_cost_cents))}</td>
 <td><a href="/runs/${esc(r.id)}">trace</a></td></tr>`).join("") || `<tr><td colspan="9">No runs yet.</td></tr>`}
-</table>`, { balance });
+</table>`, { balance, viewer });
 }
 
 export type Ask = { event_id: string; name: string; input: string };
 
-export function runPage(run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = []): string {
+export function runPage(run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = [], viewer: Viewer = null): string {
   return layout(`Run · ${packName}`, `
 <h1>${esc(packName)}</h1>
 <p class="lede">Live trace, down to the token. <span class="tag">${esc(run.model)}</span> <span class="tag">session ${esc(run.session_id.slice(0, 18))}</span></p>
@@ -225,11 +234,11 @@ src.addEventListener('asks', (m) => {
   askSig = sig;
 });
 src.addEventListener('error', () => { live.textContent = 'reconnecting…'; });
-</script>`, { balance });
+</script>`, { balance, viewer });
 }
 
 export function ledgerPage(rows: Array<{ bucket: string; delta_cents: number; reason: string; created_at: string; run_id: string | null }>,
-  buckets: Record<string, number>, balance: number): string {
+  buckets: Record<string, number>, balance: number, viewer: Viewer = null): string {
   return layout("Points", `<h1>Points</h1>
 <p class="lede">A point is a cent of compute, not a token — so the model a buyer picks cannot wreck the economics. The monthly grant expires; top-ups and earnings do not.</p>
 <div class="meters">
@@ -246,18 +255,18 @@ export function ledgerPage(rows: Array<{ bucket: string; delta_cents: number; re
 ${rows.map((r) => `<tr><td>${esc(r.created_at.slice(5, 16).replace("T", " "))}</td><td><span class="tag">${esc(r.bucket)}</span></td>
 <td>${esc(r.reason)}${r.run_id ? ` <a href="/runs/${esc(r.run_id)}">trace</a>` : ""}</td>
 <td class="num" style="color:${r.delta_cents < 0 ? "var(--bad)" : "var(--good)"}">${r.delta_cents < 0 ? "−" : "+"}${esc(fmt(Math.abs(r.delta_cents)))}</td></tr>`).join("")}
-</table>`, { balance });
+</table>`, { balance, viewer });
 }
 
-export function authorsPage(rows: Array<{ name: string; author: string; runs: number; millicents: number }>, balance: number): string {
+export function authorsPage(rows: Array<{ name: string; author: string; runs: number; millicents: number }>, balance: number, viewer: Viewer = null): string {
   return layout("Authors", `<h1>Author earnings</h1>
 <p class="lede">An author earns on every run of their pack, not only when it sells — a configurable share of what the run cost. Earned points are cashable, which is why the ledger is an accounting system rather than a counter.</p>
 <table><tr><th>Pack</th><th>Author</th><th class="num">Runs</th><th class="num">Earned</th></tr>
 ${rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.author)}</td><td class="num">${r.runs}</td><td class="num">${esc(fmtMilli(r.millicents))}</td></tr>`).join("")}
-</table>`, { balance });
+</table>`, { balance, viewer });
 }
 
-export function settingsPage(rows: Array<{ key: string; value: string }>, balance: number): string {
+export function settingsPage(rows: Array<{ key: string; value: string }>, balance: number, viewer: Viewer = null): string {
   return layout("Limits", `<h1>Limits</h1>
 <p class="lede">Every limit is a row, never a constant. The subsidy on the current tiers is deliberate, so it has to be dialable without a deploy.</p>
 <table><tr><th>Key</th><th>Value</th><th></th></tr>
@@ -266,5 +275,100 @@ ${rows.map((r) => `<tr><td><code>${esc(r.key)}</code></td>
   <input type="hidden" name="key" value="${esc(r.key)}">
   <input type="text" name="value" value="${esc(r.value)}" size="28">
   <button class="btn ghost" type="submit">Save</button></form></td><td></td></tr>`).join("")}
-</table>`, { balance });
+</table>`, { balance, viewer });
+}
+
+// ------------------------------------------------------------------ account
+
+const authShell = (title: string, inner: string): string => layout(title, `
+<div style="max-width:420px;margin:48px auto">${inner}</div>`);
+
+export function loginPage(err?: string, email = ""): string {
+  return authShell("Sign in", `
+<h1>Sign in</h1>
+<p class="lede">Hire an expert's method as a worker that runs on your side.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+<form method="post" action="/login" class="card">
+  <p><label>Email<br><input type="text" name="email" value="${esc(email)}" style="width:100%" autocomplete="username" required></label></p>
+  <p><label>Password<br><input type="password" name="password" style="width:100%" autocomplete="current-password" required></label></p>
+  <button class="btn" type="submit">Sign in</button>
+</form>
+<p class="lede" style="margin-top:14px">No account? <a href="/signup">Create one</a>.</p>`);
+}
+
+export function signupPage(err?: string, values: Record<string, string> = {}): string {
+  return authShell("Create an account", `
+<h1>Create an account</h1>
+<p class="lede">This creates your organisation and makes you its owner. You can invite your team afterwards.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+<form method="post" action="/signup" class="card">
+  <p><label>Your name<br><input type="text" name="name" value="${esc(values["name"] ?? "")}" style="width:100%" required></label></p>
+  <p><label>Email<br><input type="text" name="email" value="${esc(values["email"] ?? "")}" style="width:100%" autocomplete="username" required></label></p>
+  <p><label>Organisation<br><input type="text" name="orgName" value="${esc(values["orgName"] ?? "")}" style="width:100%" placeholder="Your company"></label></p>
+  <p><label>Password <span style="color:var(--muted);font-size:13px">(8 characters or more)</span><br>
+    <input type="password" name="password" style="width:100%" autocomplete="new-password" required></label></p>
+  <button class="btn" type="submit">Create account</button>
+</form>
+<p class="lede" style="margin-top:14px">Already have one? <a href="/login">Sign in</a>.</p>`);
+}
+
+export function invitePage(inv: { email: string; role: string }, orgName: string, token: string, err?: string): string {
+  return authShell("Join", `
+<h1>Join ${esc(orgName)}</h1>
+<p class="lede">You have been invited as a <strong>${esc(inv.role)}</strong> using ${esc(inv.email)}.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+<form method="post" action="/invite/${esc(token)}" class="card">
+  <p><label>Your name<br><input type="text" name="name" style="width:100%" required></label></p>
+  <p><label>Choose a password <span style="color:var(--muted);font-size:13px">(8 characters or more)</span><br>
+    <input type="password" name="password" style="width:100%" autocomplete="new-password" required></label></p>
+  <button class="btn" type="submit">Join</button>
+</form>`);
+}
+
+export function teamPage(args: {
+  members: Array<{ id: string; name: string; email: string; role: string; created_at: string }>;
+  invites: Array<{ token: string; email: string; role: string; expires_at: string }>;
+  seatsUsed: number; seatLimit: number; tier: string;
+  viewer: Viewer; youId: string; balance: number; err?: string;
+}): string {
+  const isOwner = args.viewer?.role === "owner";
+  return layout("Team", `
+<h1>Team</h1>
+<p class="lede">Packs, points and running agents belong to the organisation, not to whoever bought them — so a departure never takes the inventory with it.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+<div class="meters">
+  <div class="meter"><div class="k">Tier</div><div class="v">${esc(args.tier)}</div></div>
+  <div class="meter"><div class="k">Seats used</div><div class="v">${args.seatsUsed} / ${args.seatLimit}</div></div>
+</div>
+<h2>Members</h2>
+<table><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr>
+${args.members.map((m) => `<tr>
+  <td>${esc(m.name)}${m.id === args.youId ? ` <span class="tag">you</span>` : ""}</td>
+  <td>${esc(m.email)}</td>
+  <td>${isOwner && m.id !== args.youId ? `<form method="post" action="/team/role" class="row">
+      <input type="hidden" name="userId" value="${esc(m.id)}">
+      <select name="role"><option value="member"${m.role === "member" ? " selected" : ""}>member</option><option value="owner"${m.role === "owner" ? " selected" : ""}>owner</option></select>
+      <button class="btn ghost" style="padding:5px 10px">Save</button></form>` : `<span class="tag">${esc(m.role)}</span>`}</td>
+  <td>${isOwner && m.id !== args.youId ? `<form method="post" action="/team/remove" class="inline">
+      <input type="hidden" name="userId" value="${esc(m.id)}">
+      <button class="btn ghost" style="padding:5px 10px">Remove</button></form>` : ""}</td>
+</tr>`).join("")}
+</table>
+${args.invites.length ? `<h2>Pending invitations</h2>
+<table><tr><th>Email</th><th>Role</th><th>Link</th><th></th></tr>
+${args.invites.map((i) => `<tr><td>${esc(i.email)}</td><td><span class="tag">${esc(i.role)}</span></td>
+<td><code style="font-size:12px">/invite/${esc(i.token.slice(0, 12))}…</code></td>
+<td>${isOwner ? `<form method="post" action="/team/revoke" class="inline">
+  <input type="hidden" name="token" value="${esc(i.token)}">
+  <button class="btn ghost" style="padding:5px 10px">Revoke</button></form>` : ""}</td></tr>`).join("")}
+</table>` : ""}
+${isOwner ? `<h2>Invite someone</h2>
+<form method="post" action="/team/invite" class="row">
+  <input type="text" name="email" placeholder="them@company.com" size="28" required>
+  <select name="role"><option value="member">member</option><option value="owner">owner</option></select>
+  <button class="btn" type="submit">Send invitation</button>
+</form>
+<p class="lede" style="margin-top:10px;font-size:14px">There is no email delivery yet — the invitation link appears above for you to pass on.</p>`
+  : `<p class="lede">Only an owner can invite or change roles.</p>`}`,
+  { balance: args.balance, viewer: args.viewer });
 }

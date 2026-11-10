@@ -17,7 +17,7 @@ import { SEED_PACKS } from "../packs/seed-packs.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
 
 export type PackRow = {
-  id: string; slug: string; name: string; tagline: string; author: string;
+  id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
   price_cents: number; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string; created_at: string;
 };
@@ -264,12 +264,27 @@ export async function runEvents(runId: string, afterId = 0): Promise<Array<{
 export async function buyerEvents(runId: string, afterId = 0): Promise<Array<{
   id: number; kind: string; payload: string; created_at: string;
 }>> {
+  return transcriptFor(runId, null, afterId);
+}
+
+/**
+ * The transcript as a given viewer may see it.
+ *
+ * The author of a pack sees their own runs raw — that is their feedback channel
+ * and the whole reason the design keeps transcripts at all. Everyone else gets
+ * it redacted against the exact instructions of the pinned version.
+ */
+export async function transcriptFor(
+  runId: string, viewerOrgId: string | null, afterId = 0,
+): Promise<Array<{ id: number; kind: string; payload: string; created_at: string }>> {
   const rows = await runEvents(runId, afterId);
   if (rows.length === 0) return rows;
   const run = await getRun(runId);
   const version = run ? await getVersion(run.pack_version_id) : undefined;
-  const instructions = version?.instructions ?? "";
-  return rows.map((r) => ({ ...r, payload: redactStoredPayload(r.kind, r.payload, instructions) }));
+  if (!version) return rows;
+  const pack = await packById(version.pack_id);
+  if (viewerOrgId && pack?.author_org_id && pack.author_org_id === viewerOrgId) return rows;
+  return rows.map((r) => ({ ...r, payload: redactStoredPayload(r.kind, r.payload, version.instructions) }));
 }
 
 export async function openAsks(runId: string): Promise<AskRow[]> {
