@@ -244,6 +244,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       myReview: await myReviewOf(p.id, ctx.orgId),
       votes: await votesOf(p.id, ctx.orgId),
       saved: await isSaved(p.id, ctx.orgId),
+      changelog: await P.changelogOf(p.id),
     };
     return html(res, V.packPage(p, v, owned, await models(), await bal(),
       url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));
@@ -252,7 +253,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   const pubMatch = /^\/packs\/([a-z0-9-]+)\/publish$/.exec(path);
   if (method === "POST" && pubMatch) {
     ownerOnly();
-    try { await P.publishPack(pubMatch[1]!); }
+    const f = await body(req);
+    try { await P.publishPack(pubMatch[1]!, f["note"]); }
     catch (e) { return redirect(res, `/packs/${pubMatch[1]}?err=${encodeURIComponent(msg(e))}`); }
     return redirect(res, `/packs/${pubMatch[1]}`);
   }

@@ -233,3 +233,30 @@ test("re-importing a folder marks the listing stale", async () => {
   assert.equal(res.status, 200, await res.text());
   assert.ok((await P.getPack(pack.slug)).listing_stale_at, "a folder that replaced the method dated the listing");
 });
+
+// ------------------------------------------------------------- changelog
+//
+// Actually publishing goes through the real `ManagedAgentsRuntime` in this
+// harness — `startServer()` runs the built server as its own child process,
+// so `P.setRuntime(stubRuntime())` in this file's `before()` only reaches
+// this process, never that one. The route wiring (`note` read off the form
+// body and handed to `P.publishPack`) is exercised for real in
+// `tests/node/listing.test.mjs`'s domain-level publish tests instead; what
+// is worth pinning down at the HTTP layer is that the form offers the field
+// at all, and that an unpublished pack renders no changelog heading.
+
+test("the editor's publish form offers an optional changelog note", async () => {
+  const { pack, cookie } = await authorWithPack();
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/edit`, { headers: { cookie } });
+  assert.equal(res.status, 200);
+  const html = await res.text();
+  assert.match(html, /name="note"/);
+  assert.match(html, new RegExp(`action="/packs/${pack.slug}/publish"[\\s\\S]*?name="note"`));
+});
+
+test("an unpublished pack's page renders no changelog heading", async () => {
+  const { pack, cookie } = await authorWithPack();
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}`, { headers: { cookie } });
+  assert.equal(res.status, 200);
+  assert.doesNotMatch(await res.text(), /Changelog/);
+});

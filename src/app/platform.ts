@@ -348,6 +348,21 @@ export async function latestVersion(packId: string): Promise<PackVersionRow | un
   const s = await sql();
   return s.one<PackVersionRow>("SELECT * FROM pack_versions WHERE pack_id = $1 ORDER BY version DESC LIMIT 1", [packId]);
 }
+export type ChangelogEntry = { version: number; note: string; createdAt: string };
+
+/**
+ * Notes an author actually wrote, newest version first. Most packs have
+ * none — the 68 already on the shelf before this table existed have no
+ * honest way to say what their old versions changed, so nothing is
+ * backfilled and none of them will ever have a row here.
+ */
+export async function changelogOf(packId: string): Promise<ChangelogEntry[]> {
+  const s = await sql();
+  const rows = await s.query<{ version: number; note: string; created_at: string }>(
+    "SELECT version, note, created_at FROM pack_changelog WHERE pack_id = $1 ORDER BY version DESC", [packId]);
+  return rows.map((r) => ({ version: r.version, note: r.note, createdAt: r.created_at }));
+}
+
 export async function getVersion(versionId: string): Promise<PackVersionRow | undefined> {
   const s = await sql();
   return s.one<PackVersionRow>("SELECT * FROM pack_versions WHERE id = $1", [versionId]);
@@ -420,8 +435,16 @@ export async function ensurePlatformSkills(): Promise<string[]> {
   return ids;
 }
 
-/** Publishes to the runtime, creating a local version pinned to the agent version. */
-export async function publishPack(slug: string): Promise<PackVersionRow> {
+/**
+ * Publishes to the runtime, creating a local version pinned to the agent
+ * version.
+ *
+ * `note` is optional and, when given, is captured once against the new
+ * version — the one exception to listing metadata attaching to the pack
+ * rather than the version. Most publishes have nothing to say, so leaving it
+ * out must succeed exactly as it always has for every existing caller.
+ */
+export async function publishPack(slug: string, note?: string): Promise<PackVersionRow> {
   const pack = await getPack(slug);
   if (!pack) throw new Error(`no such pack: ${slug}`);
   const def: PackDefinition = {
@@ -473,12 +496,22 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
 
   const prev = await latestVersion(pack.id);
   const vid = id("pv");
+  const version = (prev?.version ?? 0) + 1;
   const s = await sql();
   await s.query(
     `INSERT INTO pack_versions (id, pack_id, version, runtime_pack_id, runtime_version, instructions, system_tokens, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [vid, pack.id, (prev?.version ?? 0) + 1, published.runtimePackId, published.version, pack.instructions,
+    [vid, pack.id, version, published.runtimePackId, published.version, pack.instructions,
       systemTokens, now()]);
+  // Optional, and captured once, here, because the version it describes is
+  // immutable and this is the only moment that version exists to describe.
+  // Most publishes have nothing to say, so a blank or missing note writes
+  // nothing rather than a row with an empty string in it.
+  const trimmedNote = note?.trim();
+  if (trimmedNote) {
+    await s.query("INSERT INTO pack_changelog (pack_id, version, note, created_at) VALUES ($1,$2,$3,$4)",
+      [pack.id, version, trimmedNote, now()]);
+  }
   // Snapshot the folder and the uploaded skills, so a buyer exports what they
   // bought however the author edits it afterwards.
   for (const f of tree) {

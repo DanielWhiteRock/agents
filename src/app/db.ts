@@ -420,6 +420,21 @@ CREATE TABLE IF NOT EXISTS thread_messages (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS thread_messages_thread ON thread_messages(thread_id, created_at);
+
+-- What changed in a published version, in the author's own words. The one
+-- exception to listing metadata attaching to the pack, not the version: a
+-- changelog note describes the version it ships with, and a version is
+-- immutable, so the note is captured at publish and never edited afterwards.
+-- Optional — most publishes have nothing to say — so a row exists only where
+-- an author actually wrote one. No note is ever invented for a version that
+-- shipped before this table existed.
+CREATE TABLE IF NOT EXISTS pack_changelog (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  version INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (pack_id, version)
+);
 `;
 
 const SUBSTITUTIONS = {

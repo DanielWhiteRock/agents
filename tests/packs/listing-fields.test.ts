@@ -153,6 +153,7 @@ const NOTHING_KNOWN: PackPageExtras = {
   myReview: null,
   votes: { count: 0, voted: false },
   saved: false,
+  changelog: [],
 };
 
 const FULL: Listing = {
@@ -369,6 +370,37 @@ describe("the pack page", () => {
     const h = render();
     expect(h).toContain("by typeui.sh");
     expect(h).not.toContain("/creators/");
+  });
+});
+
+// ------------------------------------------------------------- changelog
+
+describe("the pack page's changelog", () => {
+  it("renders no changelog heading for a pack with no notes", () => {
+    const h = render();
+    expect(h).not.toContain("Changelog");
+  });
+
+  it("shows the changelog once a version has a note", () => {
+    const h = render({ extras: { changelog: [
+      { version: 3, note: "Added support for private repositories.", createdAt: "2026-05-06T07:08:09.000Z" },
+    ] } });
+    expect(h).toContain("Changelog");
+    expect(h).toContain("Added support for private repositories.");
+    expect(h).toContain("Version 3");
+    expect(h).toContain("2026-05-06");
+  });
+
+  it("lists multiple notes, escaping author-written text", () => {
+    const h = render({ extras: { changelog: [
+      { version: 4, note: "<script>alert(1)</script>", createdAt: "2026-06-01T00:00:00.000Z" },
+      { version: 2, note: "Fixed the export link.", createdAt: "2026-04-01T00:00:00.000Z" },
+    ] } });
+    expect(h).not.toContain("<script>alert(1)</script>");
+    expect(h).toContain("&lt;script&gt;");
+    expect(h).toContain("Fixed the export link.");
+    expect(h).toContain("Version 4");
+    expect(h).toContain("Version 2");
   });
 });
 

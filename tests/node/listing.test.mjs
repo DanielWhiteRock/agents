@@ -327,3 +327,45 @@ test("a new pack can be created with scenarios", async () => {
   const pack = await Auth.createPack(orgId, { ...INPUT, slug: `scen-${++n}`, scenarios });
   assert.deepEqual(L.listingOf(pack).scenarios, scenarios);
 });
+
+// ------------------------------------------------------------- changelog
+
+/**
+ * A changelog note is the one exception to listing metadata attaching to the
+ * pack rather than the version: it describes the version it ships with, and
+ * a version is immutable, so the note is captured once, at publish.
+ */
+test("publishing with a note records it against that version", async () => {
+  const { pack } = await makePack();
+  const v = await P.publishPack(pack.slug, "Added support for private repositories.");
+  const entries = await P.changelogOf(pack.id);
+  assert.deepEqual(entries, [
+    { version: v.version, note: "Added support for private repositories.", createdAt: entries[0]?.createdAt },
+  ]);
+  assert.ok(entries[0].createdAt, "stamped");
+});
+
+test("publishing without a note succeeds and records nothing", async () => {
+  const { pack } = await makePack();
+  const v = await P.publishPack(pack.slug);
+  assert.ok(v.id, "the publish itself still succeeds");
+  assert.deepEqual(await P.changelogOf(pack.id), []);
+});
+
+test("publishing with a blank or whitespace-only note records nothing", async () => {
+  const { pack } = await makePack();
+  await P.publishPack(pack.slug, "   ");
+  assert.deepEqual(await P.changelogOf(pack.id), []);
+});
+
+test("changelogOf lists only versions an author actually wrote a note for, newest first", async () => {
+  const { pack } = await makePack();
+  const v1 = await P.publishPack(pack.slug, "First note.");
+  await P.publishPack(pack.slug); // v2, no note
+  const v3 = await P.publishPack(pack.slug, "Third note.");
+
+  const entries = await P.changelogOf(pack.id);
+  assert.deepEqual(entries.map((e) => e.version), [v3.version, v1.version]);
+  assert.equal(entries.find((e) => e.version === v3.version).note, "Third note.");
+  assert.equal(entries.find((e) => e.version === v1.version).note, "First note.");
+});

@@ -685,6 +685,13 @@ export type PackPageExtras = {
   votes: { count: number; voted: boolean };
   /** Whether this organisation has bookmarked the pack. */
   saved: boolean;
+  /**
+   * What changed in each version an author actually wrote a note for,
+   * newest first. Empty for every pack published before this existed —
+   * `changelogOf` never invents one — so the section renders nothing for
+   * them, per the page's own rule.
+   */
+  changelog: Array<{ version: number; note: string; createdAt: string }>;
 };
 
 /** A stored timestamp as a date. The hour a curator clicked is not news. */
@@ -740,7 +747,7 @@ export function packPage(
   const choices = (pinned.length ? pinned : models);
   const {
     listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator,
-    rating, reviews, mayReview, myReview, votes, saved,
+    rating, reviews, mayReview, myReview, votes, saved, changelog,
   } = extras;
   const free = p.price_points === 0;
   return layout(p.name, `
@@ -892,6 +899,15 @@ ${mayReview ? `<form method="post" action="/packs/${esc(p.slug)}/review" class="
   <p><textarea name="body" placeholder="What happened when you ran it?">${esc(myReview?.body ?? "")}</textarea></p>
   <button class="btn" type="submit">${myReview ? "Update your review" : "Submit your review"}</button>
 </form>` : `<p class="lede">You can rate this once you have run it.</p>`}
+${changelog.length > 0 ? `<h2>Changelog</h2>
+<p class="lede" style="font-size:var(--t2)">What changed in each version, written by the author at publish and never edited afterwards.
+Versions published before this existed carry no note.</p>
+${changelog.map((c) => `<div class="card" style="margin-bottom:var(--s3)">
+  <p class="row" style="justify-content:space-between;margin:0 0 var(--s2)">
+    <strong>Version ${c.version}</strong><span class="tag">${esc(day(c.createdAt))}</span>
+  </p>
+  <p style="margin:0">${esc(c.note)}</p>
+</div>`).join("")}` : ""}
 <h2>Before you run it</h2>
 <div class="ctx">
   <h4>Curation</h4>
@@ -1575,6 +1591,7 @@ document.getElementById('folder').addEventListener('change', (e) => send(e.targe
 ${p ? `<h2>Lifecycle</h2>
 <div class="row">
   <form method="post" action="/packs/${esc(p.slug)}/publish" class="inline">
+    <input type="text" name="note" placeholder="What changed in this version? (optional)" style="width:16rem">
     <button class="btn ghost">${p.version ? `Publish version ${p.version + 1}` : "Publish to the runtime"}</button></form>
   ${p.status === "draft" || p.status === "unlisted" ? `<form method="post" action="/packs/${esc(p.slug)}/submit" class="inline">
     <button class="btn">Submit for the catalog</button></form>` : ""}
