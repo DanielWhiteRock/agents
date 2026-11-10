@@ -163,7 +163,7 @@ export class ManagedAgentsRuntime implements AgentRuntime {
    * Every file must sit under a single top-level directory with SKILL.md at its
    * root, so each file is named `<skill>/<relative path>`.
    */
-  private async uploadSkill(skill: SkillUpload): Promise<PublishedSkill> {
+  async uploadSkill(skill: SkillUpload): Promise<PublishedSkill> {
     const { toFile } = await import("@anthropic-ai/sdk");
     const files = await Promise.all(skill.files.map((f) =>
       toFile(Buffer.from(f.content, "utf8"), `${skill.name}/${f.path}`)));
@@ -277,6 +277,9 @@ export class ManagedAgentsRuntime implements AgentRuntime {
           // Anthropic's own first, so a document skill is found before a
           // pack's narrower one when both could apply.
           ...(pack.anthropicSkills ?? []).map((id) => ({ type: "anthropic", skill_id: id })),
+          // Then the platform's shared skills, then the pack's own, which are
+          // the most specific and should win a close call.
+          ...(pack.attachSkillIds ?? []).map((id) => ({ type: "custom", skill_id: id, version: "latest" })),
           ...published.map((s) => ({ type: "custom", skill_id: s.skillId, version: "latest" })),
         ];
         return attached.length > 0 ? { skills: attached } : {};

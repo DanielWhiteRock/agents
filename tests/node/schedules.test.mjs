@@ -31,6 +31,7 @@ async function waitFor(predicate, what, timeoutMs = 2000) {
 const stubRuntime = () => ({
   publishPack: async () => ({ runtimePackId: "agt_s", version: "1", skills: [], subagents: [] }),
   ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
   createSession: async () => ({ id: `sesn_${++n}`, status: "running", stopReason: null,
     usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
   sendMessage: async (_sid, text) => { turns.push(text); },

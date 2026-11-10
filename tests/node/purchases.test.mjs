@@ -37,6 +37,7 @@ before(async () => {
   P.setRuntime({
     publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
   });
 });
 
@@ -206,6 +207,7 @@ test("a refund stops the run, and the pack cannot be run again", async () => {
   P.setRuntime({
     publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
     createSession: async () => ({ id: "sesn_r", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
     deleteSession: async () => {},
@@ -238,6 +240,7 @@ test("a run is refused when the balance is empty, and allowed once topped up", a
   P.setRuntime({
     publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
     createSession: async () => ({ id: "sesn_p", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
     deleteSession: async () => {},

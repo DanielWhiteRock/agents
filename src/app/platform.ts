@@ -5,7 +5,7 @@
  * list_cost into a points debit and an author credit.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { id, initDb, now, platformOrgId, setting, settingInt } from "./db.js";
+import { id, initDb, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
 import { sql } from "./sql.js";
 import { balanceCents, credit, creditAuthor, debit } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -16,6 +16,7 @@ import { BudgetExhaustedError, type AgentRuntime, type PendingAsk, type RuntimeE
 import { DomainError } from "./errors.js";
 import type { PackDefinition } from "../packs/types.js";
 import { SEED_PACKS } from "../packs/seed-packs.js";
+import { PLATFORM_SKILLS } from "../packs/platform-skills.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
 import { exportPackMarkdown } from "../packs/export.js";
 import {
@@ -176,6 +177,27 @@ export async function seedCatalog(): Promise<number> {
   return n;
 }
 
+/**
+ * The platform's own skills, uploaded once and reused by id.
+ *
+ * Every pack gets them, so a capability no author should have to write — such
+ * as turning a page into an image — is simply there. Uploading per pack would
+ * make a hundred copies of the same thing.
+ */
+export async function ensurePlatformSkills(): Promise<string[]> {
+  const ids: string[] = [];
+  for (const skill of PLATFORM_SKILLS) {
+    const key = `platform_skill.${skill.name}`;
+    const s = await sql();
+    const row = await s.one<{ value: string }>("SELECT value FROM settings WHERE key = $1", [key]);
+    if (row?.value) { ids.push(row.value); continue; }
+    const uploaded = await runtime().uploadSkill(skill);
+    await putSetting(key, uploaded.skillId);
+    ids.push(uploaded.skillId);
+  }
+  return ids;
+}
+
 /** Publishes to the runtime, creating a local version pinned to the agent version. */
 export async function publishPack(slug: string): Promise<PackVersionRow> {
   const pack = await getPack(slug);
@@ -186,6 +208,7 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
     destructivePolicy: await destructivePolicy(),
+    attachSkillIds: await ensurePlatformSkills(),
     ...packExtras(pack),
   };
 

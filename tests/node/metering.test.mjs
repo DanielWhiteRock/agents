@@ -16,6 +16,7 @@ function fakeRuntime(script) {
   const zero = { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } };
   return {
     ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
     publishPack: async () => ({ runtimePackId: "agt_1", version: "1", skills: [], subagents: [] }),
     createSession: async () => ({ id: "sesn_1", status: "running", stopReason: null, usage: zero }),
     sendMessage: async () => {},
@@ -119,6 +120,7 @@ test("a budget_reached recorded from the stream is not wiped by the session's nu
   P.setRuntime({
     publishPack: async () => ({ runtimePackId: "agt_b", version: "1", skills: [], subagents: [], mounts: [] }),
     ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
     createSession: async () => ({ id: "sesn_b", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
     sendMessage: async () => {},
@@ -164,6 +166,7 @@ test("only what the platform marks downloadable is reported as a deliverable", a
   // does that filtering; here the runtime is faked past it.
   P.setRuntime({
     ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
     publishPack: async () => ({
       runtimePackId: "agt_o", version: "1", skills: [], subagents: [],
       mounts: [{ path: "agent.md", fileId: "file_mounted", mountPath: "pack/agent.md" }],

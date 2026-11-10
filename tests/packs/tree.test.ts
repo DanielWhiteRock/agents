@@ -243,3 +243,30 @@ describe("checkSkill — the published rules", () => {
     expect(out.errors.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+import { PLATFORM_SKILLS } from "../../src/packs/platform-skills.js";
+
+describe("the platform's own skills", () => {
+  it("pass the same rules we enforce on an author", () => {
+    // Shipping a skill that would be rejected on upload would be indefensible.
+    const out = checkSkills(PLATFORM_SKILLS.map((s) => ({ name: s.name, files: s.files.map((f) => ({ path: f.path, content: f.content })) })));
+    expect(out.errors).toEqual([]);
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("say both what they do and when to use them", () => {
+    for (const skill of PLATFORM_SKILLS) {
+      const md = skill.files.find((f) => f.path === "SKILL.md")!;
+      expect(md.content).toMatch(/Use when/i);
+    }
+  });
+
+  it("keep their bundled files one level from SKILL.md", () => {
+    for (const skill of PLATFORM_SKILLS) {
+      const md = skill.files.find((f) => f.path === "SKILL.md")!.content;
+      for (const f of skill.files.filter((x) => x.path !== "SKILL.md")) {
+        expect(md).toContain(f.path);
+      }
+    }
+  });
+});

@@ -53,6 +53,8 @@ export type PackDefinition = {
    * A pack that delivers a spreadsheet needs to be able to ask for one.
    */
   anthropicSkills?: string[];
+  /** Already-uploaded skills to attach by id — the platform's shared ones. */
+  attachSkillIds?: string[];
   /**
    * A model the agent may consult mid-turn for strategic guidance. Off unless
    * a pack asks, because it is a second model on every consultation.

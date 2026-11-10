@@ -16,6 +16,7 @@ const email = () => `a${++n}-${Date.now()}@example.com`;
 const stubRuntime = () => ({
   publishPack: async () => ({ runtimePackId: `agt_${++n}`, version: "1", skills: [], subagents: [] }),
   ensureEnvironment: async () => "env_1",
+    uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
   createSession: async () => ({ id: `sesn_${++n}`, status: "running", stopReason: null,
     usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
   sendMessage: async () => {},

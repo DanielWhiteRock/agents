@@ -89,6 +89,8 @@ export type PendingAsk = { eventId: string; name: string; input: unknown };
 
 export interface AgentRuntime {
   ensureEnvironment(name: string): Promise<string>;
+  /** Upload a skill on its own, so a shared one can be made once and reused. */
+  uploadSkill(skill: SkillUpload): Promise<PublishedSkill>;
   /**
    * Publish a pack. `skills` are real platform skills, uploaded and attached,
    * so the model reads only the one a task calls for instead of carrying the
