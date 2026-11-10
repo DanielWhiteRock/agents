@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Contemporary editorial style with serif typography, minimal palettes, and clean layouts for polished digital products."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/modern.webp"
 model:
   id: claude-opus-5

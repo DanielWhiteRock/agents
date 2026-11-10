@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A cyber-slick, dark-only Matrix-inspired interface defined by minimalist fashion, high-tech digital elements'"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/matrix.webp"
 model:
   id: claude-opus-5

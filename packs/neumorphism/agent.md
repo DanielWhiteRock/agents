@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Soft, extruded UI elements with inner and outer shadows on monochromatic surfaces for a tactile, embedded look."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/neumorphism.webp"
 model:
   id: claude-opus-5

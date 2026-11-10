@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A modern, graphic, editorial-poster aesthetic — warm and confident — built on alternating cream and burnt orange sections, an amber brand color.'"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/impeccable.webp"
 model:
   id: claude-opus-5

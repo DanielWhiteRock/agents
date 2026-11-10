@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Smooth color transitions and gradient-rich surfaces for modern, playful interfaces with visual depth."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/gradient.webp"
 model:
   id: claude-opus-5

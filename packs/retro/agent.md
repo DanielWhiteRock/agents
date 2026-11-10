@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Throwback design with vintage-inspired typography, high-contrast retro palettes, and nostalgic visual elements."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/retro.webp"
 model:
   id: claude-opus-5

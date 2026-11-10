@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Clean, high-contrast enterprise design for data-driven workflows with intuitive drag-and-drop patterns and structured layouts."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/stitch.webp"
 model:
   id: claude-opus-5

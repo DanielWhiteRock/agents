@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Dynamic, vibrant style with thick borders, geometric shapes, high-contrast colors, and expressive typography conveying motion and vitality."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/pulse.webp"
 model:
   id: claude-opus-5

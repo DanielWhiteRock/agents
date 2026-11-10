@@ -30,7 +30,7 @@ import type { MountedFile } from "../runtime/types.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
-  price_points: number; tags: string; image: string | null; upgrade_points: number; model: string; effort: string;
+  price_points: number; tags: string; image: string | null; role: string; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string;
   author_payout_email: string | null; extras: string; created_at: string;
 };
@@ -136,8 +136,8 @@ export async function listPacks(query = ""): Promise<PackRow[]> {
   return s.query<PackRow>(
     `SELECT * FROM packs WHERE status = 'listed'
        AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1
-            OR LOWER(tags) LIKE $1)
-     ORDER BY price_points DESC`, [like]);
+            OR LOWER(tags) LIKE $1 OR LOWER(role) = $2)
+     ORDER BY price_points DESC`, [like, q.toLowerCase()]);
 }
 /**
  * What the shelf can honestly say about a pack.
@@ -173,6 +173,55 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
  * from the things it classifies drifts out of step within a month, and the
  * first symptom is an empty category that still appears in the navigation.
  */
+/**
+ * The jobs we list, and how many workers do each.
+ *
+ * A marketplace of skills has to organise by topic, because a skill is not a
+ * thing anybody hires — it is a part you would have to assemble. A worker is
+ * already the assembly, so the shelf is organised the way hiring is: pick the
+ * job, then pick which one. A role with nothing in it is not shown, because
+ * listing a job we cannot fill is worse than not listing it.
+ */
+export const ROLES: Array<{ id: string; name: string; blurb: string; icon: string }> = [
+  { id: "designer", name: "Designer", icon: "file",
+    blurb: "Restyles an interface by a named system, to that system's own numbers." },
+  { id: "engineer", name: "Engineer", icon: "tokens",
+    blurb: "Reads the code before changing it, and reviews like someone who maintains it." },
+  { id: "qa", name: "QA", icon: "check",
+    blurb: "Finds what breaks before a customer does, and writes the test that keeps it found." },
+  { id: "security", name: "Security", icon: "warn",
+    blurb: "Looks for the way in, names the risk plainly, and says what to do first." },
+  { id: "devops", name: "DevOps", icon: "catalog",
+    blurb: "Ships it, watches it, and makes the next deploy boring." },
+  { id: "marketer", name: "Marketer", icon: "runs",
+    blurb: "Turns a vague brief into a campaign with one outcome and one audience." },
+  { id: "support", name: "Support", icon: "info",
+    blurb: "Reads the inbox and tells you which tickets become problems." },
+  { id: "producer", name: "Producer", icon: "clock",
+    blurb: "Takes an idea and returns a brief a crew could turn up to." },
+];
+
+export async function roles(): Promise<Array<{ id: string; name: string; blurb: string; icon: string; count: number }>> {
+  const s = await sql();
+  const rows = await s.query<{ role: string; n: string | number }>(
+    "SELECT role, COUNT(*) AS n FROM packs WHERE status = 'listed' AND role <> '' GROUP BY role");
+  const counts = new Map(rows.map((r) => [r.role, Number(r.n)]));
+  return ROLES.map((r) => ({ ...r, count: counts.get(r.id) ?? 0 })).filter((r) => r.count > 0);
+}
+
+/** The tags actually present on a set of packs, counted. */
+export function tagsOf(packs: Array<{ tags: string }>): Array<{ tag: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const p of packs) {
+    for (const raw of (p.tags ?? "").split(",")) {
+      const tag = raw.trim().toLowerCase();
+      if (tag) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...counts].map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+}
+
 export async function categories(): Promise<Array<{ tag: string; count: number }>> {
   const s = await sql();
   const rows = await s.query<{ tags: string }>(

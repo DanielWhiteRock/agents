@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Magazine-inspired editorial layout with refined serif typography, structured grids, and elegant reading experiences."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/editorial.webp"
 model:
   id: claude-opus-5

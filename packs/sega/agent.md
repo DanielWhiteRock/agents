@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A playful, arcade-inspired interface for games — built on the VT323 pixel typeface, hard-edged 0px corners, chunky pill buttons that physically press into solid offset blocks'"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/sega.webp"
 model:
   id: claude-opus-5

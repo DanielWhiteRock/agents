@@ -5,6 +5,7 @@ author: "Dietrich Gebert, Cursor, Poteto — MIT, see README.md"
 description: "Reads your code before changing it, writes the smallest thing that works, and reviews like someone who has to maintain it."
 price: 0
 tags: "engineering, code review"
+role: engineer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/senior-engineer.webp"
 model:
   id: claude-opus-5

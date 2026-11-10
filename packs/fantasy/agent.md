@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Game-inspired fantasy aesthetic with bold, premium visuals, rich color palettes, and immersive thematic elements."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/fantasy.webp"
 model:
   id: claude-opus-5

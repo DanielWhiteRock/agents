@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Cozy cafe-inspired interface with warm tones, soft typography, and clean layouts for a relaxed browsing experience."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/cafe.webp"
 model:
   id: claude-opus-5

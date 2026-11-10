@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A radically minimal, blank-canvas interface built as a pure edge-to-edge surface, with almost no color and typography carrying the visual weight. Black serves as the only…"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/codex.webp"
 model:
   id: claude-opus-5

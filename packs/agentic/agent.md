@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Conversational AI-first interface with minimal controls, clear outcomes, and delegated task flows for agentic workflows."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/agentic.webp"
 model:
   id: claude-opus-5

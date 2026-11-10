@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Apple-inspired premium aesthetic with precise spacing, modern typography, and a refined, polished visual language."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/premium.webp"
 model:
   id: claude-opus-5

@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Spatial depth design with isometric views, vanishing points, and layered elements that guide attention through 3D-like realism."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/perspective.webp"
 model:
   id: claude-opus-5

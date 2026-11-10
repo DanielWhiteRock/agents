@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Carefully curated, modern minimal style with elegant serif typography and understated, sophisticated palettes."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/refined.webp"
 model:
   id: claude-opus-5

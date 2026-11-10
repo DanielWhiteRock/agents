@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS packs (
   price_cents INTEGER NOT NULL DEFAULT 0,
   price_points INTEGER NOT NULL DEFAULT 0,
   tags TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
   image TEXT,
   upgrade_points INTEGER NOT NULL,
   model TEXT NOT NULL,
@@ -389,6 +390,11 @@ const MIGRATIONS = [
   // to keep in step — they are whatever authors have actually tagged, counted.
   "ALTER TABLE packs ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE packs ADD COLUMN image TEXT",
+  // The job, not the topic. A role is a different kind of fact from a tag:
+  // tags are free text an author picks and the shelf counts, a role is one of
+  // a short list we commit to and can be empty. Deriving one from the other
+  // was right for topics and wrong for jobs.
+  "ALTER TABLE packs ADD COLUMN role TEXT NOT NULL DEFAULT ''",
   // A pack has to be affordable from the allowance it will be run on: Personal
   // is 120 points a month, so a premium worker lands near half of one and
   // leaves something to run it with.

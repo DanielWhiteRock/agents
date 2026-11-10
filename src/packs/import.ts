@@ -20,6 +20,7 @@ export type ParsedPack = {
   pricePoints?: number;
   tags?: string;
   image?: string;
+  role?: string;
   model?: string;
   effort?: PackDefinition["effort"];
   slug?: string;
@@ -81,7 +82,7 @@ const KNOWN = new Set([
   // What it costs and what it is for. Both used to be settable only in the
   // browser, which meant a folder was never the whole pack and anybody
   // publishing a set of them had a manual step per pack.
-  "price", "tags", "image",
+  "price", "tags", "image", "role",
 ]);
 
 const list = (v: string): string[] =>
@@ -138,6 +139,7 @@ export function parsePackMarkdown(text: string): ParsedPack {
         out.tags = list(value).join(", ") || unquote(value);
       }
       if (topKey === "image" && value) out.image = unquote(value);
+      if (topKey === "role" && value) out.role = unquote(value).trim().toLowerCase();
       // `model: claude-opus-5` as a scalar, or an object on the lines below.
       if (topKey === "model" && value) out.model = unquote(value);
       // `advisor: claude-opus-5` as a scalar, or an object on the lines below.

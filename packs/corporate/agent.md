@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Professional, brand-aligned design with structured grids, minimalist layouts, and consistent enterprise patterns."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/corporate.webp"
 model:
   id: claude-opus-5

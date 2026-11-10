@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Vibrant, high-contrast palettes and gradients for engaging, memorable, and modern user experiences."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/colorful.webp"
 model:
   id: claude-opus-5

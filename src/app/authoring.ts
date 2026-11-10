@@ -41,6 +41,8 @@ export type PackInput = {
   tags?: string;
   /** A hero image: a filename under /assets, or an absolute URL. */
   image?: string;
+  /** The job this worker does, from P.ROLES. */
+  role?: string;
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
   payoutEmail?: string;
@@ -83,7 +85,7 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, now(),
-      input.tags?.trim() ?? "", input.image?.trim() || null]);
+      input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? ""]);
   return (await P.getPack(slug))!;
 }
 
@@ -97,12 +99,13 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
   await s.query(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
-       author_payout_email = $11, tags = $13, image = $14 WHERE id = $12`,
+       author_payout_email = $11, tags = $13, image = $14, role = $15 WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id,
-      input.tags?.trim() ?? pack.tags, input.image?.trim() || pack.image]);
+      input.tags?.trim() ?? pack.tags, input.image?.trim() || pack.image,
+      input.role?.trim() || pack.role]);
   return (await P.getPack(slug))!;
 }
 
@@ -212,6 +215,7 @@ export async function importPack(args: {
     pricePoints: parsed.pricePoints ?? args.defaults?.pricePoints ?? existing?.price_points ?? 0,
     tags: parsed.tags ?? existing?.tags ?? "",
     image: parsed.image ?? existing?.image ?? undefined,
+    role: parsed.role ?? existing?.role ?? "",
     upgradePoints: args.defaults?.upgradePoints ?? existing?.upgrade_points ?? 0,
     instructions: parsed.instructions,
     pinnedModels: parsed.pinnedModels.length

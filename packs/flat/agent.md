@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Two-dimensional minimalist style with vibrant colors, clean typography, and no 3D effects for fast, user-friendly interfaces."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/flat.webp"
 model:
   id: claude-opus-5

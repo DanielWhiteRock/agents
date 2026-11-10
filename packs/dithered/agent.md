@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Dot-pattern rendering technique that simulates shades with a limited palette for nostalgic, retro, high-contrast visuals."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/dithered.webp"
 model:
   id: claude-opus-5

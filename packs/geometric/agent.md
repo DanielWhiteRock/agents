@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Geometric, structured design with clean typography, neutral colors, precise shapes, and intuitive layouts that stay out of the way."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/geometric.webp"
 model:
   id: claude-opus-5

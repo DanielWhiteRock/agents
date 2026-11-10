@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Futuristic sci-fi aesthetic with dark themes, vibrant neon accents, and immersive spatial elements."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/cosmic.webp"
 model:
   id: claude-opus-5

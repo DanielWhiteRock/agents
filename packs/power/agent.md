@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "High-end dark aesthetic with bold headings, monochromatic palette, and premium feel for premium brand experiences."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/power.webp"
 model:
   id: claude-opus-5

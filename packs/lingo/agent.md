@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Playful, minimal design with bright colors, rounded shapes, tactile 3D borders, and friendly illustrations for approachable interfaces."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/lingo.webp"
 model:
   id: claude-opus-5

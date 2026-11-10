@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Google's Material Design with layered surfaces, dynamic theming, built-in motion, and responsive cross-platform patterns."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/material.webp"
 model:
   id: claude-opus-5

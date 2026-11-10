@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Paper-textured, print-inspired design with minimal colors, clean serif/sans typography, and tactile surface qualities."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/paper.webp"
 model:
   id: claude-opus-5

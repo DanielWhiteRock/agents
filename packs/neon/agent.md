@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Electric neon glow effects with high-contrast color pairings for bold, attention-grabbing interfaces."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/neon.webp"
 model:
   id: claude-opus-5

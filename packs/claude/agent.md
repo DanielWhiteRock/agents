@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A research-journal aesthetic printed on warm stone — authoritative, editorial, almost achromatic. Pages live on warm ivory parchment (never pure white), with near-black slate…"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/claude.webp"
 model:
   id: claude-opus-5

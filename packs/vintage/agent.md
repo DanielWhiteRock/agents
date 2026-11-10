@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "1950s-1990s nostalgia with skeuomorphic touches, grainy textures, retro color palettes, and pixel-style typography."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/vintage.webp"
 model:
   id: claude-opus-5

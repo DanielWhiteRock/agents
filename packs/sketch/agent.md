@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A friendly, hand-drawn sketch interface inspired by pencil illustrations on warm cream paper. Soft teal brand accents, hand-written display headings, rounded pill controls.'"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/sketch.webp"
 model:
   id: claude-opus-5

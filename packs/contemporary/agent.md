@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Current-era minimalist design with bento grids, dark mode support, and high-performance accessible layouts."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/contemporary.webp"
 model:
   id: claude-opus-5

@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Modern take on brutalism with bold borders, vivid accent colors, and raw, high-contrast layouts on warm surfaces."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/neobrutalism.webp"
 model:
   id: claude-opus-5

@@ -156,6 +156,30 @@ font:inherit;min-height:3rem;box-shadow:var(--plane1);
 transition:border-color var(--dur-snappy) var(--spring),box-shadow var(--dur-snappy) var(--spring)}
 .search input:focus{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in oklab,var(--primary) 28%,transparent)}
 
+/* ---------------------------------------------------------------- roles
+   The shelf leads with jobs. A skills marketplace has to lead with topics
+   because a skill is a part, not a hire; a worker is already the assembly, so
+   this reads the way hiring does — pick the job, then pick which one. The
+   blurb is there because a job title is not self-explanatory to somebody who
+   has not hired for it before. */
+.roles{display:grid;gap:var(--s3);margin:0 0 var(--s5);grid-template-columns:1fr}
+@media (min-width:36rem){.roles{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:60rem){.roles{grid-template-columns:repeat(4,1fr)}}
+.roles a{display:grid;grid-template-columns:auto 1fr auto;gap:var(--s2) var(--s3);
+align-items:center;padding:var(--s4);border:1px solid var(--line);border-radius:var(--s4);
+background:var(--panel);color:var(--ink);box-shadow:var(--plane1);
+transition:transform var(--dur) var(--spring),box-shadow var(--dur) var(--spring),
+border-color var(--dur-snappy) var(--spring)}
+.roles a:hover{transform:translateY(-2px);box-shadow:var(--plane2);
+border-color:color-mix(in oklab,var(--primary) 50%,var(--line));text-decoration:none}
+.roles a:active{transform:scale(.99);transition:transform var(--press) ease-out}
+.roles .ic svg{width:1.25rem;height:1.25rem;color:var(--primary)}
+.roles b{font-size:var(--t3);font-weight:600;letter-spacing:-.01em}
+.roles small{font-family:var(--mono);font-size:var(--t1);color:var(--muted);
+border:1px solid var(--line);border-radius:999px;padding:1px var(--s2);
+justify-self:end;white-space:nowrap}
+.roles span{grid-column:1 / -1;font-size:var(--t1);color:var(--muted);line-height:1.45}
+
 /* ----------------------------------------------------------- categories
    A horizontal rail on a phone, a grid once there is room. Scrolling
    sideways through categories is a choice; the page doing it is not.        */
@@ -517,6 +541,7 @@ export function catalogPage(
     stats: { runs: number; buyers: number; version: number } }>,
   balance: number, viewer: Viewer = null, query = "",
   cats: Array<{ tag: string; count: number }> = [],
+  roles: Array<{ id: string; name: string; blurb: string; icon: string; count: number }> = [],
 ): string {
   // Name, face, one line, price. Everything else is on the pack's own page.
   const cards = packs.map((p) => `<a class="card gig" href="/packs/${esc(p.slug)}">
@@ -544,15 +569,28 @@ export function catalogPage(
   ${query ? `<a class="btn ghost" href="/" title="Clear the search">${icon("stop", "Clear", true)}</a>` : ""}
 </form>
 ${(() => {
-  if (query || cats.length === 0) return "";
-  const shown = cats.slice(0, 8);
-  // A count of 1 against every category is noise, not information.
-  const counts = shown.some((c) => c.count > 1);
-  return `<nav class="cats" aria-label="Categories">
+  // Two levels, and only ever one of them on screen. At the root you are
+  // choosing a job; inside a job you are choosing which one, and the topics
+  // that were the whole taxonomy a moment ago are the specialisation now.
+  const inRole = roles.find((r) => r.id === query.trim().toLowerCase());
+  if (!query && roles.length) {
+    return `<nav class="roles" aria-label="Roles">
+  ${roles.map((r) => `<a href="/?q=${encodeURIComponent(r.id)}">
+    ${icon(r.icon, r.name, true)}
+    <b>${esc(r.name)}</b><small>${r.count}</small>
+    <span>${esc(r.blurb)}</span></a>`).join("")}
+</nav>`;
+  }
+  if (inRole && cats.length) {
+    const shown = cats.slice(0, 10);
+    const counts = shown.some((c) => c.count > 1);
+    return `<nav class="cats" aria-label="Within ${esc(inRole.name)}">
   ${shown.map((c) => `<a href="/?q=${encodeURIComponent(c.tag)}">
     ${icon(CATEGORY_ICON[c.tag] ?? "catalog", c.tag, true)}
     <b>${esc(c.tag)}</b>${counts ? `<small>${c.count}</small>` : ""}</a>`).join("")}
 </nav>`;
+  }
+  return "";
 })()}
 ${query
   ? `<p class="lede" style="font-size:.875rem">${found === 0

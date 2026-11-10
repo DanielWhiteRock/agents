@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A sun-baked, clay-toned editorial interface built on warm cream surfaces, ink-brown headlines set in a display serif, and a single terracotta accent.'"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/terracotta.webp"
 model:
   id: claude-opus-5

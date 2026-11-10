@@ -132,7 +132,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         stats: await P.packStats(p.id),
       };
     }));
-    return html(res, V.catalogPage(packs, await bal(), viewer, q, await P.categories()));
+    return html(res, V.catalogPage(packs, await bal(), viewer, q, P.tagsOf(packs), await P.roles()));
   }
 
   const packMatch = /^\/packs\/([a-z0-9-]+)$/.exec(path);

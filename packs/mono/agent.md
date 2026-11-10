@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "Monospace-driven, matrix-inspired design with high-contrast elements, compact density, and a hacker-chic aesthetic."
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/mono.webp"
 model:
   id: claude-opus-5

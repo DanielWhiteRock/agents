@@ -5,6 +5,7 @@ author: "typeui.sh"
 description: "'A playful, energetic, cartoonesque interface inspired by friendly children's-book illustrations — warm cream backgrounds, big bold custom display typography, saturated brand…"
 price: 0
 tags: "web design, app design"
+role: designer
 image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/fiction.webp"
 model:
   id: claude-opus-5
