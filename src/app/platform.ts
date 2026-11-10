@@ -127,6 +127,14 @@ export async function getVersion(versionId: string): Promise<PackVersionRow | un
 }
 
 /** Some models reject `effort` entirely, so it is a capability, not a default. */
+export type DestructivePolicy = "always_ask" | "always_allow" | "auto";
+
+/** Platform-wide posture for tools that change the world. A settings row. */
+export async function destructivePolicy(): Promise<DestructivePolicy> {
+  const raw = await setting("destructive_tool_policy");
+  return raw === "always_ask" || raw === "auto" ? raw : "always_allow";
+}
+
 export async function effortFor(model: string, effort: string | null | undefined): Promise<PackDefinition["effort"] | undefined> {
   if (!effort) return undefined;
   const excluded = (await setting("models_without_effort")).split(",").map((x) => x.trim());
@@ -158,6 +166,7 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     model: pack.model, effort: await effortFor(pack.model, pack.effort),
     priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
+    destructivePolicy: await destructivePolicy(),
   };
   // The folder, if the author uploaded one. Its skills/ become real platform
   // skills; a pack with no folder still publishes from its instructions alone.

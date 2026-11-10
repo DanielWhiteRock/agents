@@ -113,7 +113,9 @@ export class ManagedAgentsRuntime implements AgentRuntime {
    * gets the same always_ask posture on destructive tools — a specialist is not
    * a reason to drop the guardrail.
    */
-  private async createSubagent(sub: SubagentUpload, fallbackModel: string): Promise<PublishedSubagent> {
+  private async createSubagent(
+    sub: SubagentUpload, fallbackModel: string, policy: "always_ask" | "always_allow" | "auto",
+  ): Promise<PublishedSubagent> {
     const agent = await this.client.beta.agents.create({
       name: sub.name,
       model: { id: sub.model ?? fallbackModel },
@@ -122,7 +124,9 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       tools: [{
         type: "agent_toolset_20260401",
         default_config: { enabled: true },
-        configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: "always_ask" } })),
+        // A specialist is not a reason to drop the guardrail, so a subagent
+        // inherits whatever posture the pack is published with.
+        configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: policy } })),
       }],
     });
     return { name: sub.name, agentId: agent.id, version: String(agent.version) };
@@ -134,17 +138,18 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     if (subagents.length > MAX_SUBAGENTS) {
       throw new Error(`a pack may declare at most ${MAX_SUBAGENTS} subagents; this one has ${subagents.length}`);
     }
+    // The platform's own default is always_allow, so whatever posture we want
+    // has to be stated explicitly on every publish.
+    const policy = pack.destructivePolicy ?? "always_ask";
     const tools: any[] = [{
       type: "agent_toolset_20260401",
       default_config: { enabled: true },
-      // Spending/destructive built-ins never run unattended. The platform
-      // default is always_allow, so this must be stated explicitly.
-      configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: "always_ask" } })),
+      configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: policy } })),
     }];
     for (const t of pack.tools ?? []) {
       tools.push({
         type: "custom", name: t.name, description: t.description, input_schema: t.inputSchema,
-        ...(t.spending ? { permission_policy: { type: "always_ask" } } : {}),
+        ...(t.spending ? { permission_policy: { type: policy } } : {}),
       });
     }
     for (const m of pack.mcpServers ?? []) tools.push({ type: "mcp_toolset", mcp_server_name: m.name });
@@ -156,7 +161,9 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     for (const skill of skills) published.push(await this.uploadSkill(skill));
 
     const publishedSubagents: PublishedSubagent[] = [];
-    for (const sub of subagents) publishedSubagents.push(await this.createSubagent(sub, pack.model));
+    for (const sub of subagents) {
+      publishedSubagents.push(await this.createSubagent(sub, pack.model, policy));
+    }
 
     const agent = await this.client.beta.agents.create({
       name: pack.name,

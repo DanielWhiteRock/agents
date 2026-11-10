@@ -242,3 +242,42 @@ describe("publishing a pack folder", () => {
     expect(fake.beta.agents.create.mock.calls[0]![0].multiagent).toBeUndefined();
   });
 });
+
+describe("the destructive-tool posture", () => {
+  const policyOf = (call: any) =>
+    call.tools[0].configs.map((c: { permission_policy: { type: string } }) => c.permission_policy.type);
+
+  it("defaults to always_ask when a pack declares nothing", async () => {
+    await runtime.publishPack(PACK_ZERO);
+    expect(policyOf(fake.beta.agents.create.mock.calls[0]![0])).toEqual(["always_ask", "always_ask", "always_ask"]);
+  });
+
+  it("runs destructive tools unattended when configured to", async () => {
+    await runtime.publishPack({ ...PACK_ZERO, destructivePolicy: "always_allow" });
+    expect(policyOf(fake.beta.agents.create.mock.calls[0]![0])).toEqual(["always_allow", "always_allow", "always_allow"]);
+  });
+
+  it("supports letting the server judge each call", async () => {
+    await runtime.publishPack({ ...PACK_ZERO, destructivePolicy: "auto" });
+    expect(policyOf(fake.beta.agents.create.mock.calls[0]![0])).toEqual(["auto", "auto", "auto"]);
+  });
+
+  it("applies the same posture to a pack's custom spending tools", async () => {
+    await runtime.publishPack({
+      ...PACK_ZERO, destructivePolicy: "always_allow",
+      tools: [{ name: "charge_card", description: "d", inputSchema: {}, spending: true }],
+    });
+    const custom = fake.beta.agents.create.mock.calls[0]![0].tools.find((t: any) => t.type === "custom");
+    expect(custom.permission_policy).toEqual({ type: "always_allow" });
+  });
+
+  it("gives a subagent the same posture, since a specialist is not an exemption", async () => {
+    fake.beta.agents.create
+      .mockResolvedValueOnce({ id: "agt_sub", version: 1 })
+      .mockResolvedValueOnce({ id: "agt_main", version: 1 });
+    await runtime.publishPack({ ...PACK_ZERO, destructivePolicy: "always_allow" }, [],
+      [{ name: "reviewer", system: "You review." }]);
+    expect(policyOf(fake.beta.agents.create.mock.calls[0]![0]))
+      .toEqual(["always_allow", "always_allow", "always_allow"]);
+  });
+});

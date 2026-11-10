@@ -33,6 +33,16 @@ export type PackDefinition = {
   tools?: PackTool[];
   mcpServers?: PackMcpServer[];
   /**
+   * What happens when the agent reaches for a tool that changes the world
+   * (bash, write, edit, or a tool the author marked as spending).
+   *
+   * `always_ask` pauses for a human. `always_allow` runs it unattended — which
+   * is the platform's own default. `auto` lets the server judge each call and
+   * pause only when it cannot decide. Set from platform configuration unless a
+   * pack declares its own.
+   */
+  destructivePolicy?: "always_ask" | "always_allow" | "auto";
+  /**
    * Models this pack is allowed to run on. Empty means any.
    * Exists because every extraction refusal measured in the spikes came from
    * claude-opus-5; a weaker model may simply comply.

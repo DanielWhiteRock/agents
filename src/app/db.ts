@@ -296,6 +296,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // A trial: how many turns a buyer gets on a pack they do not own, and what it
   // may cost. Their own points pay for it, which is what stops it being free
   // compute forever.
+  // What happens when an agent reaches for bash, write, edit or a spending
+  // tool. always_ask pauses for a human; always_allow runs it unattended (the
+  // platform's own default); auto lets the server judge each call. Takes effect
+  // on a pack's NEXT publish, because it is baked into the agent config.
+  destructive_tool_policy: "always_allow",
   trial_turns: "3",
   trial_budget_cents: "15",
 };
