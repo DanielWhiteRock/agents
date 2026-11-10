@@ -74,7 +74,7 @@ export function layout(
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
 <nav>
   ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  <a href="/purchases">Purchases</a><a href="/authors">Authors</a><a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
+  <a href="/schedules">Schedules</a><a href="/purchases">Purchases</a><a href="/authors">Authors</a><a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
   ${opts.balance !== undefined ? `<span class="tag">${esc(fmt(opts.balance))}</span>` : ""}
   <span class="tag" title="${esc(v.email)}">${esc(v.orgName)} · ${esc(v.name)}${v.role === "owner" ? " (owner)" : ""}</span>
   <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
@@ -136,6 +136,11 @@ ${!owned && trial ? (trial.used
 <form method="post" action="/packs/${esc(p.slug)}/trial">
   <button class="btn ghost" type="submit">Try it — ${trial.turns} turns</button>
 </form>`) : ""}` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
+${owned ? `<h2>Take it with you</h2>
+<p class="lede" style="font-size:14px">You bought it, so you can run it yourself. The download is an agent definition
+<code>ant apply</code> accepts directly — the author's instructions are inside it, which is the honest cost of the
+developer path.</p>
+<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export">Download ${esc(p.slug)}.md</a></p>` : ""}
 <h2>What runs cost</h2>
 <table><tr><th>Item</th><th class="num">Measured</th></tr>
 <tr><td>A short turn (refusal, 288 output tokens, 6.5k cached prompt)</td><td class="num">$0.05</td></tr>
@@ -539,4 +544,68 @@ ${tokens.map((t) => `<tr><td>${esc(t.name)}</td>
 </form>
 <p class="lede" style="margin-top:10px;font-size:14px">A token acts for this whole organisation. Revoking one takes effect immediately.</p>`,
   { balance, viewer });
+}
+
+// ----------------------------------------------------------------- schedules
+
+export function schedulesPage(args: {
+  rows: Array<{
+    id: string; name: string; pack: string; prompt: string; cadence: string;
+    enabled: number; last_run_at: string | null; last_run_id: string | null; last_error: string | null;
+  }>;
+  owned: Array<{ id: string; name: string }>;
+  balance: number; viewer: Viewer; err?: string;
+}): string {
+  return layout("Schedules", `
+<h1>Standing instructions</h1>
+<p class="lede">A pack, a brief, and a cadence. The agent runs on its own and the result is waiting for you — which is
+the honest reason to pay every month rather than once. Scheduled runs are budgeted, metered and traced exactly like
+the ones you start by hand.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+
+<table><tr><th>Name</th><th>Pack</th><th>When</th><th>Last run</th><th></th><th></th></tr>
+${args.rows.map((r) => `<tr>
+  <td>${esc(r.name)}${r.enabled ? "" : ` <span class="tag">paused</span>`}
+    <div style="color:var(--muted);font-size:12.5px;max-width:34ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.prompt)}</div></td>
+  <td>${esc(r.pack)}</td>
+  <td>${esc(r.cadence)}</td>
+  <td>${r.last_run_at ? esc(r.last_run_at.slice(5, 16).replace("T", " ")) : "never"}
+    ${r.last_run_id ? ` · <a href="/runs/${esc(r.last_run_id)}">trace</a>` : ""}
+    ${r.last_error ? `<div class="tag" style="color:var(--bad)">${esc(r.last_error)}</div>` : ""}</td>
+  <td><form method="post" action="/schedules/toggle" class="inline">
+    <input type="hidden" name="id" value="${esc(r.id)}">
+    <input type="hidden" name="enabled" value="${r.enabled ? "0" : "1"}">
+    <button class="btn ghost" style="padding:5px 10px">${r.enabled ? "Pause" : "Resume"}</button></form></td>
+  <td><form method="post" action="/schedules/delete" class="inline">
+    <input type="hidden" name="id" value="${esc(r.id)}">
+    <button class="btn ghost" style="padding:5px 10px">Delete</button></form></td>
+</tr>`).join("") || `<tr><td colspan="6">Nothing scheduled yet.</td></tr>`}
+</table>
+
+<h2>Add one</h2>
+${args.owned.length === 0
+  ? `<p class="lede">You need to own a pack first — a schedule is a standing commitment to spend money, so it is only
+offered on packs this organisation owns.</p>`
+  : `<form method="post" action="/schedules" class="card">
+  <p><label>Name<br><input type="text" name="name" placeholder="Monday competitor sweep" style="width:100%" required></label></p>
+  <p><label>Pack<br><select name="packVersionId" style="width:100%">
+    ${args.owned.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join("")}
+  </select></label></p>
+  <p><label>The brief it sends every time<br>
+    <textarea name="prompt" placeholder="What the worker should do, as if you were typing it yourself." required></textarea></label></p>
+  <div class="row">
+    <label>Cadence <select name="cadence">
+      <option value="daily">daily</option><option value="weekly">weekly</option><option value="hourly">hourly</option>
+    </select></label>
+    <label>Hour (UTC) <select name="hour">
+      ${Array.from({ length: 24 }, (_, h) => `<option value="${h}"${h === 9 ? " selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}
+    </select></label>
+    <label>Weekday <select name="weekday">
+      ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        .map((d, i) => `<option value="${i}"${i === 1 ? " selected" : ""}>${d}</option>`).join("")}
+    </select></label>
+    <button class="btn" type="submit">Schedule it</button>
+  </div>
+  <p class="lede" style="margin-top:10px;font-size:13.5px">Times are UTC so a schedule does not drift. Hourly ignores the hour and weekday.</p>
+</form>`}`, { balance: args.balance, viewer: args.viewer });
 }

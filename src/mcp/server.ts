@@ -124,6 +124,25 @@ export function buildServer(ctx: McpContext): McpServer {
       + ` — finish at ${ctx.baseUrl}/packs/${p.slug}. Payment needs a browser, so it cannot be done from here.`);
   });
 
+  server.registerTool("export_pack", {
+    title: "Download a pack you own",
+    description:
+      "Returns a pack this organisation owns as an agent definition file — markdown with YAML front matter, the "
+      + "format `ant apply` consumes — so it can be run on your own infrastructure instead of here. Only works for "
+      + "packs you have bought, because the file contains the author's instructions.",
+    inputSchema: { slug: z.string().describe("The pack's slug.") },
+  }, async ({ slug }) => {
+    try {
+      const md = await P.exportPack(ctx.orgId, slug);
+      return text(`Save this as ${slug}.md and apply it with \`ant apply ${slug}.md\`:\n\n${md}`);
+    } catch (e) {
+      const m = String((e as Error)?.message ?? e);
+      return text(m.includes("does not own")
+        ? `This organisation does not own ${slug}, so it cannot be exported. Buy it at ${ctx.baseUrl}/packs/${slug}`
+        : m);
+    }
+  });
+
   server.registerTool("list_runs", {
     title: "Recent runs and what they cost",
     description:

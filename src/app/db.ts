@@ -168,6 +168,27 @@ CREATE TABLE IF NOT EXISTS pending_asks (
 );
 CREATE INDEX IF NOT EXISTS pending_asks_run ON pending_asks(run_id);
 
+-- A standing instruction: run this pack on this brief, on this cadence. The
+-- design calls recurring work the honest justification for a subscription.
+CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  pack_version_id TEXT NOT NULL REFERENCES pack_versions(id),
+  name TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  cadence TEXT NOT NULL CHECK (cadence IN ('hourly','daily','weekly')),
+  -- UTC, so a schedule does not drift with anyone's clock.
+  hour INTEGER NOT NULL DEFAULT 9,
+  weekday INTEGER NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_run_at TEXT,
+  last_run_id TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS schedules_org ON schedules(org_id);
+
 CREATE TABLE IF NOT EXISTS purchases (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id),

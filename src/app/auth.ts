@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { id, now, settingInt } from "./db.js";
 import { sql } from "./sql.js";
 import { credit } from "../billing/points.js";
+import { DomainError } from "./errors.js";
 
 /**
  * Passwords, sessions, invitations and roles.
@@ -14,10 +15,9 @@ import { credit } from "../billing/points.js";
 export type Role = "owner" | "member";
 
 /** A permission denial, not a crash: the server answers 403, not 500. */
-export class ForbiddenError extends Error {
+export class ForbiddenError extends DomainError {
   constructor(message = "only an owner can do that") {
-    super(message);
-    this.name = "ForbiddenError";
+    super(message, 403, "ForbiddenError");
   }
 }
 
@@ -138,10 +138,9 @@ export type InviteRow = {
 
 const INVITE_DAYS = 14;
 
-export class SeatsExhaustedError extends Error {
+export class SeatsExhaustedError extends DomainError {
   constructor(limit: number) {
-    super(`no seats left on this tier (${limit}); upgrade or remove a member`);
-    this.name = "SeatsExhaustedError";
+    super(`no seats left on this tier (${limit}); upgrade or remove a member`, 409, "SeatsExhaustedError");
   }
 }
 
@@ -242,8 +241,13 @@ export async function revokeApiToken(orgId: string, token: string): Promise<void
   await s.query("UPDATE api_tokens SET revoked_at = $1 WHERE org_id = $2 AND token = $3", [now(), orgId, token]);
 }
 
-/** Resolve a bearer token to an organisation, and note that it was used. */
-export async function orgFromApiToken(bearer: string | undefined): Promise<{ orgId: string; userId: string } | null> {
+/**
+ * Resolve a bearer token to a session, and note that it was used.
+ *
+ * A token acts with the role of whoever created it, so it can do no more than
+ * that person could in the browser.
+ */
+export async function sessionFromApiToken(bearer: string | undefined): Promise<Session | null> {
   if (!bearer) return null;
   const token = bearer.replace(/^Bearer\s+/i, "").trim();
   if (!token) return null;
@@ -251,6 +255,14 @@ export async function orgFromApiToken(bearer: string | undefined): Promise<{ org
   const row = await s.one<ApiTokenRow>(
     "SELECT * FROM api_tokens WHERE token = $1 AND revoked_at IS NULL", [token]);
   if (!row) return null;
+  const user = await s.one<UserRow>("SELECT * FROM users WHERE id = $1", [row.user_id]);
+  if (!user) return null;
   await s.query("UPDATE api_tokens SET last_used_at = $1 WHERE token = $2", [now(), token]);
-  return { orgId: row.org_id, userId: row.user_id };
+  return { user, orgId: row.org_id, role: user.role };
+}
+
+/** Kept for callers that only need the organisation. */
+export async function orgFromApiToken(bearer: string | undefined): Promise<{ orgId: string; userId: string } | null> {
+  const session = await sessionFromApiToken(bearer);
+  return session ? { orgId: session.orgId, userId: session.user.id } : null;
 }

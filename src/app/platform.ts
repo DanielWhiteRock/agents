@@ -12,9 +12,11 @@ import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
 import { resumeAfterDecision, runTurn, type TurnResult } from "../runtime/run.js";
 import { cents, fromCents } from "../runtime/money.js";
 import { BudgetExhaustedError, type AgentRuntime, type PendingAsk, type RuntimeEvent } from "../runtime/types.js";
+import { DomainError } from "./errors.js";
 import type { PackDefinition } from "../packs/types.js";
 import { SEED_PACKS } from "../packs/seed-packs.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
+import { exportPackMarkdown } from "../packs/export.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
@@ -173,32 +175,29 @@ export async function entitled(orgId: string, packVersionId: string): Promise<bo
 
 /** Thrown when a run is attempted on a pack the organisation does not own. */
 /** Thrown when an organisation has no compute left to spend. */
-export class OutOfPointsError extends Error {
+export class OutOfPointsError extends DomainError {
   constructor() {
-    super("no points left — buy more compute to keep running agents");
-    this.name = "OutOfPointsError";
+    // 402: the request is fine, there is simply nothing left to spend.
+    super("no points left — buy more compute to keep running agents", 402, "OutOfPointsError");
   }
 }
 
-export class NotEntitledError extends Error {
+export class NotEntitledError extends DomainError {
   constructor() {
-    super("this organisation does not own that pack version");
-    this.name = "NotEntitledError";
+    super("this organisation does not own that pack version", 403, "NotEntitledError");
   }
 }
 
 /** Thrown when a trial has used up its turns. */
-export class TrialExhaustedError extends Error {
+export class TrialExhaustedError extends DomainError {
   constructor(turns: number) {
-    super(`a trial is ${turns} turns; buy the pack to keep going`);
-    this.name = "TrialExhaustedError";
+    super(`a trial is ${turns} turns; buy the pack to keep going`, 409, "TrialExhaustedError");
   }
 }
 
-export class TrialAlreadyUsedError extends Error {
+export class TrialAlreadyUsedError extends DomainError {
   constructor() {
-    super("this organisation has already tried that pack");
-    this.name = "TrialAlreadyUsedError";
+    super("this organisation has already tried that pack", 409, "TrialAlreadyUsedError");
   }
 }
 
@@ -525,6 +524,30 @@ export async function topUp(runId: string): Promise<RunRow> {
     [run.list_cost_cents + Number(headroom), session.status, runId]);
   await recordEvent(runId, "run.topped_up", { headroom_cents: Number(headroom) });
   return (await getRun(runId))!;
+}
+
+/**
+ * A bought pack as a file the buyer can run themselves.
+ *
+ * Gated on entitlement, because this is the one path that hands over the
+ * author's instructions — which is exactly what authors are told plainly can
+ * happen, rather than promised against.
+ */
+export async function exportPack(orgId: string, slug: string): Promise<string> {
+  const pack = await getPack(slug);
+  if (!pack) throw new Error(`no such pack: ${slug}`);
+  const version = await latestVersion(pack.id);
+  if (!version) throw new Error(`${pack.name} has not been published yet`);
+  await assertEntitled(orgId, version.id);
+  return exportPackMarkdown({
+    slug: pack.slug, name: pack.name, tagline: pack.tagline, author: pack.author,
+    model: pack.model, effort: await effortFor(pack.model, pack.effort),
+    priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
+    // The version's own instructions, not the pack's current ones: a buyer gets
+    // what they bought, even after the author ships a newer version.
+    instructions: version.instructions,
+    pinnedModels: JSON.parse(pack.pinned_models),
+  }, version.version);
 }
 
 /** Has this organisation already spent its one trial on this pack? */

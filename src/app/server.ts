@@ -5,6 +5,8 @@ import * as A from "./auth.js";
 import * as Pay from "../billing/purchases.js";
 import { payments } from "../billing/provider.js";
 import { handleMcpRequest } from "../mcp/server.js";
+import { statusOf } from "./errors.js";
+import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceCents, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
@@ -128,6 +130,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     try { await P.publishPack(pubMatch[1]!); }
     catch (e) { return redirect(res, `/packs/${pubMatch[1]}?err=${encodeURIComponent(msg(e))}`); }
     return redirect(res, `/packs/${pubMatch[1]}`);
+  }
+
+  // Export: the developer path. Owners only — it hands over the instructions.
+  const expMatch = /^\/packs\/([a-z0-9-]+)\/export$/.exec(path);
+  if (method === "GET" && expMatch) {
+    const slug = expMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const md = await P.exportPack(ctx.orgId, slug);
+    res.writeHead(200, {
+      "content-type": "text/markdown; charset=utf-8",
+      "content-disposition": `attachment; filename="${slug}.md"`,
+    });
+    return void res.end(md);
   }
 
   const trialMatch = /^\/packs\/([a-z0-9-]+)\/trial$/.exec(path);
@@ -419,6 +435,47 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     return redirect(res, "/authors");
   }
 
+  // ------------------------------------------------------------- schedules
+  if (method === "GET" && path === "/schedules") {
+    const s2 = await sql();
+    const rows = await Sch.listSchedules(ctx.orgId);
+    const owned = await s2.query<{ id: string; name: string }>(
+      `SELECT pv.id, pk.name || ' v' || CAST(pv.version AS TEXT) AS name
+       FROM entitlements e JOIN pack_versions pv ON pv.id = e.pack_version_id
+       JOIN packs pk ON pk.id = pv.pack_id WHERE e.org_id = $1 ORDER BY pk.name`, [ctx.orgId]);
+    return html(res, V.schedulesPage({
+      rows: await Promise.all(rows.map(async (r) => ({
+        id: r.id, name: r.name, prompt: r.prompt, enabled: r.enabled,
+        pack: await packNameOf(r.pack_version_id),
+        cadence: Sch.cadenceLabel(r),
+        last_run_at: r.last_run_at, last_run_id: r.last_run_id, last_error: r.last_error,
+      }))),
+      owned, balance: await bal(), viewer, err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+  if (method === "POST" && path === "/schedules") {
+    const f = await body(req);
+    try {
+      await Sch.createSchedule({
+        orgId: ctx.orgId, userId: ctx.userId, packVersionId: f["packVersionId"] ?? "",
+        name: f["name"] ?? "", prompt: f["prompt"] ?? "",
+        cadence: (["hourly", "daily", "weekly"].includes(f["cadence"] ?? "") ? f["cadence"] : "daily") as Sch.Cadence,
+        hour: Number(f["hour"] ?? 9), weekday: Number(f["weekday"] ?? 1),
+      });
+      return redirect(res, "/schedules");
+    } catch (e) { return redirect(res, `/schedules?err=${encodeURIComponent(msg(e))}`); }
+  }
+  if (method === "POST" && path === "/schedules/toggle") {
+    const f = await body(req);
+    await Sch.setEnabled(ctx.orgId, f["id"] ?? "", f["enabled"] === "1");
+    return redirect(res, "/schedules");
+  }
+  if (method === "POST" && path === "/schedules/delete") {
+    const f = await body(req);
+    await Sch.deleteSchedule(ctx.orgId, f["id"] ?? "");
+    return redirect(res, "/schedules");
+  }
+
   // ---------------------------------------------------------------- tokens
   if (method === "GET" && path === "/tokens") {
     return html(res, V.tokensPage(await A.apiTokens(ctx.orgId), baseUrl(req),
@@ -572,10 +629,13 @@ async function main(): Promise<void> {
   const server = http.createServer((req, res) => {
     void handle(req, res).catch((e) => {
       if (res.headersSent) return void res.end();
-      if (e instanceof A.ForbiddenError) {
-        return html(res, V.layout("Not allowed",
-          `<h1>Not allowed</h1><div class="note">${V.esc(msg(e))}</div>
-           <p class="lede"><a href="/">Back to the catalog</a></p>`), 403);
+      const status = statusOf(e);
+      if (status) {
+        // An answer, not a crash: no stack trace and no "something broke".
+        return html(res, V.layout(status === 403 ? "Not allowed" : "Cannot do that",
+          `<h1>${status === 403 ? "Not allowed" : "Cannot do that"}</h1>
+           <div class="note">${V.esc(msg(e))}</div>
+           <p class="lede"><a href="/">Back to the catalog</a></p>`), status);
       }
       console.error("[error]", msg(e));
       html(res, V.layout("Error",
@@ -583,12 +643,15 @@ async function main(): Promise<void> {
     });
   });
 
+  Sch.startScheduler();
+
   server.listen(PORT, async () => {
     const s = await sql();
     const anyone = await s.one("SELECT 1 AS ok FROM users LIMIT 1");
     console.log(`agents.alphaceo.ai — http://localhost:${PORT}`);
     console.log(`  store: ${store} · ${seeded} pack(s) seeded`);
     console.log(anyone ? "  sign in at /login" : "  no accounts yet — create one at /signup");
+    console.log("  scheduler running, checking every minute");
     if (store === "sqlite") console.log(`  (set DATABASE_URL to use Postgres: docker compose up -d)`);
   });
 }
@@ -623,7 +686,10 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
 
   if (await accountRoutes(req, res)) return;
 
-  const session = await A.sessionFromToken(cookies(req)[COOKIE]);
+  // A cookie for the browser, a bearer token for everything else — so the CLI
+  // and an agent reach the same routes with the same permissions.
+  const session = (await A.sessionFromToken(cookies(req)[COOKIE]))
+    ?? (await A.sessionFromApiToken(req.headers.authorization));
   if (!session) {
     if (PUBLIC.test(path)) return html(res, V.layout("Sign in", `<h1>Please sign in</h1>`), 401);
     if (method === "GET") return redirect(res, "/login");
