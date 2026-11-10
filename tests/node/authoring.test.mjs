@@ -73,6 +73,60 @@ test("creating a pack persists the role it was given", async () => {
   assert.equal(pack.role, "qa", "the VALUES clause must reference every column it lists");
 });
 
+test("creating a pack persists its tools and MCP servers as their own rows", async () => {
+  const { orgId } = await org();
+  const slug = `tools-${++n}`;
+  const pack = await Auth.createPack(orgId, {
+    ...INPUT, slug,
+    tools: [{ name: "bash", policy: "always_allow" }, { name: "write", policy: "always_ask" }],
+    mcpServers: [{ name: "notion", url: "https://mcp.notion.com" }],
+  });
+  const db2 = await sql();
+  const tools = await db2.query("SELECT name, policy FROM pack_tools WHERE pack_id = $1 ORDER BY name", [pack.id]);
+  assert.deepEqual(tools.map((t) => ({ name: t.name, policy: t.policy })), [
+    { name: "bash", policy: "always_allow" },
+    { name: "write", policy: "always_ask" },
+  ]);
+  const servers = await db2.query("SELECT name, url FROM pack_mcp_servers WHERE pack_id = $1 ORDER BY name", [pack.id]);
+  assert.deepEqual(servers.map((m) => ({ name: m.name, url: m.url })), [{ name: "notion", url: "https://mcp.notion.com" }]);
+});
+
+test("updating a pack replaces its tools and MCP servers wholesale", async () => {
+  const { orgId } = await org();
+  const slug = `tools-update-${++n}`;
+  const pack = await Auth.createPack(orgId, {
+    ...INPUT, slug,
+    tools: [{ name: "bash", policy: "always_allow" }],
+    mcpServers: [{ name: "notion", url: "https://mcp.notion.com" }],
+  });
+  await Auth.updatePack(orgId, slug, {
+    ...INPUT, slug,
+    tools: [{ name: "edit", policy: "always_ask" }],
+    mcpServers: [],
+  });
+  const db2 = await sql();
+  const tools = await db2.query("SELECT name, policy FROM pack_tools WHERE pack_id = $1 ORDER BY name", [pack.id]);
+  assert.deepEqual(tools.map((t) => ({ name: t.name, policy: t.policy })), [{ name: "edit", policy: "always_ask" }],
+    "the old tool row must be gone, not just added to");
+  const servers = await db2.query("SELECT name FROM pack_mcp_servers WHERE pack_id = $1", [pack.id]);
+  assert.deepEqual(servers.map((m) => ({ name: m.name })), [], "an explicit empty list wipes the stored servers");
+});
+
+test("updating a pack without mentioning tools leaves the stored set alone", async () => {
+  const { orgId } = await org();
+  const slug = `tools-untouched-${++n}`;
+  const pack = await Auth.createPack(orgId, {
+    ...INPUT, slug,
+    tools: [{ name: "bash", policy: "always_allow" }],
+  });
+  const { tools, mcpServers, ...rest } = INPUT;
+  await Auth.updatePack(orgId, slug, { ...rest, slug, tagline: "A different tagline" });
+  const db2 = await sql();
+  const tools2 = await db2.query("SELECT name, policy FROM pack_tools WHERE pack_id = $1", [pack.id]);
+  assert.deepEqual(tools2.map((t) => ({ name: t.name, policy: t.policy })), [{ name: "bash", policy: "always_allow" }],
+    "a caller that never mentions tools must not wipe what was there");
+});
+
 test("a pack needs a name, instructions, a model and a sane price", async () => {
   const { orgId } = await org();
   const base = { ...INPUT, slug: `bad-${++n}` };

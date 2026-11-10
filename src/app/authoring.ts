@@ -45,6 +45,12 @@ export type PackInput = {
   role?: string;
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
+  /** What the pack's `tools:` block declared — a name and its permission
+   *  policy per tool. Undefined leaves the stored set alone on an update
+   *  (a plain details-form save does not carry this); an explicit array,
+   *  including an empty one, replaces it — the same rule `importPack` already
+   *  gives mcpServers. */
+  tools?: Array<{ name: string; policy: string }>;
   payoutEmail?: string;
   extras?: P.PackExtras;
   /** The listing a buyer reads before they buy, carried in from a folder or
@@ -80,17 +86,41 @@ function validate(input: PackInput): void {
   }
 }
 
+/**
+ * Tools and MCP servers are child rows, not columns — written after the pack
+ * row exists rather than threaded into the hand-built INSERT/UPDATE above,
+ * which is already long enough that one more positional placeholder is a
+ * transposition waiting to happen. Replace-all: delete what is there, insert
+ * the current set.
+ */
+async function saveTools(s: Awaited<ReturnType<typeof sql>>, packId: string,
+  tools: Array<{ name: string; policy: string }>): Promise<void> {
+  await s.query("DELETE FROM pack_tools WHERE pack_id = $1", [packId]);
+  for (const t of tools) {
+    await s.query("INSERT INTO pack_tools (pack_id, name, policy) VALUES ($1,$2,$3)", [packId, t.name, t.policy]);
+  }
+}
+
+async function saveMcpServers(s: Awaited<ReturnType<typeof sql>>, packId: string,
+  servers: Array<{ name: string; url: string }>): Promise<void> {
+  await s.query("DELETE FROM pack_mcp_servers WHERE pack_id = $1", [packId]);
+  for (const m of servers) {
+    await s.query("INSERT INTO pack_mcp_servers (pack_id, name, url) VALUES ($1,$2,$3)", [packId, m.name, m.url]);
+  }
+}
+
 export async function createPack(orgId: string, input: PackInput): Promise<P.PackRow> {
   validate(input);
   const slug = normaliseSlug(input.slug || input.name);
   if (await P.getPack(slug)) throw new PackConflictError(`there is already a pack at /packs/${slug}`);
   const s = await sql();
+  const packId = id("pk");
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
        model, effort, pinned_models, extras, instructions, tags, image, role, status,
        author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24)`,
-    [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
+    [packId, slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, now(),
@@ -98,6 +128,8 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
       input.descriptionLong?.trim() ?? "", JSON.stringify(input.useCases ?? []),
       JSON.stringify(input.limitations ?? []), JSON.stringify(input.faq ?? []),
       JSON.stringify(input.requirements ?? []), input.builtOn?.trim() ?? ""]);
+  await saveTools(s, packId, input.tools ?? []);
+  await saveMcpServers(s, packId, input.mcpServers ?? []);
   return (await P.getPack(slug))!;
 }
 
@@ -129,6 +161,13 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
       input.faq ? JSON.stringify(input.faq) : pack.faq,
       input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
       input.builtOn?.trim() ?? pack.built_on]);
+  // Undefined means this caller never mentioned the field (the plain
+  // details-form save, for instance) and the stored set is left alone;
+  // an explicit array — including an empty one — replaces it, so re-importing
+  // a folder whose tools: block shrank or whose mcp_servers disappeared is
+  // honoured rather than ignored.
+  if (input.tools !== undefined) await saveTools(s, pack.id, input.tools);
+  if (input.mcpServers !== undefined) await saveMcpServers(s, pack.id, input.mcpServers);
   return (await P.getPack(slug))!;
 }
 
@@ -245,6 +284,7 @@ export async function importPack(args: {
       ? parsed.pinnedModels
       : existing ? JSON.parse(existing.pinned_models) : args.defaults?.pinnedModels ?? [],
     mcpServers: parsed.mcpServers,
+    tools: parsed.tools,
     payoutEmail: args.defaults?.payoutEmail ?? existing?.author_payout_email ?? undefined,
     // Same precedence as above: the folder wins when it says something, an
     // approved listing already on the pack survives otherwise, so a re-import

@@ -100,6 +100,26 @@ CREATE TABLE IF NOT EXISTS pack_files (
   PRIMARY KEY (pack_id, path)
 );
 
+-- The tools a pack's agent.md declares and the permission policy each one
+-- carries (always_allow, always_ask, auto). Read, never authored by hand in
+-- the browser — this is what the permissions rail derives from, so the rail
+-- says what the worker actually does rather than what an author claims.
+CREATE TABLE IF NOT EXISTS pack_tools (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  name TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  PRIMARY KEY (pack_id, name)
+);
+
+-- The MCP servers a pack's agent.md wires up. Same story as pack_tools: a
+-- folder's own declaration, kept so the rail can name what it connects to.
+CREATE TABLE IF NOT EXISTS pack_mcp_servers (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  PRIMARY KEY (pack_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS pack_versions (
   id TEXT PRIMARY KEY,
   pack_id TEXT NOT NULL REFERENCES packs(id),

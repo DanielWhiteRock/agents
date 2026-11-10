@@ -27,6 +27,10 @@ export type ParsedPack = {
   author?: string;
   instructions: string;
   mcpServers: Array<{ name: string; url: string }>;
+  /** `tools:`'s `configs[].name` and `configs[].permission_policy.type`, read
+   *  and kept rather than discarded — what the permissions rail is derived
+   *  from. */
+  tools: Array<{ name: string; policy: string }>;
   pinnedModels: string[];
   /** Anthropic's prebuilt skills a pack asks for: pptx, xlsx, docx, pdf. */
   anthropicSkills: string[];
@@ -121,12 +125,18 @@ export function splitFrontMatter(text: string): { front: string; body: string } 
 export function parsePackMarkdown(text: string): ParsedPack {
   const { front, body } = splitFrontMatter(text);
   const out: ParsedPack = {
-    instructions: "", mcpServers: [], pinnedModels: [], anthropicSkills: [],
+    instructions: "", mcpServers: [], tools: [], pinnedModels: [], anthropicSkills: [],
     useCases: [], limitations: [], faq: [], requirements: [], unknownKeys: [],
   };
 
   const lines = front.split("\n");
   let topKey = "";
+  // Set the moment a `permission_policy:` line is seen under `tools`, and
+  // consumed by the very next `type:` line nested under it. Anything else in
+  // between — a fresh `- name:`, or the toolset's own `- type:` line that
+  // precedes any config — clears it, so a tool's name does not pick up a
+  // stray `type:` that belongs to something else.
+  let awaitingToolPolicy = false;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
     if (!line.trim() || line.trim().startsWith("#")) continue;
@@ -179,6 +189,19 @@ export function parsePackMarkdown(text: string): ParsedPack {
       if (key === "name") out.mcpServers.push({ name: value, url: "" });
       if (key === "url" && out.mcpServers.length) out.mcpServers[out.mcpServers.length - 1]!.url = value;
     }
+    if (topKey === "tools") {
+      if (key === "name" && value) {
+        out.tools.push({ name: value, policy: "" });
+        awaitingToolPolicy = false;
+      } else if (key === "permission_policy") {
+        awaitingToolPolicy = true;
+      } else if (key === "type" && awaitingToolPolicy && out.tools.length) {
+        out.tools[out.tools.length - 1]!.policy = value;
+        awaitingToolPolicy = false;
+      } else {
+        awaitingToolPolicy = false;
+      }
+    }
     if (topKey === "faq") {
       if (key === "q") out.faq.push({ q: value, a: "" });
       if (key === "a" && out.faq.length) out.faq[out.faq.length - 1]!.a = value;
@@ -202,6 +225,7 @@ export function parsePackMarkdown(text: string): ParsedPack {
     }
   }
   out.mcpServers = out.mcpServers.filter((m) => m.name && m.url);
+  out.tools = out.tools.filter((t) => t.name && t.policy);
 
   // The exported body carries the platform wrapper and a provenance comment
   // above the author's text. Strip both so a round trip does not accumulate
