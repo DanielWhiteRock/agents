@@ -14,6 +14,7 @@ import { balanceByBucket, balanceMillipoints, credit, fmt } from "../billing/poi
 import * as P from "./platform.js";
 import * as Cr from "./creators.js";
 import * as L from "./listing.js";
+import * as S from "./social.js";
 import { permissionSummary } from "../packs/permissions.js";
 import * as V from "./views.js";
 
@@ -121,6 +122,59 @@ async function creatorHandleOf(creatorId: string | null): Promise<string | null>
   return row?.handle ?? null;
 }
 
+/**
+ * Written opinions worth showing — a rating, a body, or both. A review row
+ * with neither (both left blank at submit time) conveys nothing and is
+ * dropped here rather than rendered as a nameless, empty card.
+ */
+async function reviewsOf(
+  packId: string,
+): Promise<Array<{ byline: string | null; rating: number | null; body: string; createdAt: string }>> {
+  const s = await sql();
+  const rows = await s.query<{ byline: string | null; rating: number | string | null; body: string; created_at: string }>(
+    `SELECT byline, rating, body, created_at FROM pack_reviews
+      WHERE pack_id = $1 AND (rating IS NOT NULL OR body <> '')
+      ORDER BY updated_at DESC`,
+    [packId],
+  );
+  return rows.map((r) => ({
+    byline: r.byline, rating: r.rating == null ? null : Number(r.rating), body: r.body, createdAt: r.created_at,
+  }));
+}
+
+/** This organisation's own review, if it has submitted one — so the form edits it, not a blank. */
+async function myReviewOf(
+  packId: string, orgId: string,
+): Promise<{ rating: number | null; body: string; byline: string; anonymous: boolean } | null> {
+  const s = await sql();
+  const row = await s.one<{ rating: number | string | null; body: string; byline: string | null; anonymous: number | string }>(
+    "SELECT rating, body, byline, anonymous FROM pack_reviews WHERE pack_id = $1 AND org_id = $2",
+    [packId, orgId],
+  );
+  if (!row) return null;
+  return {
+    rating: row.rating == null ? null : Number(row.rating), body: row.body,
+    byline: row.byline ?? "", anonymous: Boolean(Number(row.anonymous)),
+  };
+}
+
+/** How many organisations marked this pack useful, and whether this one already has. */
+async function votesOf(packId: string, orgId: string): Promise<{ count: number; voted: boolean }> {
+  const s = await sql();
+  const rows = await s.query<{ ok: number }>("SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1", [packId]);
+  const mine = await s.one<{ ok: number }>(
+    "SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [packId, orgId]);
+  return { count: rows.length, voted: Boolean(mine) };
+}
+
+/** Whether this organisation has bookmarked the pack. */
+async function isSaved(packId: string, orgId: string): Promise<boolean> {
+  const s = await sql();
+  return Boolean(
+    await s.one<{ ok: number }>("SELECT 1 AS ok FROM pack_saves WHERE pack_id = $1 AND org_id = $2", [packId, orgId]),
+  );
+}
+
 // ------------------------------------------------------------------ routes
 
 async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: Ctx): Promise<void> {
@@ -176,6 +230,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       builtOn: p.built_on,
       refundDays: await settingInt("refund_window_days"),
       creator: creatorHandle ? { handle: creatorHandle } : null,
+      rating: await S.ratingOf(p.id),
+      reviews: await reviewsOf(p.id),
+      mayReview: await S.mayReview(ctx.orgId, p.id),
+      myReview: await myReviewOf(p.id, ctx.orgId),
+      votes: await votesOf(p.id, ctx.orgId),
+      saved: await isSaved(p.id, ctx.orgId),
     };
     return html(res, V.packPage(p, v, owned, await models(), await bal(),
       url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));
@@ -256,6 +316,47 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       });
       return redirect(res, `/runs/${run.id}`);
     } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+  }
+
+  const reviewMatch = /^\/packs\/([a-z0-9-]+)\/review$/.exec(path);
+  if (method === "POST" && reviewMatch) {
+    const slug = reviewMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const f = await body(req);
+    try {
+      await S.submitReview({
+        orgId: ctx.orgId, userId: ctx.userId, packId: pack.id,
+        rating: f["rating"] ? Number(f["rating"]) : undefined,
+        body: f["body"] ?? "",
+        byline: f["byline"] ?? "",
+        anonymous: f["anonymous"] === "on",
+      });
+    } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
+  }
+
+  // "This looks good" — no run required, so no eligibility check belongs
+  // here either; `vote()` itself clamps whatever value arrives.
+  const voteMatch = /^\/packs\/([a-z0-9-]+)\/vote$/.exec(path);
+  if (method === "POST" && voteMatch) {
+    const slug = voteMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const f = await body(req);
+    try { await S.vote(ctx.orgId, pack.id, Number(f["value"] ?? "1")); }
+    catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
+  }
+
+  const saveMatch = /^\/packs\/([a-z0-9-]+)\/save$/.exec(path);
+  if (method === "POST" && saveMatch) {
+    const slug = saveMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    try { await S.toggleSave(ctx.orgId, ctx.userId, pack.id); }
+    catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
   }
 
   if (method === "POST" && path === "/runs") {
@@ -590,7 +691,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       pricePoints: Pay.pricePoints(p),
       stats: await P.packStats(p.id),
     })));
-    return html(res, V.creatorPage(creator, packs, await Cr.creatorStats(creator.id), viewer, await bal()));
+    return html(res, V.creatorPage(
+      creator, packs, await Cr.creatorStats(creator.id), await S.creatorRating(creator.id), viewer, await bal()));
   }
 
   // ------------------------------------------------------------- authoring

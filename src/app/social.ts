@@ -148,13 +148,20 @@ export async function creatorRating(creatorId: string): Promise<{ average: numbe
  * "This looks good" — no run required, unlike a review. One vote per
  * organisation per pack; voting again replaces the previous value rather
  * than adding a second row.
+ *
+ * `value` is clamped to -1..1 here, in the one place every caller passes
+ * through — the UI only ever sends 1, but a later caller (the MCP surface,
+ * say) might not, and the next task orders the whole shelf by the sum of
+ * these, so an unbounded value would skew it for everyone, not just the
+ * pack that sent it.
  */
 export async function vote(orgId: string, packId: string, value: number): Promise<void> {
+  const clamped = Math.max(-1, Math.min(1, Math.round(Number(value) || 0)));
   const s = await sql();
   await s.query(
     `INSERT INTO pack_votes (pack_id, org_id, value) VALUES ($1,$2,$3)
      ON CONFLICT (pack_id, org_id) DO UPDATE SET value = EXCLUDED.value`,
-    [packId, orgId, value],
+    [packId, orgId, clamped],
   );
 }
 

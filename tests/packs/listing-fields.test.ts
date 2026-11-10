@@ -109,6 +109,12 @@ const NOTHING_KNOWN: PackPageExtras = {
   builtOn: null,
   refundDays: 14,
   creator: null,
+  rating: { average: null, count: 0, distribution: [0, 0, 0, 0, 0] },
+  reviews: [],
+  mayReview: false,
+  myReview: null,
+  votes: { count: 0, voted: false },
+  saved: false,
 };
 
 const FULL: Listing = {
@@ -328,6 +334,97 @@ describe("the pack page", () => {
   });
 });
 
+// -------------------------------------------------------- social proof
+
+const REVIEW_A = { byline: "Buyer Co", rating: 5, body: "Did exactly what it said.", createdAt: "2026-04-01T00:00:00.000Z" };
+
+describe("the pack page's social proof", () => {
+  it("below the threshold, shows the written reviews and no average anywhere", () => {
+    const h = render({ extras: {
+      rating: { average: null, count: 4, distribution: [0, 0, 0, 0, 4] },
+      reviews: [REVIEW_A],
+    } });
+    expect(h).toContain("Did exactly what it said.");
+    expect(h).toContain("Buyer Co");
+    // No aggregate number anywhere: no "X / 5" average line, and no
+    // distribution bars — both are gated together, by the same field.
+    expect(h).not.toMatch(/\d(\.\d)?\s*\/\s*5/);
+    expect(h).not.toContain('class="bar"');
+    expect(h).not.toContain("4 ratings");
+  });
+
+  it("at the threshold, shows both the average and the distribution bars", () => {
+    const h = render({ extras: {
+      rating: { average: 4.6, count: 5, distribution: [0, 0, 1, 1, 3] },
+      reviews: [REVIEW_A],
+    } });
+    expect(h).toContain("4.6");
+    expect(h).toContain('class="bar"');
+    expect(h).toContain("5 ratings");
+  });
+
+  it("shows no review heading for a pack with no reviews and no votes", () => {
+    const h = render();
+    expect(h).not.toContain("<h2>Reviews</h2>");
+  });
+
+  it("shows the review heading when there are votes but no written reviews yet", () => {
+    const h = render({ extras: { votes: { count: 3, voted: false } } });
+    expect(h).toContain("<h2>Reviews</h2>");
+    expect(h).toContain("3 organisations marked this useful");
+  });
+
+  it("shows the review heading once there is at least one written review", () => {
+    const h = render({ extras: { reviews: [REVIEW_A] } });
+    expect(h).toContain("<h2>Reviews</h2>");
+  });
+
+  it("escapes a review's free-text byline and body", () => {
+    const h = render({ extras: { reviews: [{
+      byline: "<b>Evil</b>", rating: 5, body: "<script>alert(1)</script>", createdAt: "2026-04-01T00:00:00.000Z",
+    }] } });
+    expect(h).not.toContain("<script>alert(1)</script>");
+    expect(h).not.toContain("<b>Evil</b>");
+    expect(h).toContain("&lt;script&gt;");
+    expect(h).toContain("&lt;b&gt;");
+  });
+
+  it("shows no form and a reason when the viewer may not review", () => {
+    const h = render({ extras: { mayReview: false } });
+    expect(h).toContain("You can rate this once you have run it.");
+    expect(h).not.toContain(`action="/packs/senior-engineer/review"`);
+  });
+
+  it("shows the review form, prefilled with the viewer's own review, when eligible", () => {
+    const h = render({ extras: {
+      mayReview: true,
+      myReview: { rating: 3, body: "okay so far", byline: "Buyer Co", anonymous: false },
+    } });
+    expect(h).toContain(`action="/packs/senior-engineer/review"`);
+    expect(h).toContain(`value="3" selected`);
+    expect(h).toContain("okay so far");
+    expect(h).toContain(`value="Buyer Co"`);
+    expect(h).toContain("Update your review");
+  });
+
+  it("offers a blank form, not a blank reused layout, to a first-time eligible reviewer", () => {
+    const h = render({ extras: { mayReview: true, myReview: null } });
+    expect(h).toContain(`action="/packs/senior-engineer/review"`);
+    expect(h).toContain("Submit your review");
+    expect(h).not.toContain("Update your review");
+  });
+
+  it("shows the save control's two states", () => {
+    expect(render({ extras: { saved: false } })).toMatch(/>Save</);
+    expect(render({ extras: { saved: true } })).toMatch(/>Saved</);
+  });
+
+  it("shows the vote control's two states", () => {
+    expect(render({ extras: { votes: { count: 0, voted: false } } })).toContain("Looks good");
+    expect(render({ extras: { votes: { count: 1, voted: true } } })).toContain("Marked useful");
+  });
+});
+
 // ------------------------------------------------------------- the catalog
 
 function catalogPack(creatorHandle: string | null = null, over: Partial<PackRow> = {}): PackRow & {
@@ -377,9 +474,11 @@ const CREATOR_PACK = {
   stats: { runs: 0, buyers: 0, version: 1 },
 };
 
+const NO_RATING = { average: null, count: 0 };
+
 describe("the creator page", () => {
   it("renders no empty headings for a creator with no bio, no links and no packs", () => {
-    const h = creatorPage(creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, null, 0);
+    const h = creatorPage(creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, NO_RATING, null, 0);
     expect(h).not.toContain("<h2>");
   });
 
@@ -388,7 +487,7 @@ describe("the creator page", () => {
       creatorRow(),
       [{ ...CREATOR_PACK, stats: { runs: 42, buyers: 3, version: 1 } }],
       { packs: 1, runs: 42, orgs: 3 },
-      null, 0,
+      NO_RATING, null, 0,
     );
     expect(h).toContain("Senior Engineer");
     expect(h).toContain(`href="/packs/senior-engineer"`);
@@ -396,7 +495,7 @@ describe("the creator page", () => {
   });
 
   it("shows runs rather than stars for a creator with no rating", () => {
-    const h = creatorPage(creatorRow(), [], { packs: 0, runs: 128, orgs: 9 }, null, 0);
+    const h = creatorPage(creatorRow(), [], { packs: 0, runs: 128, orgs: 9 }, NO_RATING, null, 0);
     expect(h).toMatch(/128/);
     expect(h).toContain("runs");
     expect(h).not.toContain("★");
@@ -405,8 +504,8 @@ describe("the creator page", () => {
   });
 
   it("shows the verified mark only when the creator is verified", () => {
-    const plain = creatorPage(creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, null, 0);
-    const verified = creatorPage(creatorRow({ verified: 1 }), [], { packs: 0, runs: 0, orgs: 0 }, null, 0);
+    const plain = creatorPage(creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, NO_RATING, null, 0);
+    const verified = creatorPage(creatorRow({ verified: 1 }), [], { packs: 0, runs: 0, orgs: 0 }, NO_RATING, null, 0);
     expect(plain).not.toContain("Verified");
     expect(verified).toContain("Verified");
   });
@@ -416,7 +515,7 @@ describe("the creator page", () => {
       creatorRow({ bio: "Reads the diff before the commit.", links: JSON.stringify([
         { label: "Site", url: "https://typeui.sh" },
       ]) }),
-      [], { packs: 0, runs: 0, orgs: 0 }, null, 0,
+      [], { packs: 0, runs: 0, orgs: 0 }, NO_RATING, null, 0,
     );
     expect(h).toContain("Reads the diff before the commit.");
     expect(h).toContain(`<a href="https://typeui.sh">Site</a>`);
@@ -427,7 +526,7 @@ describe("the creator page", () => {
       creatorRow({ bio: "<script>alert(1)</script>", links: JSON.stringify([
         { label: "<b>evil</b>", url: "https://example.com" },
       ]) }),
-      [], { packs: 0, runs: 0, orgs: 0 }, null, 0,
+      [], { packs: 0, runs: 0, orgs: 0 }, NO_RATING, null, 0,
     );
     expect(h).not.toContain("<script>alert(1)</script>");
     expect(h).toContain("&lt;script&gt;");
@@ -437,9 +536,22 @@ describe("the creator page", () => {
   it("refuses a javascript: link rather than rendering it as an href", () => {
     const h = creatorPage(
       creatorRow({ links: JSON.stringify([{ label: "Click me", url: "javascript:alert(1)" }]) }),
-      [], { packs: 0, runs: 0, orgs: 0 }, null, 0,
+      [], { packs: 0, runs: 0, orgs: 0 }, NO_RATING, null, 0,
     );
     expect(h).not.toContain("javascript:alert(1)");
+  });
+
+  it("shows no stars below the creator rating threshold", () => {
+    const h = creatorPage(creatorRow(), [], { packs: 1, runs: 4, orgs: 4 }, { average: null, count: 4 }, null, 0);
+    expect(h).not.toContain("★");
+    expect(h).not.toMatch(/\d(\.\d)?\s*\(\d+\)/);
+  });
+
+  it("shows the aggregate star rating once the creator's packs cross the threshold", () => {
+    const h = creatorPage(creatorRow(), [], { packs: 2, runs: 10, orgs: 10 }, { average: 4.8, count: 5 }, null, 0);
+    expect(h).toContain("★");
+    expect(h).toContain("4.8");
+    expect(h).toContain("(5)");
   });
 });
 

@@ -3,6 +3,7 @@ import { ROLES } from "./platform.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import type { Listing } from "./listing.js";
 import type { CreatorRow } from "./creators.js";
+import type { Rating } from "./social.js";
 
 export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -665,6 +666,22 @@ export type PackPageExtras = {
    * `p.author`, it just does not go anywhere.
    */
   creator: { handle: string } | null;
+  /**
+   * Average, count and the five-bucket spread, straight off `ratingOf`.
+   * `average` stays `null` below `RATING_THRESHOLD`; the page's one rule is
+   * to never go around that by computing its own average from `distribution`.
+   */
+  rating: Rating;
+  /** Written opinions worth showing — a rating, a body, or both; newest edit first. */
+  reviews: Array<{ byline: string | null; rating: number | null; body: string; createdAt: string }>;
+  /** Whether this viewing organisation has a completed, non-trial run and may submit one. */
+  mayReview: boolean;
+  /** This organisation's own review, so the form edits it instead of handing back a blank one. */
+  myReview: { rating: number | null; body: string; byline: string; anonymous: boolean } | null;
+  /** How many organisations marked this useful, and whether this one already has. */
+  votes: { count: number; voted: boolean };
+  /** Whether this organisation has bookmarked the pack. */
+  saved: boolean;
 };
 
 /** A stored timestamp as a date. The hour a curator clicked is not news. */
@@ -677,6 +694,13 @@ const bullets = (items: string[], cls = ""): string =>
 const paragraphs = (text: string): string =>
   text.split(/\n{2,}/).map((t) => t.trim()).filter(Boolean)
     .map((t) => `<p>${esc(t)}</p>`).join("");
+
+/**
+ * Five filled stars down to `n`, the rest hollow — one reviewer's own
+ * opinion, written down on their own review. Not an aggregate, so it is
+ * never gated by `RATING_THRESHOLD`.
+ */
+const stars = (n: number): string => "★".repeat(n) + "☆".repeat(5 - n);
 
 /**
  * Home › Workers › Role › Pack.
@@ -711,7 +735,10 @@ export function packPage(
 ): string {
   const pinned: string[] = JSON.parse(p.pinned_models);
   const choices = (pinned.length ? pinned : models);
-  const { listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator } = extras;
+  const {
+    listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator,
+    rating, reviews, mayReview, myReview, votes, saved,
+  } = extras;
   const free = p.price_points === 0;
   return layout(p.name, `
 ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
@@ -724,6 +751,16 @@ ${breadcrumb(p)}
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
+</div>
+<div class="row" style="margin-bottom:var(--s4)">
+  <form method="post" action="/packs/${esc(p.slug)}/save" class="inline">
+    <button class="btn ghost" type="submit">${saved ? "Saved" : "Save"}</button>
+  </form>
+  <form method="post" action="/packs/${esc(p.slug)}/vote" class="inline">
+    <input type="hidden" name="value" value="1">
+    <button class="btn ghost" type="submit">${votes.voted ? "Marked useful" : "Looks good"}</button>
+  </form>
+  ${rating.average !== null ? `<span class="tag">${stars(Math.round(rating.average))} ${rating.average.toFixed(1)} (${rating.count})</span>` : ""}
 </div>
 ${builtOn ? `<p class="lede" style="font-size:var(--t1);margin-bottom:var(--s4)">Built on ${esc(builtOn)}.</p>` : ""}
 <div class="note">You see everything it does, and how it was told to do it — the method leaves with you.${isAuthor ? " You wrote this one; this is the page a buyer reads." : ""}</div>
@@ -803,6 +840,44 @@ ${bullets(listing.limitations)}` : ""}
 ${listing && listing.faq.length ? `<h2>Questions people ask</h2>
 ${listing.faq.map((f) => `<details class="repo"><summary>${esc(f.q)}</summary>
   <p class="fine">${esc(f.a)}</p></details>`).join("")}` : ""}
+${reviews.length > 0 || votes.count > 0 ? `<h2>Reviews</h2>
+${rating.average !== null ? `<div class="row" style="align-items:flex-start;gap:var(--s6);margin-bottom:var(--s4)">
+  <div>
+    <p style="margin:0;font-family:var(--display);font-size:var(--t5)">${rating.average.toFixed(1)} / 5</p>
+    <p class="lede" style="margin:0">${rating.count} ${rating.count === 1 ? "rating" : "ratings"}</p>
+  </div>
+  <div style="flex:1;min-width:12rem">
+    ${[5, 4, 3, 2, 1].map((star) => {
+      const n = rating.distribution[star - 1] ?? 0;
+      const pct = rating.count ? n / rating.count : 0;
+      return `<div class="row" style="gap:var(--s2);margin-bottom:var(--s1);flex-wrap:nowrap">
+      <span class="tag" style="flex:none">${star}★</span>
+      <div class="bar" style="flex:1"><i style="transform:scaleX(${pct.toFixed(4)})"></i></div>
+      <span class="tag" style="flex:none">${n}</span>
+    </div>`;
+    }).join("")}
+  </div>
+</div>` : ""}
+${votes.count > 0 ? `<p class="lede">${votes.count} ${votes.count === 1 ? "organisation" : "organisations"} marked this useful.</p>` : ""}
+${reviews.map((r) => `<div class="card" style="margin-bottom:var(--s3)">
+  <p class="row" style="justify-content:space-between;margin:0 0 var(--s2)">
+    <strong>${esc(r.byline ?? "Anonymous")}</strong>
+    ${r.rating != null ? `<span class="tag">${stars(r.rating)}</span>` : ""}
+  </p>
+  ${r.body.trim() ? `<p style="margin:0">${esc(r.body)}</p>` : ""}
+</div>`).join("")}` : ""}
+<h2>Rate it</h2>
+${mayReview ? `<form method="post" action="/packs/${esc(p.slug)}/review" class="card">
+  <div class="row">
+    <label>Rating <select name="rating">
+      ${[5, 4, 3, 2, 1].map((n) => `<option value="${n}"${(myReview?.rating ?? 5) === n ? " selected" : ""}>${n}</option>`).join("")}
+    </select></label>
+    <label><input type="checkbox" name="anonymous"${myReview?.anonymous ? " checked" : ""}> Post anonymously</label>
+  </div>
+  <p><label>Byline<br><input type="text" name="byline" value="${esc(myReview?.byline || viewer?.orgName || "")}" style="width:100%"></label></p>
+  <p><textarea name="body" placeholder="What happened when you ran it?">${esc(myReview?.body ?? "")}</textarea></p>
+  <button class="btn" type="submit">${myReview ? "Update your review" : "Submit your review"}</button>
+</form>` : `<p class="lede">You can rate this once you have run it.</p>`}
 <h2>Before you run it</h2>
 <div class="ctx">
   <h4>Curation</h4>
@@ -1583,6 +1658,7 @@ export function creatorPage(
   creator: Pick<CreatorRow, "handle" | "display_name" | "bio" | "avatar" | "links" | "verified">,
   packs: Array<PackRow & { pricePoints: number; stats: { runs: number; buyers: number; version: number } }>,
   stats: { packs: number; runs: number; orgs: number },
+  rating: { average: number | null; count: number },
   viewer: Viewer,
   balance: number,
 ): string {
@@ -1603,6 +1679,7 @@ export function creatorPage(
   ${stats.runs > 0
     ? `<span class="proof" title="${stats.runs} runs">${icon("runs", `${stats.runs.toLocaleString("en-US")} runs`)}</span>`
     : `<span class="proof new">new</span>`}
+  ${rating.average !== null ? `<span class="tag">${stars(Math.round(rating.average))} ${rating.average.toFixed(1)} (${rating.count})</span>` : ""}
   ${stats.orgs > 0 ? `<span class="tag">${stats.orgs.toLocaleString("en-US")} owning ${stats.orgs === 1 ? "organisation" : "organisations"}</span>` : ""}
 </p>
 ${bio ? paragraphs(bio) : ""}

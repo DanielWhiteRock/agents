@@ -236,6 +236,24 @@ test("votes need no run at all", async () => {
   assert.equal(Number(rows[0].value), -1);
 });
 
+test("vote() clamps anything outside -1..1, because the next task orders the shelf by it", async () => {
+  const { pack } = await packAndVersion();
+  const voter = await org("Enthusiastic Co");
+
+  await S.vote(voter.orgId, pack.id, 99);
+  const s = await sql();
+  let row = await s.one("SELECT value FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [pack.id, voter.orgId]);
+  assert.equal(Number(row.value), 1, "an oversized positive value is clamped to 1");
+
+  await S.vote(voter.orgId, pack.id, -14);
+  row = await s.one("SELECT value FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [pack.id, voter.orgId]);
+  assert.equal(Number(row.value), -1, "an oversized negative value is clamped to -1");
+
+  await S.vote(voter.orgId, pack.id, 0.6);
+  row = await s.one("SELECT value FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [pack.id, voter.orgId]);
+  assert.equal(Number(row.value), 1, "a fractional in-range value rounds rather than truncating to 0");
+});
+
 test("toggleSave bookmarks a pack, then un-bookmarks it", async () => {
   const { pack } = await packAndVersion();
   const saver = await org("Saver Co");
