@@ -59,6 +59,28 @@ const attach = async (packId, creatorId) => {
   await s.query("UPDATE packs SET creator_id = $1 WHERE id = $2", [creatorId, packId]);
 };
 
+/**
+ * A pack as the pre-creators catalog actually shipped it: a bare `author`
+ * string, no `author_org_id`, no `creator_id`. `Auth.createPack` always
+ * stamps `author_org_id` from the creating org, so it cannot produce this
+ * shape — only raw SQL can, which is exactly what the real 68-pack catalog
+ * looks like before Task 7 runs.
+ */
+const legacyPack = async ({ author = "typeui.sh", authorOrgId = null, builtOn = null } = {}) => {
+  const s = await sql();
+  const packId = db.id("pk");
+  await s.query(
+    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, built_on, upgrade_points, model, instructions, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,10,'claude-opus-5','do the thing',$8)`,
+    [packId, `legacy-${++n}`, "Legacy Pack", "does legacy things", author, authorOrgId, builtOn, db.now()]);
+  return packId;
+};
+
+const packRow = async (packId) => {
+  const s = await sql();
+  return s.one("SELECT * FROM packs WHERE id = $1", [packId]);
+};
+
 test("an unknown handle returns undefined", async () => {
   assert.equal(await Cr.creatorByHandle(`nobody-${Date.now()}`), undefined);
 });
@@ -140,4 +162,67 @@ test("creatorStats sums runs and distinct owning orgs across all of a creator's 
   await P.startRun({ orgId: buyer3.orgId, userId: buyer3.userId, packVersionId: vA.id, trial: true });
 
   assert.deepEqual(await Cr.creatorStats(creator.id), { packs: 2, runs: 3, orgs: 2 });
+});
+
+test("claiming takes only the packs nobody owns", async () => {
+  const creatorOrg = await org("Shelf Curator");
+  const creator = await Cr.upsertCreator({
+    orgId: creatorOrg.orgId, userId: creatorOrg.userId, handle: `shelf-${++n}`, displayName: "Shelf Studio",
+  });
+  const otherOrg = await org("Real Author Co");
+
+  const unowned = await legacyPack();
+  const owned = await legacyPack({ authorOrgId: otherOrg.orgId });
+
+  const claimed = await Cr.claimUnownedPacks(creator.id, creatorOrg.orgId);
+  assert.equal(claimed, 1, "only the pack nobody owned is counted");
+
+  const unownedRow = await packRow(unowned);
+  assert.equal(unownedRow.author_org_id, creatorOrg.orgId);
+  assert.equal(unownedRow.creator_id, creator.id);
+
+  const ownedRow = await packRow(owned);
+  assert.equal(ownedRow.author_org_id, otherOrg.orgId, "a pack with a real author is never touched");
+  assert.equal(ownedRow.creator_id, null, "an owned pack's creator_id is untouched too");
+});
+
+test("claiming twice changes nothing the second time", async () => {
+  const creatorOrg = await org("Repeat Curator");
+  const creator = await Cr.upsertCreator({
+    orgId: creatorOrg.orgId, userId: creatorOrg.userId, handle: `repeat-${++n}`, displayName: "Repeat Studio",
+  });
+  const packId = await legacyPack();
+
+  const first = await Cr.claimUnownedPacks(creator.id, creatorOrg.orgId);
+  assert.equal(first, 1, "the one unowned pack is claimed");
+  const afterFirst = await packRow(packId);
+
+  const second = await Cr.claimUnownedPacks(creator.id, creatorOrg.orgId);
+  assert.equal(second, 0, "nothing is left to claim the second time");
+
+  const afterSecond = await packRow(packId);
+  assert.deepEqual(afterSecond, afterFirst, "the row is unchanged by the second pass, not just the count");
+});
+
+test("the old byline becomes the built-on line", async () => {
+  const creatorOrg = await org("Credit Curator");
+  const creator = await Cr.upsertCreator({
+    orgId: creatorOrg.orgId, userId: creatorOrg.userId, handle: `credit-${++n}`, displayName: "Credit Studio",
+  });
+
+  const mitPack = await legacyPack({ author: "Dietrich Gebert, Cursor, Poteto — MIT" });
+  const emptyBuiltOn = await legacyPack({ author: "typeui.sh", builtOn: "" });
+  const alreadySet = await legacyPack({ author: "typeui.sh", builtOn: "claude-sonnet-4" });
+
+  await Cr.claimUnownedPacks(creator.id, creatorOrg.orgId);
+
+  const mitRow = await packRow(mitPack);
+  assert.equal(mitRow.author, "Dietrich Gebert, Cursor, Poteto — MIT", "the display byline never changes");
+  assert.equal(mitRow.built_on, "Dietrich Gebert, Cursor, Poteto — MIT", "upstream credit moves to built_on");
+
+  const emptyRow = await packRow(emptyBuiltOn);
+  assert.equal(emptyRow.built_on, "typeui.sh", "an empty-string built_on counts as unset too");
+
+  const setRow = await packRow(alreadySet);
+  assert.equal(setRow.built_on, "claude-sonnet-4", "a built_on that is already set is never overwritten");
 });

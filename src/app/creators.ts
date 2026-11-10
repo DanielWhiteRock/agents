@@ -1,4 +1,4 @@
-import { id, now } from "./db.js";
+import { id, now, platformOrgId } from "./db.js";
 import { sql } from "./sql.js";
 import { DomainError } from "./errors.js";
 
@@ -72,7 +72,45 @@ export async function upsertCreator(input: CreatorInput): Promise<CreatorRow> {
        bio = EXCLUDED.bio, avatar = EXCLUDED.avatar, links = EXCLUDED.links`,
     [creatorId, input.userId, input.orgId, handle, displayName,
       input.bio?.trim() ?? "", input.avatar?.trim() || null, JSON.stringify(input.links ?? []), now()]);
-  return (await creatorForOrg(input.orgId))!;
+  const created = (await creatorForOrg(input.orgId))!;
+
+  // The curating org's own creator record is the first moment re-attribution
+  // can actually succeed (see claimUnownedPacks below). Every other org's
+  // profile save is a no-op here, since no pack is ever unowned for them.
+  if (input.orgId === (await platformOrgId())) await claimUnownedPacks(created.id, input.orgId);
+
+  return created;
+}
+
+/**
+ * Task 7: the one function in this codebase that writes to rows it did not
+ * create. Every pack shipped with a bare `author` string and no org or
+ * creator behind it; this gives the catalog's existing packs to one real
+ * creator, in one pass.
+ *
+ * Only `author_org_id IS NULL` packs are touched — a pack already attributed
+ * to a real author is never in this UPDATE's WHERE clause, so it can never be
+ * stolen. That same guard makes a second call a no-op: once a pack is
+ * claimed, it drops out of the set and nothing about it changes again.
+ *
+ * `built_on` gets the pre-existing `author` string wherever `built_on` is
+ * itself unset (NULL or '' — the column was added without a NOT NULL
+ * default), so a byline like "typeui.sh" or the senior-engineer pack's MIT
+ * credit survives as the built-on line instead of being overwritten by the
+ * new owner's name. `packs.author` itself is never touched; it stays the
+ * display byline exactly as Task 6 left it.
+ */
+export async function claimUnownedPacks(creatorId: string, orgId: string): Promise<number> {
+  const s = await sql();
+  const rows = await s.query<{ id: string }>(
+    `UPDATE packs SET
+       author_org_id = $1,
+       creator_id = $2,
+       built_on = COALESCE(NULLIF(built_on, ''), author)
+     WHERE author_org_id IS NULL
+     RETURNING id`,
+    [orgId, creatorId]);
+  return rows.length;
 }
 
 /**
