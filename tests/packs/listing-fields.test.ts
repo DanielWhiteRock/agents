@@ -279,6 +279,39 @@ describe("the pack page", () => {
   it("offers no export to somebody who has not bought it", () => {
     expect(render()).not.toContain("/export");
   });
+
+  /**
+   * Two different things to take away, and the page counts the folder two
+   * blocks later — so an owner who has one must be able to download it
+   * without hand-editing a query string.
+   */
+  it("offers the folder as well as the definition when there is a folder", () => {
+    const h = render({ owned: true, extras: { files: { files: 3, skills: 1, tree: [
+      "agent.md", "skills/review/SKILL.md", "README.md",
+    ] } } });
+    expect(h).toContain(`href="/packs/senior-engineer/export?format=md"`);
+    expect(h).toContain(`href="/packs/senior-engineer/export"`);
+    expect(h).toContain("The definition — senior-engineer.md");
+    expect(h).toContain("The whole folder — senior-engineer.tar.gz");
+  });
+
+  it("offers only the definition when the pack is one file", () => {
+    const h = render({ owned: true, extras: { files: { files: 1, skills: 0, tree: ["agent.md"] } } });
+    expect(h).toContain(`href="/packs/senior-engineer/export?format=md"`);
+    expect(h).not.toContain(`href="/packs/senior-engineer/export"`);
+    expect(h).not.toContain("tar.gz");
+  });
+
+  /**
+   * `trial_budget_cents` is cents, and `pts()` reads millipoints — rendering
+   * one with the other turned a 40-cent trial into "0.04 points" on the most
+   * prominent line the page has.
+   */
+  it("states the trial budget as money, not as points", () => {
+    const h = render({ trial: { turns: 6, budgetCents: 40, used: false } });
+    expect(h).toContain("6 turns, $0.40");
+    expect(h).not.toContain("0.04 points");
+  });
 });
 
 /**

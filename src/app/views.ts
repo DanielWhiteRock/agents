@@ -712,7 +712,7 @@ ${v ? `
 ${!owned && trial ? (trial.used
   ? `<p class="lede" style="font-size:var(--t2)">You have already used your trial of this pack.</p>`
   : `<div class="note" style="border-color:var(--accent);background:color-mix(in oklab,var(--accent) 9%,transparent)">
-  <strong>Try it on your own brief first.</strong> ${trial.turns} turns, ${esc(pts(trial.budgetCents))}, and you keep the output.
+  <strong>Try it on your own brief first.</strong> ${trial.turns} turns, ${esc(fmt(trial.budgetCents))}, and you keep the output.
   <form method="post" action="/packs/${esc(p.slug)}/trial" class="inline">
     <button class="btn ghost" type="submit" style="margin-left:var(--s3)">Try it — ${trial.turns} turns</button></form>
 </div>`) : ""}
@@ -749,7 +749,11 @@ ${stats.runs > 0 || stats.buyers > 0 ? `<div class="meters" style="margin-top:va
 release to keep in step with. It leaves as one <code>.md</code> file that <code>ant apply</code> takes directly, so
 the method is portable even though the runtime is ours. We make no claim about other people's agents, because
 we do not test against them.</p>
-${owned ? `<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export?format=md" title="Download ${esc(p.slug)}.md">${icon("download", `Download ${p.slug}.md`)}</a></p>` : ""}
+${owned ? `<p class="row">
+  <a class="btn ghost" href="/packs/${esc(p.slug)}/export?format=md" title="Download ${esc(p.slug)}.md">${icon("download", `The definition — ${p.slug}.md`)}</a>
+  ${files.files > 1 ? `<a class="btn ghost" href="/packs/${esc(p.slug)}/export" title="Download ${esc(p.slug)}.tar.gz">${icon("download", `The whole folder — ${p.slug}.tar.gz`)}</a>` : ""}
+</p>${files.files > 1 ? `<p class="lede" style="font-size:var(--t1)">The definition is the one file <code>ant apply</code> takes. The folder is everything in
+the manifest — the skills, the docs, the hooks — as a <code>tar.gz</code>.</p>` : ""}` : ""}
 ${listing && listing.description.trim() ? `<h2>What it does</h2>
 ${paragraphs(listing.description)}` : ""}
 ${listing && listing.useCases.length ? `<h2>What you'd hire it for</h2>
