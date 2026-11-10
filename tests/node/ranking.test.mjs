@@ -157,6 +157,24 @@ test("a downvote does not count toward a pack's votes", async () => {
   );
 });
 
+test("packs tied on every signal, including an identical created_at, still come back in a stable order", async () => {
+  // now() is millisecond resolution, so a tight loop (exactly how a seed
+  // script builds the no-signal majority of this catalog) can easily hand
+  // two packs the identical created_at. RANKING_SELECT carries no ORDER BY
+  // of its own, so without a final deterministic key in rankPacks the order
+  // for a tie this complete is whatever the database happened to return —
+  // unspecified, and free to change between two loads of the same page.
+  const sameInstant = "2026-06-01T00:00:00.000Z";
+  const a = await listedPack(sameInstant);
+  const b = await listedPack(sameInstant);
+  const c = await listedPack(sameInstant);
+  const expected = [a.id, b.id, c.id].sort().map((id) => [a, b, c].find((p) => p.id === id).slug);
+
+  for (let i = 0; i < 4; i += 1) {
+    assert.deepEqual(await orderOf([a.slug, b.slug, c.slug]), expected, `call ${i} must match the deterministic order`);
+  }
+});
+
 test("only the curator may set a pack's featured_rank", async () => {
   const pack = await listedPack();
   const stranger = await org("Stranger Co");

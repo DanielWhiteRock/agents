@@ -67,7 +67,14 @@ export type RankingInputs = {
  * weak signal on a catalog this new; then `created_at` descending, which is
  * also the whole ordering when a pack carries none of the above — the
  * regression this exists to fix was "most expensive first", so with no
- * signal at all the newest pack must win, not the priciest one.
+ * signal at all the newest pack must win, not the priciest one; then `id`,
+ * so two packs that tie on everything above (`now()` is millisecond
+ * resolution, and a seed loop can easily hand two packs the same timestamp)
+ * still compare unequal. Without that last key the result depends on
+ * whatever order the database happened to return rows in — unspecified by
+ * SQL without an `ORDER BY`, and not something `Array.prototype.sort`'s
+ * stability can rescue when there is no query-side order to be stable
+ * *about*.
  */
 export function rankPacks<T extends PackRow & RankingInputs>(rows: readonly T[]): T[] {
   return [...rows].sort((a, b) => {
@@ -82,6 +89,7 @@ export function rankPacks<T extends PackRow & RankingInputs>(rows: readonly T[])
     if (ratingA !== ratingB) return ratingB - ratingA;
     if (a.votes !== b.votes) return b.votes - a.votes;
     if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+    if (a.id !== b.id) return a.id < b.id ? -1 : 1;
     return 0;
   });
 }

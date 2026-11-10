@@ -66,4 +66,23 @@ describe("rankPacks", () => {
     expect(first!.id).toBe("shown");
     expect(second!.id).toBe("hidden");
   });
+
+  it("breaks a tie on every other key deterministically, by id, regardless of input order or repeated calls", () => {
+    // Same created_at (plausible: now() is millisecond resolution and a seed
+    // loop can hand two packs the identical timestamp), same everything else.
+    // Without a final tiebreaker the result is whatever order the rows
+    // happened to arrive in — which SQL makes no promise about absent an
+    // ORDER BY, and which `Array.prototype.sort`'s stability cannot fix when
+    // there is no stable input order to begin with.
+    const a = row({ id: "pack-a", created_at: "2026-01-01T00:00:00.000Z" });
+    const b = row({ id: "pack-b", created_at: "2026-01-01T00:00:00.000Z" });
+    const c = row({ id: "pack-c", created_at: "2026-01-01T00:00:00.000Z" });
+
+    const expected = ["pack-a", "pack-b", "pack-c"];
+    expect(rankPacks([a, b, c]).map((p) => p.id)).toEqual(expected);
+    expect(rankPacks([c, b, a]).map((p) => p.id)).toEqual(expected);
+    expect(rankPacks([b, a, c]).map((p) => p.id)).toEqual(expected);
+    // Repeated calls on the same input are just as deterministic.
+    expect(rankPacks([c, a, b]).map((p) => p.id)).toEqual(expected);
+  });
 });
