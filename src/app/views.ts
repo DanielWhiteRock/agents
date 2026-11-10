@@ -478,7 +478,21 @@ const CATEGORY_ICON: Record<string, string> = {
   support: "info", operations: "catalog", triage: "warn",
   research: "search", quality: "check", engineering: "tokens",
   sales: "cost", design: "file", writing: "trace", data: "tokens",
+  "web design": "catalog", "app design": "file",
 };
+
+/**
+ * Where a pack's hero image lives.
+ *
+ * A bare filename is ours, served from /assets. Anything with a scheme is an
+ * author's own URL on their own storage, and is passed through — only over
+ * https, because a card is not worth mixed content on every page it appears.
+ */
+export function heroSrc(image: string): string {
+  if (/^https:\/\//i.test(image)) return image;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(image)) return "";  // any other scheme: refuse
+  return `/assets/${image.replace(/^\/+/, "")}`;
+}
 
 /** A band of colour per pack, so a card is recognisable before it is read. */
 export function thumb(slug: string): string {
@@ -496,7 +510,7 @@ export function catalogPage(
   // Name, face, one line, price. Everything else is on the pack's own page.
   const cards = packs.map((p) => `<a class="card gig" href="/packs/${esc(p.slug)}">
   ${p.image
-    ? `<img class="thumb" src="/assets/${esc(p.image)}" alt="" loading="lazy" decoding="async" width="640" height="480">`
+    ? `<img class="thumb" src="${esc(heroSrc(p.image))}" alt="" loading="lazy" decoding="async" width="640" height="480">`
     : thumb(p.slug)}
   <div class="meta">
     <p class="who">${avatar(p.author)}<span>${esc(p.author.split(" — ")[0] ?? p.author)}</span></p>

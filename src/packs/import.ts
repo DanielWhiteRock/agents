@@ -17,6 +17,9 @@ import type { PackDefinition } from "./types.js";
 export type ParsedPack = {
   name?: string;
   tagline?: string;
+  pricePoints?: number;
+  tags?: string;
+  image?: string;
   model?: string;
   effort?: PackDefinition["effort"];
   slug?: string;
@@ -75,6 +78,10 @@ export class PackParseError extends Error {
 const KNOWN = new Set([
   "name", "model", "description", "tagline", "tools", "mcp_servers", "metadata",
   "skills", "slug", "author", "pinned_models", "multiagent", "advisor", "web",
+  // What it costs and what it is for. Both used to be settable only in the
+  // browser, which meant a folder was never the whole pack and anybody
+  // publishing a set of them had a manual step per pack.
+  "price", "tags", "image",
 ]);
 
 const list = (v: string): string[] =>
@@ -120,6 +127,17 @@ export function parsePackMarkdown(text: string): ParsedPack {
       if ((topKey === "description" || topKey === "tagline") && value) out.tagline = unquote(value);
       if (topKey === "slug" && value) out.slug = unquote(value);
       if (topKey === "author" && value) out.author = unquote(value);
+      if (topKey === "price" && value) {
+        const n = Number(unquote(value));
+        if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+          throw new PackParseError("price is in whole points, or 0 for free");
+        }
+        out.pricePoints = n;
+      }
+      if (topKey === "tags" && value) {
+        out.tags = list(value).join(", ") || unquote(value);
+      }
+      if (topKey === "image" && value) out.image = unquote(value);
       // `model: claude-opus-5` as a scalar, or an object on the lines below.
       if (topKey === "model" && value) out.model = unquote(value);
       // `advisor: claude-opus-5` as a scalar, or an object on the lines below.

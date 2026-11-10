@@ -22,3 +22,26 @@ describe("composeSystemPrompt", () => {
     expect(() => composeSystemPrompt({ instructions: "   " })).toThrow();
   });
 });
+
+describe("heroSrc", () => {
+  it("serves a bare filename from our own assets", async () => {
+    const { heroSrc } = await import("../../src/app/views.js");
+    expect(heroSrc("brutalism.webp")).toBe("/assets/brutalism.webp");
+    expect(heroSrc("/brutalism.webp")).toBe("/assets/brutalism.webp");
+  });
+
+  it("passes an author's own https URL through", async () => {
+    const { heroSrc } = await import("../../src/app/views.js");
+    const url = "https://pub-xyz.r2.dev/agents/systems/brutalism.webp";
+    expect(heroSrc(url)).toBe(url);
+  });
+
+  it("refuses any other scheme", async () => {
+    // A card is not worth mixed content, and `javascript:` in an img src is
+    // inert but is also a sign somebody is probing.
+    const { heroSrc } = await import("../../src/app/views.js");
+    expect(heroSrc("http://insecure.example/x.webp")).toBe("");
+    expect(heroSrc("javascript:alert(1)")).toBe("");
+    expect(heroSrc("data:image/svg+xml,<svg/>")).toBe("");
+  });
+});

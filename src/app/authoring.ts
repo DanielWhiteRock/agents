@@ -37,6 +37,10 @@ export type PackInput = {
   model: string; effort?: PackDefinition["effort"];
   pricePoints: number; upgradePoints: number;
   instructions: string;
+  /** What it is for; the shelf's categories are these, counted. */
+  tags?: string;
+  /** A hero image: a filename under /assets, or an absolute URL. */
+  image?: string;
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
   payoutEmail?: string;
@@ -72,12 +76,14 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const s = await sql();
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
-       model, effort, pinned_models, extras, instructions, status, author_payout_email, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'draft',$14,$15)`,
+       model, effort, pinned_models, extras, instructions, tags, image, status,
+       author_payout_email, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,'draft',$14,$15)`,
     [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
-      input.instructions.trim(), input.payoutEmail?.trim() || null, now()]);
+      input.instructions.trim(), input.payoutEmail?.trim() || null, now(),
+      input.tags?.trim() ?? "", input.image?.trim() || null]);
   return (await P.getPack(slug))!;
 }
 
@@ -91,11 +97,12 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
   await s.query(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
-       author_payout_email = $11 WHERE id = $12`,
+       author_payout_email = $11, tags = $13, image = $14 WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
-      input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id]);
+      input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id,
+      input.tags?.trim() ?? pack.tags, input.image?.trim() || pack.image]);
   return (await P.getPack(slug))!;
 }
 
@@ -200,7 +207,11 @@ export async function importPack(args: {
     author: parsed.author ?? existing?.author ?? args.defaults?.author ?? "unattributed",
     model: parsed.model ?? existing?.model ?? args.defaults?.model ?? "claude-opus-5",
     effort: parsed.effort ?? (existing?.effort as PackInput["effort"]) ?? args.defaults?.effort,
-    pricePoints: args.defaults?.pricePoints ?? existing?.price_points ?? 0,
+    // The folder wins when it states a price: it is the author's own copy of
+    // the pack, and a value they wrote there should not be silently ignored.
+    pricePoints: parsed.pricePoints ?? args.defaults?.pricePoints ?? existing?.price_points ?? 0,
+    tags: parsed.tags ?? existing?.tags ?? "",
+    image: parsed.image ?? existing?.image ?? undefined,
     upgradePoints: args.defaults?.upgradePoints ?? existing?.upgrade_points ?? 0,
     instructions: parsed.instructions,
     pinnedModels: parsed.pinnedModels.length
