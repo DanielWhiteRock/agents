@@ -93,5 +93,18 @@ export async function authorEarningsTotal(packId: string): Promise<number> {
 }
 
 export const fmt = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
+
+/**
+ * Compute, in the unit the buyer actually holds.
+ *
+ * A point is a cent of compute, so the arithmetic is the same either way — but
+ * the words are not. A tier sells 120 points for $5; rendering that balance as
+ * "$1.20" tells somebody who paid five dollars that they hold one twenty, which
+ * is true of the compute and false of the deal. Points are what they bought,
+ * so points are what they see. Dollars stay for real money: what a pack costs,
+ * what an author is paid.
+ */
+export const pts = (cents: number): string =>
+  `${cents.toLocaleString("en-US")} ${Math.abs(cents) === 1 ? "point" : "points"}`;
 /** Millicents, shown to the tenth of a cent so small earnings stay visible. */
 export const fmtMilli = (milli: number): string => `$${(milli / 100000).toFixed(4)}`;

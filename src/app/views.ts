@@ -1,4 +1,4 @@
-import { fmt, fmtMilli } from "../billing/points.js";
+import { fmt, fmtMilli, pts } from "../billing/points.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 
 export const esc = (s: unknown): string =>
@@ -90,6 +90,31 @@ border-radius:.625rem;padding:.625rem .75rem;font:inherit;
 transition:border-color var(--dur-snappy) var(--spring),box-shadow var(--dur-snappy) var(--spring)}
 .search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklab,var(--accent) 18%,transparent)}
 .search input::-webkit-search-cancel-button{filter:grayscale(1) opacity(.6)}
+
+/* Three places people go daily stay in the bar; everything occasional lives
+   behind their own name. Ten links of equal weight is not a menu, it is a
+   list of everything the program can do. */
+.menu{position:relative}
+.menu>summary{list-style:none;cursor:pointer;font-size:.875rem;color:var(--muted);
+padding:.3rem .625rem;border:1px solid var(--line);border-radius:999px;
+transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) var(--spring)}
+.menu>summary::-webkit-details-marker{display:none}
+.menu>summary:hover{color:var(--ink);background:color-mix(in oklab,var(--ink) 7%,transparent)}
+.menu[open]>summary{color:var(--ink);background:color-mix(in oklab,var(--ink) 9%,transparent)}
+.menu>div{position:absolute;right:0;top:calc(100% + .5rem);z-index:10;min-width:12rem;
+background:var(--chrome);-webkit-backdrop-filter:blur(20px) saturate(180%);
+backdrop-filter:blur(20px) saturate(180%);
+border:1px solid var(--line);border-radius:.75rem;box-shadow:var(--lift-hi);
+padding:.375rem;display:flex;flex-direction:column;gap:.125rem;
+transform-origin:top right;animation:menu var(--dur-snappy) var(--spring) both}
+@keyframes menu{from{opacity:0;transform:scale(.96) translateY(-.25rem)}to{opacity:1;transform:none}}
+.menu .who{margin:.25rem .5rem .375rem;font-size:.75rem;color:var(--muted);
+border-bottom:1px solid var(--line);padding-bottom:.4375rem}
+.menu>div a{color:var(--ink);font-size:.875rem;padding:.4375rem .5rem;border-radius:.4375rem}
+.menu>div a:hover{background:color-mix(in oklab,var(--ink) 8%,transparent);text-decoration:none}
+.menu>div a[aria-current=page]{background:color-mix(in oklab,var(--accent) 14%,transparent);font-weight:560}
+.menu>div form{margin-top:.25rem;border-top:1px solid var(--line);padding-top:.375rem}
+.menu>div .btn{width:100%;text-align:left}
 
 /* ------------------------------------------------------------- surfaces */
 .grid{display:grid;gap:.875rem;grid-template-columns:repeat(auto-fill,minmax(18.125rem,1fr))}
@@ -281,10 +306,13 @@ export function layout(
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
 <nav>
   ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  <a href="/authors">Authoring</a><a href="/schedules">Schedules</a><a href="/purchases">Purchases</a><a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
-  ${opts.balance !== undefined ? `<span class="tag">${esc(fmt(opts.balance))}</span>` : ""}
-  <span class="tag" title="${esc(v.email)}">${esc(v.orgName)} · ${esc(v.name)}${v.role === "owner" ? " (owner)" : ""}</span>
-  <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
+  ${opts.balance !== undefined ? `<span class="tag">${esc(pts(opts.balance))}</span>` : ""}
+  <details class="menu"><summary>${esc(v.name)}</summary><div>
+    <p class="who" title="${esc(v.email)}">${esc(v.orgName)}${v.role === "owner" ? " · owner" : ""}</p>
+    <a href="/authors">Authoring</a><a href="/schedules">Schedules</a><a href="/purchases">Purchases</a>
+    <a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
+    <form method="post" action="/logout"><button class="btn ghost">Sign out</button></form>
+  </div></details>`
   : `<a href="/login">Sign in</a><a href="/signup">Create an account</a>`}
 </nav></div></header>
 <script>
@@ -298,10 +326,13 @@ for(var k in SECTION){if(p.indexOf(k+'/')===0){p=SECTION[k];break;}}
 var best=null;
 for(var a of document.querySelectorAll('nav a')){var h=a.getAttribute('href');
 if(h===p||(h!=='/'&&p.indexOf(h)===0)){if(!best||h.length>best.getAttribute('href').length)best=a;}}
-if(best)best.setAttribute('aria-current','page');})();
+if(best){best.setAttribute('aria-current','page');
+// A section hidden inside the menu still has to answer "where am I".
+var d=best.closest('details.menu');
+if(d)d.querySelector('summary').textContent=best.textContent;}})();
 </script>
 <div class="wrap">${scrollable(body)}
-<footer>Packs run on Anthropic Managed Agents. Spend is the platform's own <code>list_cost</code>, priced at public list rates. Seed pack instructions are placeholders, not an expert's work.</footer>
+<footer>Runs on Anthropic Managed Agents. Seed packs are placeholder text, not an expert's work.</footer>
 </div></body></html>`;
 }
 
@@ -317,7 +348,7 @@ export function catalogPage(packs: Array<PackRow & { published: boolean; owned: 
   </div></div>`).join("");
   const found = packs.length;
   return layout("Catalog", `<h1>Hire a worker</h1>
-<p class="lede">Each pack is an expert's method, packaged. You buy it once, it runs here on your side of the fence, and you see exactly what every run cost.</p>
+<p class="lede">Buy once. It runs here. You see what every run cost.</p>
 <form method="get" action="/" class="search" role="search">
   <input type="search" name="q" value="${esc(query)}" autofocus
          placeholder="Search by what you need done, or who wrote it" aria-label="Search packs">
@@ -348,11 +379,11 @@ ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
 <div class="row" style="margin-bottom:18px">
   <span class="tag">by ${esc(p.author)}</span>
   <span class="tag">${p.price_cents === 0 ? "free" : esc(fmt(p.price_cents))} one-off</span>
-  <span class="tag">updates ${p.upgrade_points} pts</span>
+  ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
 </div>
-<div class="note">You can run this pack and read everything it does, but never its instructions — those are the author's. Transcripts are redacted against the pack's own text${isAuthor ? ", except for you: you wrote it, so you see your runs raw" : ""}.</div>
+<div class="note">You see everything it does, never how it was told to do it.${isAuthor ? " Except you — you wrote it." : ""}</div>
 ${v ? `
 <h2>${owned ? "Start a run" : "Acquire and run"}</h2>
 <form method="post" action="${owned ? "/runs" : `/packs/${esc(p.slug)}/acquire`}">
@@ -366,33 +397,26 @@ ${v ? `
 ${!owned && trial ? (trial.used
   ? `<p class="lede" style="margin-top:14px;font-size:14px">You have already used your trial of this pack.</p>`
   : `<h2>Or try it first</h2>
-<p class="lede" style="font-size:14px">${trial.turns} turns, capped at ${esc(fmt(trial.budgetCents))} of compute, on your own brief. Your points pay for the compute; you keep the output. The pack's instructions stay the author's.</p>
+<p class="lede" style="font-size:14px">${trial.turns} turns, ${esc(pts(trial.budgetCents))}, your own brief. You keep the output.</p>
 <form method="post" action="/packs/${esc(p.slug)}/trial">
   <button class="btn ghost" type="submit">Try it — ${trial.turns} turns</button>
 </form>`) : ""}` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
 ${owned ? `<h2>Take it with you</h2>
-<p class="lede" style="font-size:14px">You bought it, so you can run it yourself. The download is an agent definition
-<code>ant apply</code> accepts directly — the author's instructions are inside it, which is the honest cost of the
-developer path.</p>
+<p class="lede" style="font-size:14px">An agent definition <code>ant apply</code> takes directly. The author's instructions are inside it.</p>
 <p><a class="btn ghost" href="/packs/${esc(p.slug)}/export">Download ${esc(p.slug)}.md</a></p>` : ""}
-<h2>What runs cost</h2>
-<table><tr><th>Item</th><th class="num">Measured</th></tr>
-<tr><td>A short turn (refusal, 288 output tokens, 6.5k cached prompt)</td><td class="num">$0.05</td></tr>
-<tr><td>Default budget per run, before it pauses</td><td class="num">$0.50</td></tr>
-<tr><td>Session running time</td><td class="num">$0.08/hr active</td></tr>
-</table>`, { balance, viewer });
+`, { balance, viewer });
 }
 
 export function runsPage(runs: Array<RunRow & { pack: string }>, balance: number, viewer: Viewer = null): string {
   return layout("Runs", `<h1>Runs</h1>
-<p class="lede">Every run, what it consumed, and what it cost you. The cost column is the platform's own figure.</p>
+<p class="lede">Every run, and what it cost.</p>
 <table><tr><th>Started</th><th>Pack</th><th>Model</th><th>Status</th><th class="num">In</th><th class="num">Out</th><th class="num">Active</th><th class="num">Cost</th><th></th></tr>
 ${runs.map((r) => `<tr>
 <td>${esc(r.started_at.slice(5, 16).replace("T", " "))}</td>
 <td>${esc(r.pack)}</td><td><span class="tag">${esc(r.model)}</span></td>
 <td>${esc(r.stop_reason ?? r.status)}</td>
 <td class="num">${r.input_tokens}</td><td class="num">${r.output_tokens}</td>
-<td class="num">${r.active_seconds.toFixed(1)}s</td><td class="num">${esc(fmt(r.list_cost_cents))}</td>
+<td class="num">${r.active_seconds.toFixed(1)}s</td><td class="num">${esc(pts(r.list_cost_cents))}</td>
 <td><a href="/runs/${esc(r.id)}">trace</a></td></tr>`).join("") || `<tr><td colspan="9">No runs yet.</td></tr>`}
 </table>`, { balance, viewer });
 }
@@ -469,9 +493,9 @@ export function runPage(
 ): string {
   return layout(`Run · ${packName}`, `
 <h1>${esc(packName)}</h1>
-<p class="lede">Live trace, down to the token. <span class="tag">${esc(run.model)}</span> <span class="tag">session ${esc(run.session_id.slice(0, 18))}</span>${run.is_trial ? ` <span class="tag" style="color:var(--warn)">trial</span>` : ""}</p>
+<p class="lede"> <span class="tag">${esc(run.model)}</span> <span class="tag">session ${esc(run.session_id.slice(0, 18))}</span>${run.is_trial ? ` <span class="tag" style="color:var(--warn)">trial</span>` : ""}</p>
 ${run.is_trial && trial ? `<div class="note">
-  <strong>This is a trial</strong> — ${Math.max(0, trial.turns - run.turn_count)} of ${trial.turns} turns left, capped at ${esc(fmt(run.budget_cents))}.
+  <strong>This is a trial</strong> — ${Math.max(0, trial.turns - run.turn_count)} of ${trial.turns} turns left, capped at ${esc(pts(run.budget_cents))}.
   ${run.turn_count >= trial.turns ? `The trial is used up.` : ""}
   <form method="post" action="/packs/${esc(trial.slug)}/acquire" class="inline">
     <button class="btn" style="margin-left:10px">Buy it for ${esc(fmt(trial.priceCents))} and keep going</button></form>
@@ -488,13 +512,13 @@ ${run.is_trial && trial ? `<div class="note">
 ${exhausted ? `<div class="note" id="capnote">This run hit its budget. The platform refuses further messages until the cap is raised — top up and it resumes in the same session.
 <form method="post" action="/runs/${esc(run.id)}/topup" class="inline"><button class="btn" style="margin-left:10px">Top up and resume</button></form></div>` : ""}
 <div class="meters">
-  <div class="meter"><div class="k">Cost so far</div><div class="v" id="m-cost">${esc(fmt(run.list_cost_cents))}</div>
+  <div class="meter"><div class="k">Cost so far</div><div class="v" id="m-cost">${esc(pts(run.list_cost_cents))}</div>
     <div class="bar"><i id="m-bar" style="transform:scaleX(${Math.min(1, run.list_cost_cents / Math.max(1, run.budget_cents)).toFixed(4)})"></i></div></div>
-  <div class="meter"><div class="k">Budget</div><div class="v">${esc(fmt(run.budget_cents))}</div></div>
+  <div class="meter"><div class="k">Budget</div><div class="v">${esc(pts(run.budget_cents))}</div></div>
   <div class="meter"><div class="k">Input tokens</div><div class="v" id="m-in">${run.input_tokens}</div></div>
   <div class="meter"><div class="k">Output tokens</div><div class="v" id="m-out">${run.output_tokens}</div></div>
   <div class="meter"><div class="k">Active</div><div class="v" id="m-sec">${run.active_seconds.toFixed(1)}s</div></div>
-  <div class="meter"><div class="k">Billed to you</div><div class="v" id="m-billed">${esc(fmt(run.billed_cents))}</div></div>
+  <div class="meter"><div class="k">Billed to you</div><div class="v" id="m-billed">${esc(pts(run.billed_cents))}</div></div>
 </div>
 <form method="post" action="/runs/${esc(run.id)}/message">
   <textarea name="text" placeholder="Give the worker a brief…" required></textarea>
@@ -505,7 +529,7 @@ ${exhausted ? `<div class="note" id="capnote">This run hit its budget. The platf
   </div>
 </form>
 ${outputs.length ? `<h2>What it produced</h2>
-<p class="lede" style="font-size:14px">Files the agent wrote to <code>/mnt/session/outputs</code>. Yours to keep.</p>
+<p class="lede" style="font-size:14px">Yours to keep.</p>
 <table><tr><th>File</th><th class="num">Size</th><th></th></tr>
 ${outputs.map((o) => `<tr><td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file_id)}">${esc(o.filename)}</a></td>
 <td class="num">${(o.size_bytes / 1024).toFixed(1)} KB</td>
@@ -517,10 +541,7 @@ ${run.transcript_purged_at
      Removed here and at the provider on ${esc(run.transcript_purged_at.slice(0, 10))}.
      What it cost is kept — that is a billing record — but what was said is gone.</div>`
   : `<h2>Keeping this transcript</h2>
-     <p class="lede" style="font-size:.875rem">Transcripts are deleted
-     ${retentionDays > 0 ? `${retentionDays} days after a run finishes` : "only when you ask"},
-     here and at the provider, which keeps its own copy until something tells it not to.
-     You can delete this one now; the cost record survives either way.</p>
+     <p class="lede" style="font-size:.875rem">Deleted ${retentionDays > 0 ? `${retentionDays} days after a run finishes` : "only when you ask"}, here and at the provider. The cost record survives.</p>
      <form method="post" action="/runs/${esc(run.id)}/forget"
            onsubmit="return confirm('Delete this transcript here and at the provider? This cannot be undone.')">
        <button class="btn ghost" type="submit">Delete this transcript</button>
@@ -614,12 +635,12 @@ src.addEventListener('error', () => { live.textContent = 'reconnecting…'; });
 export function ledgerPage(rows: Array<{ bucket: string; delta_cents: number; reason: string; created_at: string; run_id: string | null }>,
   buckets: Record<string, number>, balance: number, viewer: Viewer = null): string {
   return layout("Points", `<h1>Points</h1>
-<p class="lede">A point is a cent of compute, not a token — so the model a buyer picks cannot wreck the economics. The monthly grant expires; top-ups and earnings do not.</p>
+<p class="lede">A point is a cent of compute. The monthly grant expires; top-ups and earnings don't.</p>
 <div class="meters">
-  <div class="meter"><div class="k">Balance</div><div class="v">${esc(fmt(balance))}</div></div>
-  <div class="meter"><div class="k">Grant (expires)</div><div class="v">${esc(fmt(buckets["grant"] ?? 0))}</div></div>
-  <div class="meter"><div class="k">Top-ups</div><div class="v">${esc(fmt(buckets["topup"] ?? 0))}</div></div>
-  <div class="meter"><div class="k">Earnings</div><div class="v">${esc(fmt(buckets["earning"] ?? 0))}</div></div>
+  <div class="meter"><div class="k">Balance</div><div class="v">${esc(pts(balance))}</div></div>
+  <div class="meter"><div class="k">Grant (expires)</div><div class="v">${esc(pts(buckets["grant"] ?? 0))}</div></div>
+  <div class="meter"><div class="k">Top-ups</div><div class="v">${esc(pts(buckets["topup"] ?? 0))}</div></div>
+  <div class="meter"><div class="k">Earnings</div><div class="v">${esc(pts(buckets["earning"] ?? 0))}</div></div>
 </div>
 <form method="post" action="/ledger/topup"><div class="row">
   <label>Buy points <input type="text" name="cents" value="500" size="6"></label>
@@ -628,7 +649,7 @@ export function ledgerPage(rows: Array<{ bucket: string; delta_cents: number; re
 <table><tr><th>When</th><th>Bucket</th><th>Reason</th><th class="num">Change</th></tr>
 ${rows.map((r) => `<tr><td>${esc(r.created_at.slice(5, 16).replace("T", " "))}</td><td><span class="tag">${esc(r.bucket)}</span></td>
 <td>${esc(r.reason)}${r.run_id ? ` <a href="/runs/${esc(r.run_id)}">trace</a>` : ""}</td>
-<td class="num" style="color:${r.delta_cents < 0 ? "var(--bad)" : "var(--good)"}">${r.delta_cents < 0 ? "−" : "+"}${esc(fmt(Math.abs(r.delta_cents)))}</td></tr>`).join("")}
+<td class="num" style="color:${r.delta_cents < 0 ? "var(--bad)" : "var(--good)"}">${r.delta_cents < 0 ? "−" : "+"}${esc(pts(Math.abs(r.delta_cents)))}</td></tr>`).join("")}
 </table>`, { balance, viewer });
 }
 
@@ -656,7 +677,7 @@ ${args.mine.map((m) => `<tr>
   <td><a href="/packs/${esc(m.slug)}/edit">${esc(m.name)}</a> <span class="tag">${esc(m.status)}</span></td>
   <td class="num">${m.runs}</td><td class="num">${m.trials}</td>
   <td class="num"${m.failures > 0 ? ` style="color:var(--bad)"` : ""}>${m.failures}</td>
-  <td class="num">${esc(fmt(m.cost_cents))}</td>
+  <td class="num">${esc(pts(m.cost_cents))}</td>
   <td class="num">${esc(fmtMilli(m.millicents))}</td>
   <td class="num">${esc(fmtMilli(m.paid_millicents))}</td>
   <td>${m.payout_email ? esc(m.payout_email) : `<span class="tag" style="color:var(--warn)">none set</span>`}</td>
@@ -669,7 +690,7 @@ ${args.recent.length ? `<h2>Recent runs of your packs</h2>
 ${args.recent.map((r) => `<tr><td>${esc(r.started_at.slice(5, 16).replace("T", " "))}</td>
 <td>${esc(r.pack)}</td>
 <td>${r.stop_reason ? `<span class="tag" style="color:var(--warn)">${esc(r.stop_reason)}</span>` : "normally"}</td>
-<td class="num">${esc(fmt(r.cost_cents))}</td>
+<td class="num">${esc(pts(r.cost_cents))}</td>
 <td><a href="/runs/${esc(r.run_id)}">trace</a></td></tr>`).join("")}
 </table>` : ""}
 
@@ -861,8 +882,7 @@ export function tokensPage(
 ): string {
   return layout("MCP access", `
 <h1>Shop from inside your own agent</h1>
-<p class="lede">The catalog is also an MCP server. Add one endpoint to whatever agent you already run, and it can
-search packs, read what you own, and pull up any run's transcript and cost without opening this site.</p>
+<p class="lede">The catalog is an MCP server. Add one endpoint to the agent you already run.</p>
 
 ${justCreated ? `<div class="note" style="border-color:var(--good);background:color-mix(in oklab,var(--good) 10%,transparent)">
   <strong>Your new token — copy it now, it is not shown again.</strong>
@@ -876,8 +896,7 @@ Authorization: Bearer &lt;your token&gt;</pre>
 <p class="lede" style="font-size:14px">Seven tools: <code>search_packs</code>, <code>pack_details</code>,
 <code>my_library</code>, <code>install_pack</code>, <code>export_pack</code>, <code>list_runs</code>,
 <code>run_trace</code>.
-Nothing here spends money — buying needs a browser, so <code>install_pack</code> hands back a link instead.
-Running a pack you already own needs the browser too, for now.</p>
+Reading only — buying and running still need the browser.</p>
 
 <h2>Tokens</h2>
 <table><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
