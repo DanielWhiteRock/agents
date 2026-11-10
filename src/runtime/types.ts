@@ -58,6 +58,16 @@ export type CreateSessionOptions = {
   /** Per-session model override. Replaces the model object wholesale, so effort is restated. */
   model?: string;
   effort?: PackDefinition["effort"];
+  /**
+   * A repository to clone into the sandbox, so a worker can read the code it
+   * was hired to work on instead of being pasted fragments of it.
+   *
+   * The token is a credential and is handled like one: it is used to create
+   * the session and is never written down — not on the run, not in an event,
+   * not in a log. A buyer who wants it to stop working revokes it at GitHub,
+   * which is the only guarantee worth offering.
+   */
+  repo?: { url: string; token?: string; mountPath?: string };
 };
 
 /** allow = ran; ask = paused for a human; deny = the server refused it. */

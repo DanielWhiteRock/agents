@@ -22,6 +22,20 @@ const MAX_PACK_FILES = 200;
 
 type Ctx = { orgId: string; userId: string; role: A.Role; viewer: V.Viewer };
 
+/**
+ * The repository fields off a form, or nothing.
+ *
+ * Returns an object to spread, so a run without a repository carries no `repo`
+ * key at all rather than one holding undefined — the difference matters where
+ * it is checked with `if (args.repo)`.
+ */
+function repoFrom(f: Record<string, string>): { repo?: { url: string; token?: string } } {
+  const url = (f["repoUrl"] ?? "").trim();
+  if (!url) return {};
+  const token = (f["repoToken"] ?? "").trim();
+  return { repo: { url, ...(token ? { token } : {}) } };
+}
+
 function cookies(req: http.IncomingMessage): Record<string, string> {
   const out: Record<string, string> = {};
   for (const part of (req.headers.cookie ?? "").split(";")) {
@@ -204,7 +218,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
           packId: pack.id, pricePoints: Pay.pricePoints(pack), description: pack.name,
         });
       }
-      const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"] });
+      const run = await P.startRun({
+        orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"],
+        ...repoFrom(f),
+      });
       return redirect(res, `/runs/${run.id}`);
     } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
   }
@@ -219,7 +236,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       return redirect(res, `/packs/${pack.slug}?err=${encodeURIComponent("not acquired")}`);
     }
     try {
-      const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"] });
+      const run = await P.startRun({
+        orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"],
+        ...repoFrom(f),
+      });
       return redirect(res, `/runs/${run.id}`);
     } catch (e) { return redirect(res, `/packs/${pack.slug}?err=${encodeURIComponent(msg(e))}`); }
   }

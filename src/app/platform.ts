@@ -509,6 +509,14 @@ export async function startRun(args: {
   orgId: string; userId: string; packVersionId: string; model?: string;
   /** A capped run on a pack this organisation does not own. */
   trial?: boolean;
+  /**
+   * A repository for the worker to read. The token reaches the provider and
+   * stops there: it is not stored on the run, not put in an event, and not
+   * logged. What is kept is that a repository was attached and which one,
+   * because a buyer reading a trace later should be able to see what the
+   * agent could see.
+   */
+  repo?: { url: string; token?: string };
 }): Promise<RunRow> {
   const s = await sql();
   const version = await getVersion(args.packVersionId);
@@ -553,6 +561,7 @@ export async function startRun(args: {
     // Only override when it differs: an override replaces the model object in
     // full, so a needless one would drop the pack's own effort setting.
     ...(model !== pack.model ? { model, ...(effort ? { effort } : {}) } : {}),
+    ...(args.repo ? { repo: args.repo } : {}),
   });
 
   const runId = id("run");
@@ -563,6 +572,9 @@ export async function startRun(args: {
       args.trial ? 1 : 0, now()]);
   await recordEvent(runId, "run.started", {
     session: session.id, model, budget_cents: budgetCents, trial: Boolean(args.trial),
+    // The URL and branch, never the token. A trace is read by the buyer, by
+    // us when something goes wrong, and by anyone they export it to.
+    ...(args.repo ? { repo: args.repo.url } : {}),
   });
   return (await getRun(runId))!;
 }

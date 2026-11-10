@@ -492,3 +492,36 @@ describe("listing deliverables", () => {
     expect(fake.beta.files.list).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("assertGithubUrl", () => {
+  it("accepts a plain GitHub repository and normalises it", async () => {
+    const { assertGithubUrl } = await import("../../src/runtime/managed-agents.js");
+    expect(assertGithubUrl("https://github.com/owner/repo")).toBe("https://github.com/owner/repo");
+    expect(assertGithubUrl("https://github.com/owner/repo/")).toBe("https://github.com/owner/repo");
+    expect(assertGithubUrl("https://www.github.com/owner/repo")).toBe("https://github.com/owner/repo");
+  });
+
+  it("refuses to send a credential anywhere but github.com over https", () => {
+    // The URL decides where the token goes. A mistyped host that still parses
+    // is the whole risk here, and it is not a mistake anybody gets twice.
+    return import("../../src/runtime/managed-agents.js").then(({ assertGithubUrl }) => {
+      expect(() => assertGithubUrl("http://github.com/owner/repo")).toThrow(/https/);
+      expect(() => assertGithubUrl("https://githubb.com/owner/repo")).toThrow(/only github.com/);
+      expect(() => assertGithubUrl("https://evil.example/owner/repo")).toThrow(/only github.com/);
+      expect(() => assertGithubUrl("https://github.com.evil.example/o/r")).toThrow(/only github.com/);
+      expect(() => assertGithubUrl("not a url")).toThrow(/not a URL/);
+    });
+  });
+
+  it("refuses a URL carrying its own credentials", async () => {
+    const { assertGithubUrl } = await import("../../src/runtime/managed-agents.js");
+    expect(() => assertGithubUrl("https://user:tok@github.com/owner/repo"))
+      .toThrow(/token field/);
+  });
+
+  it("refuses anything that is not owner/repo", async () => {
+    const { assertGithubUrl } = await import("../../src/runtime/managed-agents.js");
+    expect(() => assertGithubUrl("https://github.com/owner")).toThrow(/owner\/repo/);
+    expect(() => assertGithubUrl("https://github.com/o/r/tree/main")).toThrow(/owner\/repo/);
+  });
+});

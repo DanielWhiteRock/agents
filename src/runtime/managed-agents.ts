@@ -65,6 +65,29 @@ export const MAX_SUBAGENTS = 20;
  * files that are not there, and it will say so.
  */
 export const UPLOAD_ROOT = "/mnt/session/uploads";
+/** Where a cloned repository lands, so the wrapper can tell the agent. */
+export const REPO_MOUNT = "/workspace/repo";
+
+/**
+ * Only GitHub, only https, only a real repository path.
+ *
+ * The URL decides where a credential is sent. Accepting whatever the buyer
+ * typed would mean a mistyped host receives a token with repository access,
+ * and that is not a mistake anybody gets to make twice.
+ */
+export function assertGithubUrl(url: string): string {
+  let u: URL;
+  try { u = new URL(url); } catch { throw new Error(`not a URL: ${url}`); }
+  if (u.protocol !== "https:") throw new Error("a repository URL must be https");
+  if (u.hostname !== "github.com" && u.hostname !== "www.github.com") {
+    throw new Error(`only github.com is supported, not ${u.hostname}`);
+  }
+  if (!/^\/[\w.-]+\/[\w.-]+\/?$/.test(u.pathname)) {
+    throw new Error("the URL must be https://github.com/owner/repo");
+  }
+  if (u.username || u.password) throw new Error("put the token in the token field, not the URL");
+  return `https://github.com${u.pathname.replace(/\/$/, "")}`;
+}
 export const PACK_MOUNT = `${UPLOAD_ROOT}/pack`;
 /** What we ask for, relative, so the rewrite lands on PACK_MOUNT. */
 const requestedMount = (path: string): string => `pack/${path}`;
@@ -329,13 +352,29 @@ export class ManagedAgentsRuntime implements AgentRuntime {
         }
       : { type: "agent", id: opts.pack.runtimePackId, version: Number(opts.pack.version) };
 
+    // Mounted pack files and a cloned repository are both `resources`, so they
+    // travel in one list.
+    const resources: any[] = (opts.mounts ?? [])
+      .map((m) => ({ type: "file", file_id: m.fileId, mount_path: m.mountPath }));
+    if (opts.repo) {
+      // url, mount_path and authorization_token, and nothing else. The
+      // published example includes `branch`, which the API rejects outright
+      // as an unknown field — verified against it on 2026-11-10. You get the
+      // repository's default branch, so say so rather than offering a choice
+      // that cannot be honoured.
+      resources.push({
+        type: "github_repository",
+        url: assertGithubUrl(opts.repo.url),
+        mount_path: opts.repo.mountPath ?? REPO_MOUNT,
+        ...(opts.repo.token ? { authorization_token: opts.repo.token } : {}),
+      });
+    }
+
     const raw = await this.client.beta.sessions.create({
       agent,
       environment_id: opts.environmentId,
       ...(opts.title ? { title: opts.title } : {}),
-      ...(opts.mounts?.length
-        ? { resources: opts.mounts.map((m) => ({ type: "file", file_id: m.fileId, mount_path: m.mountPath })) }
-        : {}),
+      ...(resources.length ? { resources } : {}),
       budget: { type: "limit", max_list_cost: budget },
     });
     return toSession(raw);

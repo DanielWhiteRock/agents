@@ -346,3 +346,37 @@ test("retention deletes finished transcripts past the window and leaves live one
   assert.equal(await P.purgeExpiredTranscripts(), 0);
   await putSetting("transcript_retention_days", "90");
 });
+
+test("a repository's token reaches the provider and is written down nowhere", async () => {
+  // The sharpest risk in the design doc is credential isolation. A token with
+  // repository access must not survive the call that uses it: not on the run,
+  // not in an event, not in a log a support person reads later.
+  const SECRET = "ghp_tokenthatmustneverbestored0000000000";
+  let sawToken = null;
+  const rt = fakeRuntime([{ finalCost: 1, out: 1 }]);
+  P.setRuntime({
+    ...rt,
+    createSession: async (opts) => {
+      sawToken = opts.repo?.token ?? null;
+      return rt.createSession(opts);
+    },
+  });
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  await P.reconcileOpenRuns();
+
+  const run = await P.startRun({
+    orgId, userId, packVersionId: version.id,
+    repo: { url: "https://github.com/owner/repo", token: SECRET },
+  });
+
+  assert.equal(sawToken, SECRET, "the provider is given the token, or the clone cannot work");
+
+  const events = JSON.stringify(await P.runEvents(run.id));
+  assert.ok(!events.includes(SECRET), "and it appears nowhere in the transcript");
+  assert.ok(events.includes("https://github.com/owner/repo"),
+    "while the repository itself is recorded, so a buyer can see what the agent could see");
+  assert.ok(!JSON.stringify(await P.getRun(run.id)).includes(SECRET),
+    "and nothing of it is left on the run");
+});

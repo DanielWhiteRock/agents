@@ -270,6 +270,17 @@ margin-top:var(--s1);letter-spacing:-.01em}
 .bar>i{display:block;height:100%;background:var(--primary);width:100%;transform-origin:left center;
 transform:scaleX(0);transition:transform var(--dur) var(--spring)}
 
+/* Opened deliberately: attaching a repository is a decision, and a token field
+   should not sit open on a page by default. */
+.repo{margin-top:var(--s4);border:1px solid var(--line);border-radius:var(--s3);
+padding:var(--s3) var(--s4);background:var(--panel)}
+.repo>summary{cursor:pointer;font-size:var(--t2);font-weight:600;min-height:2.25rem;
+display:flex;align-items:center;list-style:none}
+.repo>summary::-webkit-details-marker{display:none}
+.repo>summary::before{content:"+";font-family:var(--mono);margin-right:var(--s2);color:var(--primary)}
+.repo[open]>summary::before{content:"\u2212"}
+.repo .fine{font-size:var(--t1);color:var(--muted);margin:var(--s3) 0 0;line-height:1.5;max-width:62ch}
+
 /* ---------------------------------------------------------------- usage */
 .ctx{background:var(--panel);border:1px solid var(--line);border-radius:var(--s5);
 padding:var(--s4);box-shadow:var(--plane1);margin:0 0 var(--s4)}
@@ -566,7 +577,7 @@ ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
 <p class="lede">${esc(p.tagline)}</p>
 <div class="row" style="margin-bottom:18px">
   <span class="tag">by ${esc(p.author)}</span>
-  <span class="tag">${p.price_points === 0 ? "free" : esc(fmt(p.price_points))} one-off</span>
+  <span class="tag">${p.price_points === 0 ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
@@ -578,8 +589,22 @@ ${v ? `
   <input type="hidden" name="packVersionId" value="${esc(v.id)}">
   <div class="row">
     <label>Model <select name="model">${choices.map((m) => `<option value="${esc(m)}"${m === p.model ? " selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
-    <button class="btn" type="submit">${owned ? "Start a run" : p.price_points === 0 ? "Get it free and run" : `Buy for ${fmt(p.price_points)} and run`}</button>
+    <button class="btn" type="submit">${owned ? "Start a run" : p.price_points === 0 ? "Get it free and run" : `Buy for ${pts(p.price_points * 1000)} and run`}</button>
   </div>
+  <details class="repo">
+    <summary>Give it a repository to read</summary>
+    <div class="row" style="margin-top:.75rem">
+      <label>Repository <input type="url" name="repoUrl" placeholder="https://github.com/owner/repo" size="30"></label>
+    </div>
+    <div class="row" style="margin-top:.5rem">
+      <label>Token <input type="password" name="repoToken" placeholder="ghp_… only for a private repo" size="26" autocomplete="off"></label>
+    </div>
+    <p class="fine">Cloned to <code>/workspace/repo</code> in the sandbox, where the worker reads it,
+    runs its tests and edits it, on the default branch. Nothing reaches your own repository.
+    <strong>We never store the token.</strong> It starts the session and is then forgotten — the run
+    records the URL, not the credential. Revoke it at GitHub when you are done; that is
+    the only guarantee worth having. Leave blank for a public repo.</p>
+  </details>
   ${pinned.length ? `<p class="lede" style="margin-top:10px;font-size:14px">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
 </form>
 ${!owned && trial ? (trial.used
@@ -686,7 +711,7 @@ ${run.is_trial && trial ? `<div class="note">
   <strong>This is a trial</strong> — ${Math.max(0, trial.turns - run.turn_count)} of ${trial.turns} turns left, capped at ${esc(pts(run.budget_cents))}.
   ${run.turn_count >= trial.turns ? `The trial is used up.` : ""}
   <form method="post" action="/packs/${esc(trial.slug)}/acquire" class="inline">
-    <button class="btn" style="margin-left:10px">Buy it for ${esc(fmt(trial.pricePoints))} and keep going</button></form>
+    <button class="btn" style="margin-left:10px">Buy it for ${esc(pts(trial.pricePoints * 1000))} and keep going</button></form>
 </div>` : ""}
 <div id="asks">${asks.map((a) => `<div class="note" style="border-color:var(--accent);background:color-mix(in oklab,var(--accent) 9%,transparent)">
   <strong>The worker is asking permission</strong> to run <code>${esc(a.name)}</code>:
@@ -1289,7 +1314,7 @@ empty inventory. You are the taste.</p>
 ${args.queue.length === 0 ? `<p class="lede">Nothing submitted.</p>` : `<table><tr><th>Pack</th><th>Author</th><th class="num">Price</th><th></th></tr>
 ${args.queue.map((q) => `<tr>
   <td><a href="/packs/${esc(q.slug)}/edit">${esc(q.name)}</a><div style="color:var(--muted);font-size:13px">${esc(q.tagline)}</div></td>
-  <td>${esc(q.author)}</td><td class="num">${esc(fmt(q.price_points))}</td>
+  <td>${esc(q.author)}</td><td class="num">${esc(pts(q.price_points * 1000))}</td>
   <td><form method="post" action="/packs/${esc(q.slug)}/status" class="row">
     <button class="btn" name="status" value="listed">List it</button>
     <button class="btn ghost" name="status" value="draft">Send back</button></form></td>
