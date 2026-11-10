@@ -195,6 +195,12 @@ export function verbatimRun(listing: Listing, instructions: string): string | nu
   return null;
 }
 
+/** The guard, as a statement: this listing is prose, not a copy of the method. */
+function assertNotVerbatim(listing: Listing, instructions: string): void {
+  const run = verbatimRun(listing, instructions);
+  if (run) throw new ListingVerbatimError(run);
+}
+
 /**
  * Replace whatever draft exists for this pack with a freshly generated one.
  *
@@ -205,10 +211,14 @@ export async function saveDraft(
   packId: string, listing: Listing, sourceVersion: number | null,
 ): Promise<void> {
   const pack = await P.packById(packId);
-  if (pack) {
-    const run = verbatimRun(listing, pack.instructions);
-    if (run) throw new ListingVerbatimError(run);
-  }
+  if (pack) assertNotVerbatim(listing, pack.instructions);
+  await writeDraft(packId, listing, sourceVersion);
+}
+
+/** The write itself, with nothing judged — every caller above guards first. */
+async function writeDraft(
+  packId: string, listing: Listing, sourceVersion: number | null,
+): Promise<void> {
   const s = await sql();
   await s.query(
     `INSERT INTO pack_listing_drafts
@@ -254,13 +264,22 @@ export function mergeFaq(
  * that came out of a real exchange, with no way back but the thread itself.
  * Seeding the draft from the live FAQ makes approval additive: the generator
  * can only add questions, never remove an answered one.
+ *
+ * The copy-quality guard runs on the *proposal*, before the live FAQ is
+ * merged in, and the merged value is then written unjudged. Guarding the
+ * merged listing judged text this function had just injected: `publishToFaq`
+ * stores a buyer's question and a creator's answer word for word, and the
+ * instructions are not secret — one creator explaining their own method in an
+ * answer would have blocked every future generation for that pack, with an
+ * error that blamed the model.
  */
 export async function saveGeneratedDraft(
   packId: string, listing: Listing, sourceVersion: number | null,
 ): Promise<void> {
   const pack = await P.packById(packId);
+  if (pack) assertNotVerbatim(listing, pack.instructions);
   const live = pack ? listingOf(pack) : null;
-  await saveDraft(packId, {
+  await writeDraft(packId, {
     ...listing,
     faq: mergeFaq(live?.faq ?? [], listing.faq),
   }, sourceVersion);

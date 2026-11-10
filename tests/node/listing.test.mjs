@@ -195,6 +195,52 @@ test("a generated draft does not duplicate a live answer the model also guessed 
   assert.equal(draft.faq[0].a, PUBLISHED_ANSWER.a, "and the answer a human wrote is the one kept");
 });
 
+/**
+ * The copy-quality guard judges what the model wrote, not what this module
+ * put in front of it.
+ *
+ * `publishToFaq` stores a buyer's question and a creator's answer word for
+ * word, and the instructions are not secret — a creator explaining their own
+ * method, or a buyer quoting the exported `.md`, easily shares a twelve-word
+ * run with it. Running the guard over the merged FAQ meant such a pack could
+ * never have a listing generated again, and the error blamed the model.
+ */
+test("a published answer that quotes the method does not block generation forever", async () => {
+  const { orgId, pack } = await makePack({ instructions: LONG_INSTRUCTIONS });
+  const quoted = {
+    q: "What does it actually read?",
+    a: "It will open the pricing sheet and find every rate that has not moved in two quarters.",
+  };
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([quoted]), pack.id]);
+
+  await L.saveGeneratedDraft(pack.id, {
+    ...DRAFT,
+    description: "Audits a price list for rates that have gone stale.",
+    faq: [{ q: "Which currencies?", a: "USD only." }],
+  }, 1);
+
+  const draft = await L.draftFor(pack.id);
+  assert.deepEqual(draft.faq[0], quoted, "the published answer is carried forward, not judged");
+  assert.equal(draft.faq.length, 2);
+
+  // And it still survives approval, which is the point of carrying it.
+  await L.approveDraft(orgId, pack.slug);
+  assert.deepEqual(L.listingOf(await P.getPack(pack.slug)).faq[0], quoted);
+});
+
+test("the guard still refuses a model-written FAQ entry that quotes the method", async () => {
+  const { pack } = await makePack({ instructions: LONG_INSTRUCTIONS });
+  await assert.rejects(
+    L.saveGeneratedDraft(pack.id, {
+      ...DRAFT,
+      faq: [{ q: "What does it read?", a: "It will open the pricing sheet and find every rate that has not moved in two quarters." }],
+    }, 1),
+    /verbatim/i,
+    "what the model proposed is still judged, FAQ included");
+  assert.equal(await L.draftFor(pack.id), null);
+});
+
 test("approving never drops an answer published after the draft was generated", async () => {
   const { orgId, pack } = await makePack();
   await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);

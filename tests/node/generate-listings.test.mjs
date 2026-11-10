@@ -147,6 +147,29 @@ test("a generated draft starts from the FAQ a creator already published", async 
   assert.deepEqual(draft.faq[1], PROPOSAL.faq[0]);
 });
 
+/**
+ * The pack whose FAQ already quotes its own method must still be
+ * generatable. The guard is there to judge the model's prose, and a creator's
+ * published answer is neither the model's nor new.
+ */
+test("a pack whose published FAQ quotes the method can still have a listing generated", async () => {
+  const { pack } = await makePack();
+  const quoted = {
+    q: "What does it actually read?",
+    a: "It will open the sheet, find every rate that has not moved in two quarters, and say so.",
+  };
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([quoted]), pack.id]);
+
+  const { propose } = proposeFrom(PROPOSAL);
+  const result = await G.generateForPack(pack.slug, { propose });
+  assert.equal(result.ok, true, result.reason);
+
+  const draft = await L.draftFor(pack.id);
+  assert.deepEqual(draft.faq[0], quoted, "the published answer survived into the draft");
+  assert.deepEqual(draft.faq[1], PROPOSAL.faq[0]);
+});
+
 test("a proposal that pastes the pack body is refused and leaves no draft", async () => {
   const { pack } = await makePack();
   const { propose } = proposeFrom({
