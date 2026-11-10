@@ -30,6 +30,7 @@ export type RunRow = {
   model: string; status: string; stop_reason: string | null; budget_cents: number;
   input_tokens: number; output_tokens: number; active_seconds: number;
   list_cost_cents: number; billed_up_to_cents: number; billed_cents: number;
+  is_trial: number; turn_count: number;
   started_at: string; ended_at: string | null;
 };
 export type AskRow = {
@@ -186,6 +187,21 @@ export class NotEntitledError extends Error {
   }
 }
 
+/** Thrown when a trial has used up its turns. */
+export class TrialExhaustedError extends Error {
+  constructor(turns: number) {
+    super(`a trial is ${turns} turns; buy the pack to keep going`);
+    this.name = "TrialExhaustedError";
+  }
+}
+
+export class TrialAlreadyUsedError extends Error {
+  constructor() {
+    super("this organisation has already tried that pack");
+    this.name = "TrialAlreadyUsedError";
+  }
+}
+
 /**
  * Checked here rather than only at the route, so a refund, a revoked
  * entitlement or a new code path cannot quietly let a run continue on a pack
@@ -214,13 +230,23 @@ export async function activeRunCount(orgId: string): Promise<number> {
 
 export async function startRun(args: {
   orgId: string; userId: string; packVersionId: string; model?: string;
+  /** A capped run on a pack this organisation does not own. */
+  trial?: boolean;
 }): Promise<RunRow> {
   const s = await sql();
   const version = await getVersion(args.packVersionId);
   if (!version) throw new Error("unknown pack version");
   const pack = (await packById(version.pack_id))!;
 
-  await assertEntitled(args.orgId, args.packVersionId);
+  if (args.trial) {
+    if (await entitled(args.orgId, args.packVersionId)) {
+      // Owning it is better than trying it; fall through as a normal run.
+      args.trial = false;
+    } else if (await hasTriedPack(args.orgId, version.pack_id)) {
+      throw new TrialAlreadyUsedError();
+    }
+  }
+  if (!args.trial) await assertEntitled(args.orgId, args.packVersionId);
   // Points are the fuel. Starting a run with an empty balance would make the
   // subsidy unbounded, so it is refused rather than quietly absorbed.
   if ((await balanceCents(args.orgId)) <= 0) throw new OutOfPointsError();
@@ -238,7 +264,7 @@ export async function startRun(args: {
     throw new Error(`this pack's author restricted it to: ${pinned.join(", ")}`);
   }
 
-  const budgetCents = await settingInt("default_run_budget_cents");
+  const budgetCents = await settingInt(args.trial ? "trial_budget_cents" : "default_run_budget_cents");
   const effort = await effortFor(model, pack.effort);
   const session = await runtime().createSession({
     pack: { runtimePackId: version.runtime_pack_id, version: version.runtime_version },
@@ -252,10 +278,13 @@ export async function startRun(args: {
 
   const runId = id("run");
   await s.query(
-    `INSERT INTO runs (id, org_id, user_id, pack_version_id, session_id, model, status, budget_cents, started_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [runId, args.orgId, args.userId, version.id, session.id, model, session.status, budgetCents, now()]);
-  await recordEvent(runId, "run.started", { session: session.id, model, budget_cents: budgetCents });
+    `INSERT INTO runs (id, org_id, user_id, pack_version_id, session_id, model, status, budget_cents, is_trial, started_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [runId, args.orgId, args.userId, version.id, session.id, model, session.status, budgetCents,
+      args.trial ? 1 : 0, now()]);
+  await recordEvent(runId, "run.started", {
+    session: session.id, model, budget_cents: budgetCents, trial: Boolean(args.trial),
+  });
   return (await getRun(runId))!;
 }
 
@@ -412,9 +441,16 @@ export async function sendTurn(runId: string, text: string, onEvent?: (e: Runtim
 }> {
   const run = await getRun(runId);
   if (!run) throw new Error("unknown run");
-  // A refund revokes the entitlement; the run must not keep working afterwards.
-  await assertEntitled(run.org_id, run.pack_version_id);
+  if (run.is_trial) {
+    const cap = await settingInt("trial_turns");
+    if (run.turn_count >= cap) throw new TrialExhaustedError(cap);
+  } else {
+    // A refund revokes the entitlement; the run must not keep working afterwards.
+    await assertEntitled(run.org_id, run.pack_version_id);
+  }
   if ((await balanceCents(run.org_id)) <= 0) throw new OutOfPointsError();
+  const s0 = await sql();
+  await s0.query("UPDATE runs SET turn_count = turn_count + 1 WHERE id = $1", [runId]);
   await recordEvent(runId, "user.message", { text });
   draining.add(runId);
   try {
@@ -443,7 +479,7 @@ export async function decide(
 ): Promise<RunRow> {
   const run = await getRun(runId);
   if (!run) throw new Error("unknown run");
-  await assertEntitled(run.org_id, run.pack_version_id);
+  if (!run.is_trial) await assertEntitled(run.org_id, run.pack_version_id);
   const s = await sql();
   const ask = await s.one<AskRow>("SELECT * FROM pending_asks WHERE event_id = $1 AND run_id = $2", [eventId, runId]);
   if (!ask) throw new Error("no such pending approval");
@@ -480,6 +516,7 @@ export async function decide(
 export async function topUp(runId: string): Promise<RunRow> {
   const run = await getRun(runId);
   if (!run) throw new Error("unknown run");
+  if (run.is_trial) throw new TrialExhaustedError(await settingInt("trial_turns"));
   await assertEntitled(run.org_id, run.pack_version_id);
   const headroom = BigInt(await settingInt("topup_headroom_cents"));
   const session = await runtime().raiseBudgetTo(run.session_id, headroom);
@@ -488,6 +525,15 @@ export async function topUp(runId: string): Promise<RunRow> {
     [run.list_cost_cents + Number(headroom), session.status, runId]);
   await recordEvent(runId, "run.topped_up", { headroom_cents: Number(headroom) });
   return (await getRun(runId))!;
+}
+
+/** Has this organisation already spent its one trial on this pack? */
+export async function hasTriedPack(orgId: string, packId: string): Promise<boolean> {
+  const s = await sql();
+  const row = await s.one(
+    `SELECT 1 AS ok FROM runs r JOIN pack_versions pv ON pv.id = r.pack_version_id
+     WHERE r.org_id = $1 AND pv.pack_id = $2 AND r.is_trial = 1 LIMIT 1`, [orgId, packId]);
+  return Boolean(row);
 }
 
 /** Every run on a pack version that is still open. Used when a refund lands. */

@@ -113,8 +113,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const p = await P.getPack(packMatch[1]!);
     if (!p) return html(res, V.layout("Not found", "<h1>No such pack</h1>"), 404);
     const v = await P.latestVersion(p.id);
-    return html(res, V.packPage(p, v, Boolean(v && (await P.entitled(ctx.orgId, v.id))),
-      await models(), await bal(), url.searchParams.get("err") ?? undefined, viewer));
+    const owned = Boolean(v && (await P.entitled(ctx.orgId, v.id)));
+    const trial = v && !owned
+      ? { turns: await settingInt("trial_turns"), budgetCents: await settingInt("trial_budget_cents"),
+          used: await P.hasTriedPack(ctx.orgId, p.id) }
+      : null;
+    return html(res, V.packPage(p, v, owned, await models(), await bal(),
+      url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId));
   }
 
   const pubMatch = /^\/packs\/([a-z0-9-]+)\/publish$/.exec(path);
@@ -123,6 +128,18 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     try { await P.publishPack(pubMatch[1]!); }
     catch (e) { return redirect(res, `/packs/${pubMatch[1]}?err=${encodeURIComponent(msg(e))}`); }
     return redirect(res, `/packs/${pubMatch[1]}`);
+  }
+
+  const trialMatch = /^\/packs\/([a-z0-9-]+)\/trial$/.exec(path);
+  if (method === "POST" && trialMatch) {
+    const slug = trialMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    try {
+      const v = (await P.latestVersion(pack.id)) ?? (await P.publishPack(slug));
+      const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: v.id, trial: true });
+      return redirect(res, `/runs/${run.id}`);
+    } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
   }
 
   const acqMatch = /^\/packs\/([a-z0-9-]+)\/acquire$/.exec(path);
@@ -219,8 +236,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     // A run belongs to an organisation; another org's run is simply not found.
     if (!run || run.org_id !== ctx.orgId) return html(res, V.layout("Not found", "<h1>No such run</h1>", { viewer }), 404);
     const asks = (await P.openAsks(run.id)).map((a) => ({ event_id: a.event_id, name: a.name, input: a.input }));
+    let trial: { turns: number; slug: string; priceCents: number } | null = null;
+    if (run.is_trial) {
+      const v = await P.getVersion(run.pack_version_id);
+      const pack = v ? await P.packById(v.pack_id) : undefined;
+      if (pack) trial = { turns: await settingInt("trial_turns"), slug: pack.slug, priceCents: pack.price_cents };
+    }
     return html(res, V.runPage(run, await packNameOf(run.pack_version_id), await bal(),
-      run.stop_reason === "budget_reached", asks, viewer));
+      run.stop_reason === "budget_reached", asks, viewer, trial));
   }
 
   // Fire-and-forget: the trace shows the turn arriving live.
@@ -336,15 +359,64 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   }
 
   if (method === "GET" && path === "/authors") {
-    const s = await sql();
-    const rows = await s.query<{ name: string; author: string; runs: unknown; millicents: unknown }>(`
-      SELECT p.name AS name, p.author AS author,
+    const s2 = await sql();
+    const mineRaw = await s2.query<Record<string, unknown>>(`
+      SELECT p.id, p.slug, p.name, p.author_payout_email AS payout_email,
+             (SELECT COUNT(*) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+                WHERE v.pack_id = p.id) AS runs,
+             (SELECT COUNT(*) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+                WHERE v.pack_id = p.id AND r.is_trial = 1) AS trials,
+             (SELECT COUNT(*) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+                WHERE v.pack_id = p.id AND r.stop_reason IS NOT NULL) AS failures,
+             (SELECT COALESCE(SUM(r.list_cost_cents), 0) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+                WHERE v.pack_id = p.id) AS cost_cents,
+             (SELECT COALESCE(SUM(ae.points_millicents), 0) FROM author_earnings ae WHERE ae.pack_id = p.id) AS millicents,
+             (SELECT COALESCE(SUM(ae.points_millicents), 0) FROM author_earnings ae
+                WHERE ae.pack_id = p.id AND ae.payout_id IS NOT NULL) AS paid_millicents
+      FROM packs p WHERE p.author_org_id = $1 ORDER BY p.name`, [ctx.orgId]);
+    const recentRaw = await s2.query<Record<string, unknown>>(`
+      SELECT r.id AS run_id, p.name AS pack, r.stop_reason, r.list_cost_cents AS cost_cents, r.started_at
+      FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id JOIN packs p ON p.id = v.pack_id
+      WHERE p.author_org_id = $1 ORDER BY r.started_at DESC LIMIT 20`, [ctx.orgId]);
+    const catalogRaw = await s2.query<Record<string, unknown>>(`
+      SELECT p.name, p.author, p.author_org_id,
              COUNT(DISTINCT ae.run_id) AS runs,
              COALESCE(SUM(ae.points_millicents), 0) AS millicents
       FROM packs p LEFT JOIN author_earnings ae ON ae.pack_id = p.id
-      GROUP BY p.id, p.name, p.author ORDER BY millicents DESC`);
-    return html(res, V.authorsPage(
-      rows.map((r) => ({ ...r, runs: Number(r.runs), millicents: Number(r.millicents) })), await bal(), viewer));
+      GROUP BY p.id, p.name, p.author, p.author_org_id ORDER BY millicents DESC`);
+    const n = (v: unknown) => Number(v ?? 0);
+    return html(res, V.authorsPage({
+      mine: mineRaw.map((m) => ({
+        id: String(m["id"]), slug: String(m["slug"]), name: String(m["name"]),
+        payout_email: (m["payout_email"] as string | null) ?? null,
+        runs: n(m["runs"]), trials: n(m["trials"]), failures: n(m["failures"]),
+        cost_cents: n(m["cost_cents"]), millicents: n(m["millicents"]), paid_millicents: n(m["paid_millicents"]),
+      })),
+      recent: recentRaw.map((r) => ({
+        run_id: String(r["run_id"]), pack: String(r["pack"]),
+        stop_reason: (r["stop_reason"] as string | null) ?? null,
+        cost_cents: n(r["cost_cents"]), started_at: String(r["started_at"]),
+      })),
+      catalog: catalogRaw.map((c) => ({
+        name: String(c["name"]), author: String(c["author"]),
+        runs: n(c["runs"]), millicents: n(c["millicents"]),
+        mine: c["author_org_id"] === ctx.orgId,
+      })),
+      balance: await bal(), viewer, err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+  if (method === "POST" && path === "/authors/claim") {
+    ownerOnly();
+    const f = await body(req);
+    const pack = await P.getPack((f["slug"] ?? "").trim());
+    if (!pack) return redirect(res, `/authors?err=${encodeURIComponent("no pack with that slug")}`);
+    if (pack.author_org_id && pack.author_org_id !== ctx.orgId) {
+      return redirect(res, `/authors?err=${encodeURIComponent("another organisation already claims that pack")}`);
+    }
+    const s2 = await sql();
+    await s2.query("UPDATE packs SET author_org_id = $1, author_payout_email = $2 WHERE id = $3",
+      [ctx.orgId, (f["payoutEmail"] ?? "").trim(), pack.id]);
+    return redirect(res, "/authors");
   }
 
   // ---------------------------------------------------------------- tokens

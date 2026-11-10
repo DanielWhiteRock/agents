@@ -9,10 +9,11 @@
     "start": "node dist/src/app/server.js",
     "dev": "tsc -p tsconfig.build.json && node dist/src/app/server.js",
     "test:unit": "vitest run",
-    "test:integration": "tsc -p tsconfig.build.json && node --test tests/node/*.test.mjs"
+    "test:integration": "tsc -p tsconfig.build.json && node --test --test-concurrency=1 tests/node/*.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "pg": "^8.23.1"
   },
   "devDependencies": {

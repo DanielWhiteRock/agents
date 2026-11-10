@@ -154,14 +154,15 @@ test("author earnings are not payable until the refund window has passed", async
   const freshDue = (await Pay.payoutsDue()).find((d) => d.pack_id === pack.id);
   assert.equal(freshDue, undefined, "a brand new earning is still inside the window");
 
-  await s.query("UPDATE author_earnings SET created_at = $1 WHERE pack_id = $2",
-    [new Date(Date.now() - 20 * 86400_000).toISOString(), pack.id]);
+  // Age only this run's earning: other tests may hold earnings on the same pack.
+  await s.query("UPDATE author_earnings SET created_at = $1 WHERE run_id = $2",
+    [new Date(Date.now() - 20 * 86400_000).toISOString(), runId]);
   const due = (await Pay.payoutsDue()).find((d) => d.pack_id === pack.id);
   assert.ok(due, "once the window has passed it becomes payable");
-  assert.equal(due.millicents, 20000);
+  assert.ok(due.millicents >= 20000, "at least this run's 20c share is due");
 
   const paid = await Pay.payAuthor(pack.id);
-  assert.equal(paid.millicents, 20000);
+  assert.equal(paid.millicents, due.millicents, "it pays exactly what was due");
   assert.equal(await Pay.payAuthor(pack.id), null, "the same earning is never paid twice");
 });
 

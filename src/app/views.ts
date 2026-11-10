@@ -99,7 +99,12 @@ export function catalogPage(packs: Array<PackRow & { published: boolean; owned: 
 <div class="grid">${cards}</div>`, { balance, viewer });
 }
 
-export function packPage(p: PackRow, v: PackVersionRow | undefined, owned: boolean, models: string[], balance: number, err?: string, viewer: Viewer = null): string {
+export function packPage(
+  p: PackRow, v: PackVersionRow | undefined, owned: boolean, models: string[], balance: number,
+  err?: string, viewer: Viewer = null,
+  trial: { turns: number; budgetCents: number; used: boolean } | null = null,
+  isAuthor = false,
+): string {
   const pinned: string[] = JSON.parse(p.pinned_models);
   const choices = (pinned.length ? pinned : models);
   return layout(p.name, `
@@ -113,7 +118,7 @@ ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
 </div>
-<div class="note">You can run this pack and read everything it does, but never its instructions — those are the author's. Transcripts you see are redacted against the pack's own text.</div>
+<div class="note">You can run this pack and read everything it does, but never its instructions — those are the author's. Transcripts are redacted against the pack's own text${isAuthor ? ", except for you: you wrote it, so you see your runs raw" : ""}.</div>
 ${v ? `
 <h2>${owned ? "Start a run" : "Acquire and run"}</h2>
 <form method="post" action="${owned ? "/runs" : `/packs/${esc(p.slug)}/acquire`}">
@@ -123,7 +128,14 @@ ${v ? `
     <button class="btn" type="submit">${owned ? "Start a run" : p.price_cents === 0 ? "Get it free and run" : `Buy for ${fmt(p.price_cents)} and run`}</button>
   </div>
   ${pinned.length ? `<p class="lede" style="margin-top:10px;font-size:14px">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
-</form>` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
+</form>
+${!owned && trial ? (trial.used
+  ? `<p class="lede" style="margin-top:14px;font-size:14px">You have already used your trial of this pack.</p>`
+  : `<h2>Or try it first</h2>
+<p class="lede" style="font-size:14px">${trial.turns} turns, capped at ${esc(fmt(trial.budgetCents))} of compute, on your own brief. Your points pay for the compute; you keep the output. The pack's instructions stay the author's.</p>
+<form method="post" action="/packs/${esc(p.slug)}/trial">
+  <button class="btn ghost" type="submit">Try it — ${trial.turns} turns</button>
+</form>`) : ""}` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
 <h2>What runs cost</h2>
 <table><tr><th>Item</th><th class="num">Measured</th></tr>
 <tr><td>A short turn (refusal, 288 output tokens, 6.5k cached prompt)</td><td class="num">$0.05</td></tr>
@@ -148,10 +160,19 @@ ${runs.map((r) => `<tr>
 
 export type Ask = { event_id: string; name: string; input: string };
 
-export function runPage(run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = [], viewer: Viewer = null): string {
+export function runPage(
+  run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = [], viewer: Viewer = null,
+  trial: { turns: number; slug: string; priceCents: number } | null = null,
+): string {
   return layout(`Run · ${packName}`, `
 <h1>${esc(packName)}</h1>
-<p class="lede">Live trace, down to the token. <span class="tag">${esc(run.model)}</span> <span class="tag">session ${esc(run.session_id.slice(0, 18))}</span></p>
+<p class="lede">Live trace, down to the token. <span class="tag">${esc(run.model)}</span> <span class="tag">session ${esc(run.session_id.slice(0, 18))}</span>${run.is_trial ? ` <span class="tag" style="color:var(--warn)">trial</span>` : ""}</p>
+${run.is_trial && trial ? `<div class="note">
+  <strong>This is a trial</strong> — ${Math.max(0, trial.turns - run.turn_count)} of ${trial.turns} turns left, capped at ${esc(fmt(run.budget_cents))}.
+  ${run.turn_count >= trial.turns ? `The trial is used up.` : ""}
+  <form method="post" action="/packs/${esc(trial.slug)}/acquire" class="inline">
+    <button class="btn" style="margin-left:10px">Buy it for ${esc(fmt(trial.priceCents))} and keep going</button></form>
+</div>` : ""}
 <div id="asks">${asks.map((a) => `<div class="note" style="border-color:var(--accent);background:color-mix(in oklab,var(--accent) 9%,transparent)">
   <strong>The worker is asking permission</strong> to run <code>${esc(a.name)}</code>:
   <pre style="margin:8px 0;white-space:pre-wrap;font-size:13px">${esc(a.input)}</pre>
@@ -258,12 +279,60 @@ ${rows.map((r) => `<tr><td>${esc(r.created_at.slice(5, 16).replace("T", " "))}</
 </table>`, { balance, viewer });
 }
 
-export function authorsPage(rows: Array<{ name: string; author: string; runs: number; millicents: number }>, balance: number, viewer: Viewer = null): string {
-  return layout("Authors", `<h1>Author earnings</h1>
-<p class="lede">An author earns on every run of their pack, not only when it sells — a configurable share of what the run cost. Earned points are cashable, which is why the ledger is an accounting system rather than a counter.</p>
+export function authorsPage(args: {
+  mine: Array<{
+    id: string; slug: string; name: string; runs: number; trials: number; failures: number;
+    cost_cents: number; millicents: number; paid_millicents: number; payout_email: string | null;
+  }>;
+  catalog: Array<{ name: string; author: string; runs: number; millicents: number; mine: boolean }>;
+  recent: Array<{ run_id: string; pack: string; stop_reason: string | null; cost_cents: number; started_at: string }>;
+  balance: number; viewer: Viewer; err?: string;
+}): string {
+  return layout("Authors", `
+<h1>Authoring</h1>
+<p class="lede">An author earns on every run of their pack, not only when it sells. Earned points are cashable, which is
+why the ledger is an accounting system rather than a counter — and why a share is held until the buyer's refund window closes.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+
+<h2>Packs you wrote</h2>
+${args.mine.length === 0
+  ? `<p class="lede">None yet. Claim a pack you wrote below and its runs, failures and earnings appear here — and you get to see those runs' transcripts raw, which is the point of keeping them.</p>`
+  : `<table><tr><th>Pack</th><th class="num">Runs</th><th class="num">Trials</th><th class="num">Failed</th><th class="num">Compute</th><th class="num">Earned</th><th class="num">Paid</th><th>Payout to</th></tr>
+${args.mine.map((m) => `<tr>
+  <td><a href="/packs/${esc(m.slug)}">${esc(m.name)}</a></td>
+  <td class="num">${m.runs}</td><td class="num">${m.trials}</td>
+  <td class="num"${m.failures > 0 ? ` style="color:var(--bad)"` : ""}>${m.failures}</td>
+  <td class="num">${esc(fmt(m.cost_cents))}</td>
+  <td class="num">${esc(fmtMilli(m.millicents))}</td>
+  <td class="num">${esc(fmtMilli(m.paid_millicents))}</td>
+  <td>${m.payout_email ? esc(m.payout_email) : `<span class="tag" style="color:var(--warn)">none set</span>`}</td>
+</tr>`).join("")}
+</table>`}
+
+${args.recent.length ? `<h2>Recent runs of your packs</h2>
+<p class="lede" style="font-size:14px">Where a pack failed is the only thing that tells you what to fix in version two.</p>
+<table><tr><th>When</th><th>Pack</th><th>Ended</th><th class="num">Cost</th><th></th></tr>
+${args.recent.map((r) => `<tr><td>${esc(r.started_at.slice(5, 16).replace("T", " "))}</td>
+<td>${esc(r.pack)}</td>
+<td>${r.stop_reason ? `<span class="tag" style="color:var(--warn)">${esc(r.stop_reason)}</span>` : "normally"}</td>
+<td class="num">${esc(fmt(r.cost_cents))}</td>
+<td><a href="/runs/${esc(r.run_id)}">trace</a></td></tr>`).join("")}
+</table>` : ""}
+
+<h2>Claim a pack you wrote</h2>
+<p class="lede" style="font-size:14px">Claiming links a pack to this organisation: its earnings become yours, and you
+see its runs unredacted. Only an owner can claim.</p>
+<form method="post" action="/authors/claim" class="row">
+  <input type="text" name="slug" placeholder="pack-slug" size="22" required>
+  <input type="text" name="payoutEmail" placeholder="where to pay you" size="24" required>
+  <button class="btn" type="submit">Claim</button>
+</form>
+
+<h2>Whole catalog</h2>
 <table><tr><th>Pack</th><th>Author</th><th class="num">Runs</th><th class="num">Earned</th></tr>
-${rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.author)}</td><td class="num">${r.runs}</td><td class="num">${esc(fmtMilli(r.millicents))}</td></tr>`).join("")}
-</table>`, { balance, viewer });
+${args.catalog.map((r) => `<tr><td>${esc(r.name)}${r.mine ? ` <span class="tag">yours</span>` : ""}</td>
+<td>${esc(r.author)}</td><td class="num">${r.runs}</td><td class="num">${esc(fmtMilli(r.millicents))}</td></tr>`).join("")}
+</table>`, { balance: args.balance, viewer: args.viewer });
 }
 
 export function settingsPage(rows: Array<{ key: string; value: string }>, balance: number, viewer: Viewer = null): string {

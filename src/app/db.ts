@@ -136,6 +136,10 @@ CREATE TABLE IF NOT EXISTS runs (
   -- measures from, making every delta zero and charging nobody for anything.
   billed_up_to_cents INTEGER NOT NULL DEFAULT 0,
   billed_cents INTEGER NOT NULL DEFAULT 0,
+  -- A trial is a capped run on a pack the organisation does not own: the way a
+  -- buyer judges a pack without the author handing it over.
+  is_trial INTEGER NOT NULL DEFAULT 0,
+  turn_count INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   ended_at TEXT
 );
@@ -237,6 +241,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // Days a buyer may ask for their money back. The author's share is held for
   // the same period, then becomes payable.
   refund_window_days: "14",
+  // A trial: how many turns a buyer gets on a pack they do not own, and what it
+  // may cost. Their own points pay for it, which is what stops it being free
+  // compute forever.
+  trial_turns: "3",
+  trial_budget_cents: "15",
 };
 
 /**
@@ -251,6 +260,8 @@ const MIGRATIONS = [
   "ALTER TABLE author_earnings ADD COLUMN payout_id TEXT",
   "ALTER TABLE packs ADD COLUMN author_payout_email TEXT",
   "ALTER TABLE purchases ADD COLUMN kind TEXT NOT NULL DEFAULT 'pack'",
+  "ALTER TABLE runs ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE runs ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0",
 ];
 
 let ready: Promise<void> | null = null;
