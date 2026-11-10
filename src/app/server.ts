@@ -811,8 +811,16 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     if (pack.author_org_id !== ctx.orgId && !curator) throw new Au.NotTheAuthorError();
     if (method === "POST") {
       ownerOnly();
-      try { await Au.updatePack(pack.author_org_id!, slug, { ...packFields(await body(req)), slug }); }
+      const fields = packFields(await body(req));
+      try { await Au.updatePack(pack.author_org_id!, slug, { ...fields, slug }); }
       catch (e) { return redirect(res, `/packs/${slug}/edit?err=${encodeURIComponent(msg(e))}`); }
+      // An edited method may no longer be what the live listing describes, so
+      // the listing is dated rather than silently left to claim it still is.
+      // Marked from here and not from inside `updatePack`: `listing.ts`
+      // imports `authoring.ts` for the authority pattern, and the reverse
+      // edge would be an import cycle whose first link is evaluated at module
+      // load — a runtime failure, not a typecheck one.
+      if (fields.instructions.trim() !== pack.instructions.trim()) await L.markStale(pack.id);
       return redirect(res, `/packs/${slug}/edit`);
     }
     const v = await P.latestVersion(pack.id);
@@ -821,6 +829,53 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       models: await models(), balance: await bal(), viewer,
       err: url.searchParams.get("err") ?? undefined, isCurator: curator,
     }));
+  }
+
+  // ----------------------------------------------------- listing approval
+  //
+  // Generated copy reaches a buyer through exactly one door, and this is it.
+  // `scripts/generate-listings.mjs` writes drafts and nothing else; nothing
+  // but the approve route below copies a draft onto the pack. Same gate as
+  // the editor — the author's own organisation, or the curator — because this
+  // is publishing, not drafting.
+
+  /** The pack, gated the way the editor gates it: its own organisation, or the curator. */
+  const myPackOr403 = async (slug: string): Promise<P.PackRow | null> => {
+    const pack = await P.getPack(slug);
+    if (!pack) return null;
+    const curator = (await platformOrgId()) === ctx.orgId;
+    if (pack.author_org_id !== ctx.orgId && !curator) throw new Au.NotTheAuthorError();
+    return pack;
+  };
+  const listingMatch = /^\/packs\/([a-z0-9-]+)\/listing$/.exec(path);
+  if (method === "GET" && listingMatch) {
+    const pack = await myPackOr403(listingMatch[1]!);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const pending = await L.draftWithMeta(pack.id);
+    const v = await P.latestVersion(pack.id);
+    return html(res, V.listingApprovalPage({
+      pack,
+      live: L.hasListing(pack) ? L.listingOf(pack) : null,
+      draft: pending?.listing ?? null,
+      generatedAt: pending?.generatedAt ?? null,
+      sourceVersion: pending?.sourceVersion ?? null,
+      currentVersion: v?.version ?? null,
+      canApprove: ctx.role === "owner",
+      balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+  const approveMatch = /^\/packs\/([a-z0-9-]+)\/listing\/approve$/.exec(path);
+  if (method === "POST" && approveMatch) {
+    ownerOnly();
+    const slug = approveMatch[1]!;
+    // Authority first, so a stranger gets a flat refusal rather than a
+    // redirect to a page they cannot read. `approveDraft` checks it again
+    // itself — every caller inherits the gate, not just this route.
+    if (!(await myPackOr403(slug))) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    try { await L.approveDraft(ctx.orgId, slug); }
+    catch (e) { return redirect(res, `/packs/${slug}/listing?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
   }
 
   const subMatch = /^\/packs\/([a-z0-9-]+)\/submit$/.exec(path);
@@ -898,6 +953,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         orgId: ctx.orgId, files: clean,
         ...(typeof payload?.slug === "string" ? { slugOverride: payload.slug } : {}),
       });
+      // A folder replaced the whole pack body, so the live listing is dated
+      // until someone has read it against what now ships. Marked here rather
+      // than in `authoring.ts` for the same reason the editor route does it:
+      // `listing.ts` imports `authoring.ts`, never the other way round.
+      if (!out.created) await L.markStale(out.pack.id);
       res.writeHead(200, { "content-type": "application/json" });
       return void res.end(JSON.stringify({
         slug: out.pack.slug, created: out.created, status: out.pack.status,

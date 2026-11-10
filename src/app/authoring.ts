@@ -60,6 +60,8 @@ export type PackInput = {
   useCases?: string[];
   limitations?: string[];
   faq?: Array<{ q: string; a: string }>;
+  /** Written examples of a session — never a recorded run, never a buyer's brief. */
+  scenarios?: Array<{ brief: string; reached: string[]; output: string }>;
   requirements?: string[];
   builtOn?: string;
 };
@@ -118,8 +120,9 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
        model, effort, pinned_models, extras, instructions, tags, image, role, status,
-       author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24)`,
+       author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on,
+       scenarios)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24,$25)`,
     [packId, slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
@@ -127,7 +130,8 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
       input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? "",
       input.descriptionLong?.trim() ?? "", JSON.stringify(input.useCases ?? []),
       JSON.stringify(input.limitations ?? []), JSON.stringify(input.faq ?? []),
-      JSON.stringify(input.requirements ?? []), input.builtOn?.trim() ?? ""]);
+      JSON.stringify(input.requirements ?? []), input.builtOn?.trim() ?? "",
+      JSON.stringify(input.scenarios ?? [])]);
   await saveTools(s, packId, input.tools ?? []);
   await saveMcpServers(s, packId, input.mcpServers ?? []);
   return (await P.getPack(slug))!;
@@ -144,7 +148,8 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
        author_payout_email = $11, tags = $13, image = $14, role = $15,
-       description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21
+       description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21,
+       scenarios = $22
      WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
@@ -160,7 +165,8 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
       input.limitations ? JSON.stringify(input.limitations) : pack.limitations,
       input.faq ? JSON.stringify(input.faq) : pack.faq,
       input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
-      input.builtOn?.trim() ?? pack.built_on]);
+      input.builtOn?.trim() ?? pack.built_on,
+      input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios]);
   // Undefined means this caller never mentioned the field (the plain
   // details-form save, for instance) and the stored set is left alone;
   // an explicit array — including an empty one — replaces it, so re-importing
@@ -324,6 +330,9 @@ export async function importPack(args: {
     faq: parsed.faq.length
       ? parsed.faq
       : existing ? JSON.parse(existing.faq || "[]") : [],
+    scenarios: parsed.scenarios.length
+      ? parsed.scenarios
+      : existing ? JSON.parse(existing.scenarios || "[]") : [],
     requirements: parsed.requirements.length
       ? parsed.requirements
       : existing ? JSON.parse(existing.requirements || "[]") : [],

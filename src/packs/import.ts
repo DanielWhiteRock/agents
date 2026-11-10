@@ -43,6 +43,8 @@ export type ParsedPack = {
   useCases: string[];
   limitations: string[];
   faq: Array<{ q: string; a: string }>;
+  /** Written examples of a session: the brief, what it touched, what came back. */
+  scenarios: Array<{ brief: string; reached: string[]; output: string }>;
   requirements: string[];
   /** What this pack was written against, e.g. "Claude Opus 5". */
   builtOn?: string;
@@ -99,7 +101,7 @@ const KNOWN = new Set([
   // one in, rather than publishing to a blank pack page. `description_long`
   // is deliberately not `description`: that key already means the tagline,
   // and every existing agent.md relies on it keeping that meaning.
-  "description_long", "use_cases", "limitations", "faq", "requirements", "built_on",
+  "description_long", "use_cases", "limitations", "faq", "scenarios", "requirements", "built_on",
 ]);
 
 const list = (v: string): string[] =>
@@ -126,7 +128,7 @@ export function parsePackMarkdown(text: string): ParsedPack {
   const { front, body } = splitFrontMatter(text);
   const out: ParsedPack = {
     instructions: "", mcpServers: [], tools: [], pinnedModels: [], anthropicSkills: [],
-    useCases: [], limitations: [], faq: [], requirements: [], unknownKeys: [],
+    useCases: [], limitations: [], faq: [], scenarios: [], requirements: [], unknownKeys: [],
   };
 
   const lines = front.split("\n");
@@ -205,6 +207,14 @@ export function parsePackMarkdown(text: string): ParsedPack {
     if (topKey === "faq") {
       if (key === "q") out.faq.push({ q: value, a: "" });
       if (key === "a" && out.faq.length) out.faq[out.faq.length - 1]!.a = value;
+    }
+    // Same shape as `faq` above: the first key of an entry opens it, the rest
+    // fill it in, and a key arriving before any entry is ignored rather than
+    // attached to whatever came before.
+    if (topKey === "scenarios") {
+      if (key === "brief") out.scenarios.push({ brief: value, reached: [], output: "" });
+      if (key === "reached" && out.scenarios.length) out.scenarios[out.scenarios.length - 1]!.reached = list(value);
+      if (key === "output" && out.scenarios.length) out.scenarios[out.scenarios.length - 1]!.output = value;
     }
     if (topKey === "skills") {
       // Anthropic's prebuilt skills are referenced by short name. A pack's own

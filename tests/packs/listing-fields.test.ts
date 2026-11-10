@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parsePackMarkdown } from "../../src/packs/import.js";
-import { packPage, catalogPage, creatorPage, creatorEditorPage, type PackPageExtras } from "../../src/app/views.js";
+import {
+  packPage, catalogPage, creatorPage, creatorEditorPage, listingApprovalPage, type PackPageExtras,
+} from "../../src/app/views.js";
 import { hasListing, type Listing } from "../../src/app/listing.js";
 import type { PackRow, PackVersionRow } from "../../src/app/platform.js";
 import type { CreatorRow } from "../../src/app/creators.js";
@@ -66,6 +68,42 @@ describe("listing fields off frontmatter", () => {
   it("does not let an unrecognised nested faq key leave a stray entry", () => {
     const p = parsePackMarkdown("---\nfaq:\n  - a: An answer with no question first\n---\nbody");
     expect(p.faq).toEqual([]);
+  });
+
+  /**
+   * `scenarios` is the sixth listing field, and it was the one with no
+   * frontmatter key — so a folder could carry five sixths of its listing in
+   * and had to have the last one generated or typed.
+   */
+  it("reads written scenarios off frontmatter, the way it reads the FAQ", () => {
+    const p = parsePackMarkdown(`---
+name: Three Lenses
+scenarios:
+  - brief: Review this branch
+    reached: bash, read
+    output: Three findings, worst first.
+  - brief: A one-file change
+    reached: read
+    output: Nothing to say.
+---
+Do the work.`);
+    expect(p.scenarios).toEqual([
+      { brief: "Review this branch", reached: ["bash", "read"], output: "Three findings, worst first." },
+      { brief: "A one-file change", reached: ["read"], output: "Nothing to say." },
+    ]);
+  });
+
+  it("leaves scenarios empty for a pack that writes none", () => {
+    expect(parsePackMarkdown("---\nname: X\n---\nbody").scenarios).toEqual([]);
+  });
+
+  it("does not let a nested scenario key with no brief first leave a stray entry", () => {
+    const p = parsePackMarkdown("---\nscenarios:\n  - output: An output with no brief first\n---\nbody");
+    expect(p.scenarios).toEqual([]);
+  });
+
+  it("does not report scenarios as a key it has never heard of", () => {
+    expect(parsePackMarkdown("---\nscenarios:\n  - brief: B\n---\nbody").unknownKeys).toEqual([]);
   });
 });
 
@@ -636,5 +674,108 @@ describe("the creator editor page", () => {
     expect(editable).not.toContain("<script>alert(1)</script>");
     const readOnly = creatorEditorPage({ creator: evil, canEdit: false, balance: 0, viewer: null });
     expect(readOnly).not.toContain("<script>alert(1)</script>");
+  });
+});
+
+// ------------------------------------------------------ the approval screen
+
+/**
+ * The one screen that stands between generated copy and a buyer. Its job is
+ * to show what would be published, next to what is published now, and to be
+ * the only way the first becomes the second.
+ */
+const approvalArgs = (over: Record<string, unknown> = {}) => ({
+  pack: packRow(),
+  live: null as Listing | null,
+  draft: null as Listing | null,
+  generatedAt: null as string | null,
+  sourceVersion: null as number | null,
+  currentVersion: 3 as number | null,
+  canApprove: true,
+  balance: 0,
+  viewer: null,
+  ...over,
+});
+
+describe("the listing approval screen", () => {
+  it("offers nothing to approve when no draft has been generated", () => {
+    const h = listingApprovalPage(approvalArgs());
+    expect(h).not.toContain("/listing/approve");
+    expect(h).toContain("generate-listings");
+  });
+
+  it("shows the proposed copy and the one button that publishes it", () => {
+    const h = listingApprovalPage(approvalArgs({
+      draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", sourceVersion: 3,
+    }));
+    expect(h).toContain("Three bodies of work, pulling against each other.");
+    expect(h).toContain("Review a branch before it merges");
+    expect(h).toContain("Three findings, worst first.");
+    expect(h).toContain(`action="/packs/senior-engineer/listing/approve"`);
+    expect(h).toContain("2026-11-10");
+  });
+
+  it("says in as many words that nothing here is live yet", () => {
+    const h = listingApprovalPage(approvalArgs({ draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z" }));
+    expect(h).toMatch(/not live|nobody has seen|no buyer/i);
+  });
+
+  it("shows what a buyer reads now beside what is proposed", () => {
+    const h = listingApprovalPage(approvalArgs({
+      live: { ...FULL, description: "The copy that is live today." },
+      draft: { ...FULL, description: "The copy somebody would have to approve." },
+      generatedAt: "2026-11-10T09:00:00.000Z",
+    }));
+    expect(h).toContain("The copy that is live today.");
+    expect(h).toContain("The copy somebody would have to approve.");
+  });
+
+  it("warns when the method changed under the live listing", () => {
+    const h = listingApprovalPage(approvalArgs({
+      pack: packRow({ listing_stale_at: "2026-11-09T09:00:00.000Z", listing_approved_at: "2026-11-01T09:00:00.000Z" }),
+      live: FULL,
+    }));
+    expect(h).toMatch(/no longer describes|out of date|stale/i);
+  });
+
+  it("flags a draft generated against an older version of the pack", () => {
+    const h = listingApprovalPage(approvalArgs({
+      draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", sourceVersion: 1, currentVersion: 3,
+    }));
+    expect(h).toMatch(/version 1/);
+    expect(h).toMatch(/version 3/);
+  });
+
+  it("gives a member the facts and a reason rather than a button that would 403", () => {
+    const h = listingApprovalPage(approvalArgs({
+      draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", canApprove: false,
+    }));
+    expect(h).toContain("Three bodies of work, pulling against each other.");
+    expect(h).not.toContain("/listing/approve");
+    expect(h).toMatch(/owner/i);
+  });
+
+  it("escapes every word of the generated copy", () => {
+    const h = listingApprovalPage(approvalArgs({
+      draft: {
+        description: "<script>alert(1)</script>",
+        useCases: ["<img src=x onerror=1>"],
+        limitations: ["<b>bold</b>"],
+        faq: [{ q: "<i>q</i>", a: "<i>a</i>" }],
+        scenarios: [{ brief: "<u>brief</u>", reached: ["<em>reached</em>"], output: "<s>output</s>" }],
+        requirements: ["<hr>"],
+      },
+      generatedAt: "2026-11-10T09:00:00.000Z",
+    }));
+    for (const raw of ["<script>alert(1)</script>", "<img src=x", "<b>bold</b>", "<i>q</i>",
+      "<u>brief</u>", "<em>reached</em>", "<s>output</s>", "<hr>"]) {
+      expect(h).not.toContain(raw);
+    }
+    expect(h).toContain("&lt;script&gt;");
+  });
+
+  it("shows the submitted error beside the draft", () => {
+    const h = listingApprovalPage(approvalArgs({ err: "there is no draft to approve" }));
+    expect(h).toContain("there is no draft to approve");
   });
 });

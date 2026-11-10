@@ -1583,12 +1583,117 @@ ${p ? `<h2>Lifecycle</h2>
     <button class="btn ghost">${p.status === "listed" ? "Withdraw from the catalog" : "List it"}</button></form>` : ""}
   <form method="post" action="/packs/${esc(p.slug)}/delete" class="inline">
     <button class="btn ghost">Delete</button></form>
+  <a class="btn ghost" href="/packs/${esc(p.slug)}/listing">The listing${p.listing_stale_at ? " — out of date" : ""}</a>
   <a class="btn ghost" href="/packs/${esc(p.slug)}">View as a buyer</a>
 </div>
 <p class="lede" style="margin-top:12px;font-size:14px">Saving changes the <em>next</em> version. Anyone who already
 bought this keeps running the version they bought, because a version carries its own copy of the method — which is
 what lets you fix a mistake without quietly rewriting work somebody paid for.</p>` : ""}`,
   { balance: args.balance, viewer: args.viewer });
+}
+
+/** Muted supporting text, in the tokens — `.fine` is only styled inside `.repo`/`.ctx`. */
+const SECONDARY = "color:var(--muted);font-size:var(--t2);line-height:1.5";
+
+/**
+ * One listing, laid out as prose with its empty fields left out.
+ *
+ * Used twice on the approval screen — once for what buyers read now, once
+ * for what is proposed — so the two columns are the same shape and the
+ * difference between them is the content, not the layout.
+ */
+function listingSections(l: Listing): string {
+  const block = (heading: string, body: string): string => (body ? `<h4>${heading}</h4>${body}` : "");
+  return [
+    block("What it does", l.description.trim() ? paragraphs(l.description) : ""),
+    block("What you'd hire it for", l.useCases.length ? bullets(l.useCases) : ""),
+    block("What a session looks like", l.scenarios.length
+      ? l.scenarios.map((s) => `<p style="margin:0 0 var(--s3)"><strong>${esc(s.brief)}</strong>
+  ${s.reached.length ? `<br><span style="${SECONDARY}">${esc(s.reached.join(" · "))}</span>` : ""}
+  ${s.output ? `<br><span style="${SECONDARY}">${esc(s.output)}</span>` : ""}</p>`).join("")
+      : ""),
+    block("Known limitations", l.limitations.length ? bullets(l.limitations) : ""),
+    block("Questions people ask", l.faq.length
+      ? l.faq.map((f) => `<p style="margin:0 0 var(--s3)"><strong>${esc(f.q)}</strong><br>
+  <span style="${SECONDARY}">${esc(f.a)}</span></p>`).join("")
+      : ""),
+    block("Requires", l.requirements.length ? bullets(l.requirements) : ""),
+  ].join("") || `<p class="lede">Nothing here yet.</p>`;
+}
+
+/**
+ * The one step between generated copy and a buyer.
+ *
+ * A generator writes drafts and nothing else; this screen is the only way a
+ * draft becomes the listing. So it has two jobs: show what would be
+ * published next to what is published now, and be honest that until the
+ * button is pressed, nobody outside this page has seen a word of it.
+ */
+export function listingApprovalPage(args: {
+  pack: PackRow;
+  /** What buyers read now, or null for a pack with no approved listing. */
+  live: Listing | null;
+  /** What a generator proposed, or null when there is nothing waiting. */
+  draft: Listing | null;
+  generatedAt: string | null;
+  /** The published version the draft was generated from. */
+  sourceVersion: number | null;
+  /** The version the pack is on now — a draft older than this describes a pack that has moved. */
+  currentVersion: number | null;
+  /** Mirrors the route's own owner check: a member sees the facts, not a dead button. */
+  canApprove: boolean;
+  balance: number;
+  viewer: Viewer;
+  err?: string;
+}): string {
+  const { pack: p, live, draft } = args;
+  const behind = draft !== null && args.sourceVersion !== null && args.currentVersion !== null
+    && args.sourceVersion !== args.currentVersion;
+  return layout(`Listing for ${p.name}`, `
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+<h1>The listing for ${esc(p.name)}</h1>
+<p class="lede">What a buyer reads before they buy. It is written by a generator and published by a person — those are
+two different steps, and this is the second one.</p>
+${p.listing_stale_at ? `<div class="note"><strong>The method changed on ${esc(day(p.listing_stale_at))}.</strong>
+The live listing${p.listing_approved_at ? `, approved on ${esc(day(p.listing_approved_at))},` : ""} is out of date:
+it may no longer describe what ships. Generate it again and approve what comes back.</div>` : ""}
+${draft ? `<div class="note"><strong>Nothing below the heading "Proposed" is live.</strong> No buyer has seen it, and
+none will until it is approved here.</div>
+<div class="row" style="margin-bottom:var(--s4)">
+  ${args.generatedAt ? `<span class="tag">generated ${esc(day(args.generatedAt))}</span>` : ""}
+  ${args.sourceVersion !== null ? `<span class="tag">from version ${args.sourceVersion}</span>` : ""}
+  ${behind ? `<span class="tag">the pack is now at version ${args.currentVersion}</span>` : ""}
+</div>
+${behind ? `<div class="note">This draft describes version ${args.sourceVersion}; the pack has moved on to version ${
+  args.currentVersion}. Generating it again costs one model call.</div>` : ""}
+<div class="grid">
+  <div class="card">
+    <h3>What a buyer reads now</h3>
+    ${live ? listingSections(live) : `<p class="lede">Nothing. The page shows the tagline and the price, and no more.</p>`}
+  </div>
+  <div class="card">
+    <h3>Proposed</h3>
+    ${listingSections(draft)}
+  </div>
+</div>
+${args.canApprove ? `<form method="post" action="/packs/${esc(p.slug)}/listing/approve" style="margin-top:var(--s4)">
+  <button class="btn" type="submit">Approve and publish this listing</button>
+</form>
+<p class="lede" style="font-size:var(--t2)">Approving replaces the live copy with the proposed copy. Answers you
+published to the FAQ out of a buyer's question are kept, whatever the draft says.</p>`
+  : `<p class="lede" style="margin-top:var(--s4)">Only an owner of this organisation can publish a listing. This is
+what would be published.</p>`}`
+  : `<p class="lede">There is no draft waiting. Generate one with
+<code>node scripts/generate-listings.mjs --slug ${esc(p.slug)}</code>, then come back here to read it before anybody
+else does.</p>
+<div class="card">
+  <h3>What a buyer reads now</h3>
+  ${live ? listingSections(live) : `<p class="lede">Nothing. The page shows the tagline and the price, and no more.</p>`}
+</div>`}
+<p class="row" style="margin-top:var(--s5)">
+  <a class="btn ghost" href="/packs/${esc(p.slug)}">View as a buyer</a>
+  <a class="btn ghost" href="/packs/${esc(p.slug)}/edit">Back to the pack</a>
+</p>`, { balance: args.balance, viewer: args.viewer });
 }
 
 /** A stored `href` a creator typed into a free-text field, or nothing. */

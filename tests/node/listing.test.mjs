@@ -113,3 +113,171 @@ test("listingOf survives a malformed column", async () => {
   const reloaded = await P.getPack(pack.slug);
   assert.deepEqual(L.listingOf(reloaded).useCases, []);
 });
+
+// --------------------------------------------- generated copy, and its rails
+
+/**
+ * The copy-quality guard. A listing that pastes the pack body describes
+ * nothing: the instructions reach a buyer through other doors now, so this is
+ * not a secrecy control — it is a refusal to ship lazy prose.
+ */
+const LONG_INSTRUCTIONS = [
+  "Open the pricing sheet and find every rate that has not moved in two quarters,",
+  "then write the single sentence that explains why it should move now.",
+].join(" ");
+
+test("a draft whose text reproduces the instructions is refused", async () => {
+  const { pack } = await makePack({ instructions: LONG_INSTRUCTIONS });
+  await assert.rejects(
+    L.saveDraft(pack.id, {
+      ...DRAFT,
+      description: "This worker will open the pricing sheet and find every rate that has not moved in two quarters.",
+    }, 1),
+    /verbatim/i,
+    "a twelve-word run lifted out of the instructions must be refused");
+  assert.equal(await L.draftFor(pack.id), null, "the refused draft was not stored");
+});
+
+test("a draft that describes the pack in its own words is accepted", async () => {
+  const { pack } = await makePack({ instructions: LONG_INSTRUCTIONS });
+  await L.saveDraft(pack.id, {
+    ...DRAFT,
+    description: "Audits a price list for rates that have gone stale, and argues for the one that matters.",
+  }, 1);
+  assert.match((await L.draftFor(pack.id)).description, /^Audits a price list/);
+});
+
+test("the guard reads every field of the draft, not only the description", async () => {
+  const { pack } = await makePack({ instructions: LONG_INSTRUCTIONS });
+  await assert.rejects(
+    L.saveDraft(pack.id, {
+      ...DRAFT,
+      useCases: ["then write the single sentence that explains why it should move now, for you"],
+    }, 1),
+    /verbatim/i);
+});
+
+/**
+ * `approveDraft` copies the draft's six fields onto `packs`, faq included — so
+ * a generated draft that knows nothing of the answers a creator published out
+ * of a real buyer exchange would delete them on approval, unrecoverably,
+ * without going back to the thread. A generated draft starts from what is
+ * already live.
+ */
+const PUBLISHED_ANSWER = { q: "Does it need write access?", a: "No — read-only, always." };
+
+test("a generated draft starts from the FAQ already live, so approving only adds", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
+  const draft = await L.draftFor(pack.id);
+  assert.deepEqual(draft.faq[0], PUBLISHED_ANSWER, "the live answer is the first thing in the draft");
+  assert.equal(draft.faq.length, 2, "and the generated question was added to it");
+
+  await L.approveDraft(orgId, pack.slug);
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.faq[0], PUBLISHED_ANSWER, "approval did not delete the published answer");
+  assert.equal(live.faq.length, 2);
+});
+
+test("a generated draft does not duplicate a live answer the model also guessed at", async () => {
+  const { pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+  await L.saveGeneratedDraft(pack.id, {
+    ...DRAFT,
+    faq: [{ q: "  does it need write access?  ", a: "Probably not." }],
+  }, 1);
+  const draft = await L.draftFor(pack.id);
+  assert.equal(draft.faq.length, 1, "one question, asked once");
+  assert.equal(draft.faq[0].a, PUBLISHED_ANSWER.a, "and the answer a human wrote is the one kept");
+});
+
+test("approving never drops an answer published after the draft was generated", async () => {
+  const { orgId, pack } = await makePack();
+  await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
+  // The creator answers a buyer and publishes it from the inbox *after* the
+  // generator ran — the draft on disk has never seen it.
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.approveDraft(orgId, pack.slug);
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.ok(live.faq.some((f) => f.q === PUBLISHED_ANSWER.q), "the published answer survived approval");
+  assert.ok(live.faq.some((f) => f.q === "Which currencies?"), "and the approved draft is live too");
+});
+
+/**
+ * Nothing wrote `scenarios` before this task, and the pack page renders
+ * `s.reached.length` directly — so a stored scenario missing a field would
+ * 500 the whole page rather than skip a card.
+ */
+test("a stored scenario missing its fields is normalised rather than left to break the page", async () => {
+  const { pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET scenarios = $1, faq = $2 WHERE id = $3", [
+    JSON.stringify([{ brief: "A 10% price hike" }, "not an object", null, { output: "no brief at all" }]),
+    JSON.stringify([{ q: "Real question?" }, { a: "an answer with no question" }, 7]),
+    pack.id]);
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.scenarios, [{ brief: "A 10% price hike", reached: [], output: "" }]);
+  assert.deepEqual(live.faq, [{ q: "Real question?", a: "" }]);
+});
+
+test("a scenario's reached list is normalised to strings", async () => {
+  const { pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET scenarios = $1 WHERE id = $2", [
+    JSON.stringify([{ brief: "b", reached: ["bash", 3, null, "read"], output: "o" }]), pack.id]);
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.scenarios[0].reached, ["bash", "read"]);
+});
+
+test("a draft carries scenarios through approval", async () => {
+  const { orgId, pack } = await makePack();
+  await L.saveDraft(pack.id, DRAFT, 1);
+  await L.approveDraft(orgId, pack.slug);
+  assert.deepEqual(L.listingOf(await P.getPack(pack.slug)).scenarios, DRAFT.scenarios);
+});
+
+test("markStale stamps the live listing without changing a word of it", async () => {
+  const { orgId, pack } = await makePack();
+  await L.saveDraft(pack.id, DRAFT, 1);
+  await L.approveDraft(orgId, pack.slug);
+  await L.markStale(pack.id);
+  const after = await P.getPack(pack.slug);
+  assert.ok(after.listing_stale_at, "stamped");
+  assert.equal(after.description, DRAFT.description, "and the buyer still reads the approved copy");
+});
+
+test("a draft keeps the metadata the approval screen needs", async () => {
+  const { pack } = await makePack();
+  await L.saveDraft(pack.id, DRAFT, 4);
+  const meta = await L.draftWithMeta(pack.id);
+  assert.equal(meta.sourceVersion, 4);
+  assert.ok(meta.generatedAt, "when it was generated");
+  assert.equal(meta.listing.description, DRAFT.description);
+  assert.equal(await L.draftWithMeta("pk_nothing"), null);
+});
+
+// -------------------------------------------- the scenarios frontmatter key
+
+test("a pack carries scenarios in and out of the listing columns", async () => {
+  const { orgId, pack } = await makePack();
+  const scenarios = [{ brief: "A 10% hike", reached: ["read", "bash"], output: "a flagged diff" }];
+  await Auth.updatePack(orgId, pack.slug, { ...INPUT, slug: pack.slug, scenarios });
+  assert.deepEqual(L.listingOf(await P.getPack(pack.slug)).scenarios, scenarios);
+  // A caller that never mentions scenarios leaves the stored ones alone, the
+  // same rule its five siblings already follow.
+  await Auth.updatePack(orgId, pack.slug, { ...INPUT, slug: pack.slug });
+  assert.deepEqual(L.listingOf(await P.getPack(pack.slug)).scenarios, scenarios);
+});
+
+test("a new pack can be created with scenarios", async () => {
+  const { orgId } = await A.signUp({ email: email(), name: "Author", password: "correct-horse", orgName: "Scen Co" });
+  const scenarios = [{ brief: "A brief", reached: ["read"], output: "an output" }];
+  const pack = await Auth.createPack(orgId, { ...INPUT, slug: `scen-${++n}`, scenarios });
+  assert.deepEqual(L.listingOf(pack).scenarios, scenarios);
+});
