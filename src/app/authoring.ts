@@ -195,8 +195,13 @@ export async function setStatus(actorOrgId: string, slug: string, status: PackSt
   } else if (!isCurator) {
     throw new NotTheCuratorError();
   }
+  // The debut date, written once. The pack page's trust rail says "reviewed
+  // and listed on <date>", and that date has to survive a withdrawal and a
+  // relisting — a pack that came back to the shelf is not a new pack. So the
+  // first time it reaches `listed` is the stamp, and nothing moves it after.
+  const listedAt = status === "listed" ? (pack.listed_at ?? now()) : pack.listed_at;
   const s = await sql();
-  await s.query("UPDATE packs SET status = $1 WHERE id = $2", [status, pack.id]);
+  await s.query("UPDATE packs SET status = $1, listed_at = $2 WHERE id = $3", [status, listedAt, pack.id]);
 }
 
 /**

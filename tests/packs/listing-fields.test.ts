@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parsePackMarkdown } from "../../src/packs/import.js";
+import { packPage, type PackPageExtras } from "../../src/app/views.js";
+import { hasListing, type Listing } from "../../src/app/listing.js";
+import type { PackRow, PackVersionRow } from "../../src/app/platform.js";
 
 /**
  * A folder's own copy of its listing: the long description, the list fields
@@ -62,5 +65,251 @@ describe("listing fields off frontmatter", () => {
   it("does not let an unrecognised nested faq key leave a stray entry", () => {
     const p = parsePackMarkdown("---\nfaq:\n  - a: An answer with no question first\n---\nbody");
     expect(p.faq).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------- the page
+
+/**
+ * What the pack page says, and — the part that matters on a shelf of seventy
+ * packs where almost none of them have listing content yet — what it does
+ * not say. A block with nothing in it must leave no heading behind.
+ */
+const EMPTY_COLUMNS = {
+  description: "", use_cases: "", limitations: "", faq: "", scenarios: "", requirements: "",
+};
+
+function packRow(over: Partial<PackRow> = {}): PackRow {
+  return {
+    id: "pk_1", slug: "senior-engineer", name: "Senior Engineer",
+    tagline: "Reads the code before it changes it", author: "typeui.sh",
+    author_org_id: null, price_points: 49, tags: "engineering,quality", image: null,
+    role: "engineer", upgrade_points: 0, model: "claude-opus-5", effort: "high",
+    pinned_models: "[]", instructions: "Read it first.", status: "listed",
+    author_payout_email: null, extras: "{}", created_at: "2026-01-02T03:04:05.000Z",
+    ...EMPTY_COLUMNS,
+    listing_approved_at: null, listing_stale_at: null, listed_at: null, built_on: null,
+    ...over,
+  };
+}
+
+const packVersion = (over: Partial<PackVersionRow> = {}): PackVersionRow => ({
+  id: "pv_1", pack_id: "pk_1", version: 3, runtime_pack_id: "agt_1", runtime_version: "1",
+  instructions: "Read it first.", created_at: "2026-02-03T04:05:06.000Z", ...over,
+});
+
+const NOTHING_KNOWN: PackPageExtras = {
+  listing: null,
+  stats: { runs: 0, buyers: 0, version: 3 },
+  permissions: ["web: unrestricted"],
+  files: { files: 0, skills: 0, tree: [] },
+  updatedAt: null,
+  builtOn: null,
+  refundDays: 14,
+};
+
+const FULL: Listing = {
+  description: "Three bodies of work, pulling against each other.\n\nAnd a fourth that referees.",
+  useCases: ["Review a branch before it merges", "Find the bug you can describe"],
+  limitations: ["Needs a real diff", "Not for binary files"],
+  faq: [{ q: "Does it write to the branch?", a: "No, it only reads." }],
+  scenarios: [{ brief: "Review this branch", reached: ["bash", "read"], output: "Three findings, worst first." }],
+  requirements: ["A git remote", "Read access to the repo"],
+};
+
+type RenderOpts = {
+  pack?: Partial<PackRow>;
+  owned?: boolean;
+  isAuthor?: boolean;
+  trial?: { turns: number; budgetCents: number; used: boolean } | null;
+  extras?: Partial<PackPageExtras>;
+};
+
+function render(o: RenderOpts = {}): string {
+  return packPage(
+    packRow(o.pack), packVersion(), o.owned ?? false, ["claude-opus-5", "claude-sonnet-5"], 120_000,
+    undefined, { name: "Daniel", email: "d@example.com", role: "owner", orgName: "alphaCEO" },
+    o.trial ?? null, o.isAuthor ?? false, { ...NOTHING_KNOWN, ...o.extras });
+}
+
+const h2 = (text: string): string => `<h2>${text}</h2>`;
+
+describe("the pack page", () => {
+  it("renders no heading for a section with no content", () => {
+    const h = render();
+    expect(h).not.toContain("What you'd hire it for");
+    expect(h).not.toContain("Known limitations");
+    expect(h).not.toContain(h2("What it does"));
+    expect(h).not.toContain("What a session looks like");
+    expect(h).not.toContain("What's inside");
+    expect(h).not.toContain("Questions people ask");
+  });
+
+  it("renders no heading for a listing whose every field is empty", () => {
+    const h = render({ extras: { listing: {
+      description: "   ", useCases: [], limitations: [], faq: [], scenarios: [], requirements: [],
+    } } });
+    expect(h).not.toContain("What you'd hire it for");
+    expect(h).not.toContain("Known limitations");
+    expect(h).not.toContain(h2("What it does"));
+    expect(h).not.toContain("What a session looks like");
+    expect(h).not.toContain("Questions people ask");
+    expect(h).not.toContain("Requires");
+  });
+
+  it("renders every block once the listing has content", () => {
+    const h = render({ extras: { listing: FULL } });
+    expect(h).toContain(h2("What it does"));
+    expect(h).toContain("Three bodies of work, pulling against each other.");
+    expect(h).toContain("And a fourth that referees.");
+    expect(h).toContain("What you'd hire it for");
+    expect(h).toContain("Review a branch before it merges");
+    expect(h).toContain("What a session looks like");
+    expect(h).toContain("Three findings, worst first.");
+    expect(h).toContain("Known limitations");
+    expect(h).toContain("Needs a real diff");
+    expect(h).toContain("Questions people ask");
+    expect(h).toContain("Does it write to the branch?");
+    expect(h).toContain("A git remote");
+  });
+
+  it("shows runs and owning orgs on the detail page", () => {
+    const h = render({ extras: { stats: { runs: 128, buyers: 9, version: 3 } } });
+    expect(h).toMatch(/Runs<[\s\S]{0,200}>128</);
+    expect(h).toMatch(/Owning organisations<[\s\S]{0,200}>9</);
+  });
+
+  it("says nothing about usage rather than showing zeroes", () => {
+    const h = render({ extras: { stats: { runs: 0, buyers: 0, version: 3 } } });
+    expect(h).not.toContain("0 runs");
+    expect(h).not.toContain("organisations");
+  });
+
+  it("puts the trial above the buy button", () => {
+    const h = render({ trial: { turns: 6, budgetCents: 40, used: false } });
+    const trialAt = h.indexOf("/packs/senior-engineer/trial");
+    const buyAt = h.indexOf("/packs/senior-engineer/acquire");
+    expect(trialAt).toBeGreaterThan(-1);
+    expect(buyAt).toBeGreaterThan(-1);
+    expect(trialAt).toBeLessThan(buyAt);
+    expect(h.indexOf("Try it")).toBeLessThan(h.indexOf("Buy for"));
+  });
+
+  it("renders the permissions rail from stored tools", () => {
+    const h = render({ extras: { permissions: [
+      "bash, write, edit — runs unattended",
+      "connects to notion (https://mcp.notion.com)",
+      "web: limited to example.com",
+    ] } });
+    expect(h).toContain("bash, write, edit — runs unattended");
+    expect(h).toContain("connects to notion (https://mcp.notion.com)");
+    expect(h).toContain("web: limited to example.com");
+  });
+
+  it("shows a built-on line without changing the byline", () => {
+    const h = render({ extras: { builtOn: "Dietrich Gebert, Cursor, Poteto — MIT" } });
+    expect(h).toContain("Built on");
+    expect(h).toContain("Dietrich Gebert, Cursor, Poteto — MIT");
+    expect(h).toContain("by typeui.sh");
+  });
+
+  it("leaves out the built-on line when nothing upstream is credited", () => {
+    expect(render()).not.toContain("Built on");
+  });
+
+  it("puts the role from P.ROLES in the breadcrumb", () => {
+    const h = render();
+    expect(h).toContain("Workers");
+    expect(h).toContain(`<a href="/?q=engineer">Engineer</a>`);
+    expect(h).toContain("Senior Engineer");
+  });
+
+  it("drops the role out of the breadcrumb when a pack has none", () => {
+    const h = render({ pack: { role: "" } });
+    expect(h).toContain("Workers");
+    expect(h).not.toContain("?q=engineer");
+  });
+
+  it("no longer promises that the method stays secret", () => {
+    const h = render();
+    expect(h).not.toContain("never how it was told to do it");
+    expect(h).toContain("the method leaves with you");
+  });
+
+  it("claims the export and no third-party agents", () => {
+    const h = render();
+    expect(h).toContain(h2("Works with")); // it is a claim we can defend, so it always renders
+    const from = h.indexOf(h2("Works with"));
+    const block = h.slice(from, h.indexOf("<h2", from + 1));
+    expect(block).toContain("ant apply");
+    expect(block).toContain("on a model you pick");
+    for (const name of ["Cursor", "Codex", "Windsurf", "Copilot", "logo"]) expect(block).not.toContain(name);
+  });
+
+  it("counts the folder in what's inside", () => {
+    const h = render({ extras: { files: { files: 4, skills: 2, tree: [
+      "agent.md", "skills/review/SKILL.md", "skills/triage/SKILL.md", "README.md",
+    ] } } });
+    expect(h).toContain("What's inside");
+    expect(h).toContain("skills/review/SKILL.md");
+    expect(h).toMatch(/4 files/);
+    expect(h).toMatch(/2 skills/);
+  });
+
+  it("dates the listing from listed_at and the last publish", () => {
+    const h = render({
+      pack: { listed_at: "2026-03-04T05:06:07.000Z" },
+      extras: { updatedAt: "2026-05-06T07:08:09.000Z" },
+    });
+    expect(h).toContain("2026-03-04");
+    expect(h).toContain("2026-05-06");
+  });
+
+  it("states the refund window beside the price", () => {
+    expect(render()).toContain("14 days");
+  });
+
+  it("does not offer a refund window to somebody who already owns it", () => {
+    const h = render({ owned: true });
+    expect(h).not.toContain("14 days");
+    expect(h).toContain("Yours already");
+    expect(h).toContain("/packs/senior-engineer/export?format=md");
+  });
+
+  it("offers no export to somebody who has not bought it", () => {
+    expect(render()).not.toContain("/export");
+  });
+});
+
+/**
+ * `hasListing` is the gate the route uses to decide whether there is a
+ * listing to hand the page at all, so it has to be right about emptiness —
+ * including the kinds of emptiness the columns actually hold: `''` before
+ * anybody wrote anything, and malformed JSON after somebody did.
+ */
+describe("hasListing", () => {
+  it("is false for a pack nobody has written a listing for", () => {
+    expect(hasListing(packRow())).toBe(false);
+  });
+
+  it("is false for a description that is only whitespace", () => {
+    expect(hasListing(packRow({ description: "   \n  " }))).toBe(false);
+  });
+
+  it("is true once any one of the six fields has something in it", () => {
+    expect(hasListing(packRow({ description: "What it actually does." }))).toBe(true);
+    expect(hasListing(packRow({ use_cases: JSON.stringify(["Review a branch"]) }))).toBe(true);
+    expect(hasListing(packRow({ limitations: JSON.stringify(["Needs a diff"]) }))).toBe(true);
+    expect(hasListing(packRow({ faq: JSON.stringify([{ q: "?", a: "." }]) }))).toBe(true);
+    expect(hasListing(packRow({ scenarios: JSON.stringify([{ brief: "b", reached: [], output: "o" }]) }))).toBe(true);
+    expect(hasListing(packRow({ requirements: JSON.stringify(["A git remote"]) }))).toBe(true);
+  });
+
+  it("is false for an empty JSON array, which is a written-down nothing", () => {
+    expect(hasListing(packRow({ use_cases: "[]", faq: "[]" }))).toBe(false);
+  });
+
+  it("is false for a column that does not parse", () => {
+    expect(hasListing(packRow({ use_cases: "not json at all" }))).toBe(false);
   });
 });

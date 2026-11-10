@@ -1,5 +1,7 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
+import { ROLES } from "./platform.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
+import type { Listing } from "./listing.js";
 
 export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -139,6 +141,18 @@ min-height:2.5rem;display:flex;align-items:center}
 .menu>div a[aria-current=page]{background:color-mix(in oklab,var(--primary) 18%,transparent);font-weight:600}
 .menu>div form{margin-top:var(--s1);border-top:1px solid var(--line);padding-top:var(--s1)}
 .menu>div .btn{width:100%;justify-content:flex-start}
+
+/* ---------------------------------------------------------- breadcrumb
+   A nav landmark, so it has to undo what the chrome's own nav rules do to
+   one: no auto margin pushing it right, and links sized as text rather than as
+   44px tap targets, because a breadcrumb is a sentence you read before it is
+   a control you press.                                                      */
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);
+margin:var(--s5) 0 0;font-size:var(--t1);color:var(--muted)}
+.crumbs a{display:inline-flex;align-items:center;min-width:0;min-height:2rem;
+padding:0 var(--s1);margin:0 calc(var(--s1) * -1);border-radius:var(--s1);color:var(--muted)}
+.crumbs a:hover{color:var(--ink);background:none;text-decoration:underline}
+.crumbs [aria-current=page]{color:var(--ink)}
 
 /* ---------------------------------------------------------------- icons */
 .ic{display:inline-flex;align-items:center;gap:var(--s2);position:relative}
@@ -323,6 +337,9 @@ padding:var(--s4);box-shadow:var(--plane1);margin:0 0 var(--s4)}
 min-width:3.5rem;text-align:right}
 .chips{display:flex;flex-wrap:wrap;gap:var(--s2);margin:var(--s2) 0 0}
 .chips .tag b{font-weight:600;color:var(--ink)}
+/* A file manifest holds paths longer than a phone is wide, and the page is
+   the thing that must not slide sideways. The path breaks; the page does not. */
+.chips.paths .tag{max-width:100%;word-break:break-all}
 .ctx .fine{font-size:var(--t1);color:var(--muted);margin:var(--s3) 0 0;line-height:1.5}
 
 /* ---------------------------------------------------------------- trace */
@@ -601,33 +618,109 @@ ${found === 0 && !query ? `<p class="lede">The shelf is empty.</p>` : `<div clas
     { balance, viewer });
 }
 
+/**
+ * Everything the pack page says that is not already a column on the pack.
+ *
+ * One object rather than nine more positional parameters, and deliberately
+ * open: the creator card, the rating, the save and the vote land in here as
+ * they are built, without this signature moving again.
+ */
+export type PackPageExtras = {
+  /** The live listing, or null when the pack has none — `hasListing` decides. */
+  listing: Listing | null;
+  /** Counted from our own tables: completed non-trial runs, owning orgs, version. */
+  stats: { runs: number; buyers: number; version: number };
+  /** `permissionSummary(...).lines` — derived from what the pack stored, not declared. */
+  permissions: string[];
+  /** The manifest of the version a buyer would get. */
+  files: { files: number; skills: number; tree: string[] };
+  /** When the latest version was published. */
+  updatedAt: string | null;
+  /** Whose work this rests on, and under what licence. Not the byline. */
+  builtOn: string | null;
+  /** The purchase refund window, in days, so the buy card can state it. */
+  refundDays: number;
+};
+
+/** A stored timestamp as a date. The hour a curator clicked is not news. */
+const day = (iso: string): string => iso.slice(0, 10);
+
+const bullets = (items: string[], cls = ""): string =>
+  `<ul${cls ? ` class="${cls}"` : ""}>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
+
+/** A stored block of prose, split on blank lines. Authors write paragraphs. */
+const paragraphs = (text: string): string =>
+  text.split(/\n{2,}/).map((t) => t.trim()).filter(Boolean)
+    .map((t) => `<p>${esc(t)}</p>`).join("");
+
+/**
+ * Home › Workers › Role › Pack.
+ *
+ * The role segment is a link into the shelf filtered by that role, which is
+ * the page it claims to be a step down from. A pack with no role loses the
+ * segment rather than showing an empty one.
+ */
+function breadcrumb(p: PackRow): string {
+  const role = ROLES.find((r) => r.id === p.role);
+  const sep = ` <span aria-hidden="true">›</span> `;
+  return `<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a>${sep}<span>Workers</span>${
+    role ? `${sep}<a href="/?q=${encodeURIComponent(role.id)}">${esc(role.name)}</a>` : ""
+  }${sep}<span aria-current="page">${esc(p.name)}</span></nav>`;
+}
+
+/**
+ * What a buyer is buying.
+ *
+ * It used to be a name, a tagline and a price. Every block below is
+ * conditional on having something to say, because almost every pack on the
+ * shelf has no listing content yet and a heading over an empty box is worse
+ * than no heading at all — that is the single rule this function is built
+ * around, not a detail of it.
+ */
 export function packPage(
   p: PackRow, v: PackVersionRow | undefined, owned: boolean, models: string[], balance: number,
-  err?: string, viewer: Viewer = null,
-  trial: { turns: number; budgetCents: number; used: boolean } | null = null,
-  isAuthor = false,
+  err: string | undefined, viewer: Viewer,
+  trial: { turns: number; budgetCents: number; used: boolean } | null,
+  isAuthor: boolean,
+  extras: PackPageExtras,
 ): string {
   const pinned: string[] = JSON.parse(p.pinned_models);
   const choices = (pinned.length ? pinned : models);
+  const { listing, stats, permissions, files, updatedAt, builtOn, refundDays } = extras;
+  const free = p.price_points === 0;
   return layout(p.name, `
 ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+${breadcrumb(p)}
 <h1>${esc(p.name)}</h1>
 <p class="lede">${esc(p.tagline)}</p>
-<div class="row" style="margin-bottom:18px">
+<div class="row" style="margin-bottom:var(--s2)">
   <span class="tag">by ${esc(p.author)}</span>
-  <span class="tag">${p.price_points === 0 ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
+  <span class="tag">${free ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
 </div>
-<div class="note">You see everything it does, never how it was told to do it.${isAuthor ? " Except you — you wrote it." : ""}</div>
+${builtOn ? `<p class="lede" style="font-size:var(--t1);margin-bottom:var(--s4)">Built on ${esc(builtOn)}.</p>` : ""}
+<div class="note">You see everything it does, and how it was told to do it — the method leaves with you.${isAuthor ? " You wrote this one; this is the page a buyer reads." : ""}</div>
 ${v ? `
 <h2>${owned ? "Start a run" : "Acquire and run"}</h2>
+<p class="lede" style="font-size:var(--t2)">${owned
+  ? `Yours already. The runs cost points, and every run shows what it cost, to the token.`
+  : free
+    ? `Free. Nothing to buy — you spend points on the run, and the run shows what it cost, to the token.`
+    : `${esc(pts(p.price_points * 1000))} once and it is yours; the runs cost points on top, and every run shows what it cost, to the token. Refundable for ${refundDays} days.`}</p>
+${!owned && trial ? (trial.used
+  ? `<p class="lede" style="font-size:var(--t2)">You have already used your trial of this pack.</p>`
+  : `<div class="note" style="border-color:var(--accent);background:color-mix(in oklab,var(--accent) 9%,transparent)">
+  <strong>Try it on your own brief first.</strong> ${trial.turns} turns, ${esc(pts(trial.budgetCents))}, and you keep the output.
+  <form method="post" action="/packs/${esc(p.slug)}/trial" class="inline">
+    <button class="btn ghost" type="submit" style="margin-left:var(--s3)">Try it — ${trial.turns} turns</button></form>
+</div>`) : ""}
 <form method="post" action="${owned ? "/runs" : `/packs/${esc(p.slug)}/acquire`}">
   <input type="hidden" name="packVersionId" value="${esc(v.id)}">
   <div class="row">
     <label>Model <select name="model">${choices.map((m) => `<option value="${esc(m)}"${m === p.model ? " selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
-    <button class="btn" type="submit">${owned ? "Start a run" : p.price_points === 0 ? "Get it free and run" : `Buy for ${pts(p.price_points * 1000)} and run`}</button>
+    <button class="btn" type="submit">${owned ? "Start a run" : free ? "Get it free and run" : `Buy for ${pts(p.price_points * 1000)} and run`}</button>
   </div>
   <details class="repo">
     <summary>Give it a repository to read</summary>
@@ -643,18 +736,59 @@ ${v ? `
     records the URL, not the credential. Revoke it at GitHub when you are done; that is
     the only guarantee worth having. Leave blank for a public repo.</p>
   </details>
-  ${pinned.length ? `<p class="lede" style="margin-top:10px;font-size:14px">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
-</form>
-${!owned && trial ? (trial.used
-  ? `<p class="lede" style="margin-top:14px;font-size:14px">You have already used your trial of this pack.</p>`
-  : `<h2>Or try it first</h2>
-<p class="lede" style="font-size:14px">${trial.turns} turns, ${esc(pts(trial.budgetCents))}, your own brief. You keep the output.</p>
-<form method="post" action="/packs/${esc(p.slug)}/trial">
-  <button class="btn ghost" type="submit">Try it — ${trial.turns} turns</button>
-</form>`) : ""}` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
-${owned ? `<h2>Take it with you</h2>
-<p class="lede" style="font-size:14px">An agent definition <code>ant apply</code> takes directly. The author's instructions are inside it.</p>
-<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export" title="Download ${esc(p.slug)}.md">${icon("download", `Download ${p.slug}.md`)}</a></p>` : ""}
+  ${pinned.length ? `<p class="lede" style="margin-top:var(--s3);font-size:var(--t2)">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
+</form>` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
+${stats.runs > 0 || stats.buyers > 0 ? `<div class="meters" style="margin-top:var(--s5)">
+  ${stats.runs > 0 ? `<div class="meter"><div class="k">${icon("runs", "Runs")}</div>
+    <div class="v">${stats.runs.toLocaleString("en-US")}</div></div>` : ""}
+  ${stats.buyers > 0 ? `<div class="meter"><div class="k">Owning organisations</div>
+    <div class="v">${stats.buyers.toLocaleString("en-US")}</div></div>` : ""}
+</div>` : ""}
+<h2>Works with</h2>
+<p class="lede" style="font-size:var(--t2)">It runs here, on a model you pick — nothing to install, and no vendor's
+release to keep in step with. It leaves as one <code>.md</code> file that <code>ant apply</code> takes directly, so
+the method is portable even though the runtime is ours. We make no claim about other people's agents, because
+we do not test against them.</p>
+${owned ? `<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export?format=md" title="Download ${esc(p.slug)}.md">${icon("download", `Download ${p.slug}.md`)}</a></p>` : ""}
+${listing && listing.description.trim() ? `<h2>What it does</h2>
+${paragraphs(listing.description)}` : ""}
+${listing && listing.useCases.length ? `<h2>What you'd hire it for</h2>
+${bullets(listing.useCases)}` : ""}
+${listing && listing.scenarios.length ? `<h2>What a session looks like</h2>
+<p class="lede" style="font-size:var(--t2)">Written examples, not recorded runs. Nobody's real brief, repository or
+output appears here.</p>
+${listing.scenarios.map((s) => `<div class="card" style="margin-bottom:var(--s4)">
+  <h3>${esc(s.brief)}</h3>
+  ${s.reached.length ? `<div class="chips">${s.reached.map((r) => `<span class="tag">${esc(r)}</span>`).join("")}</div>` : ""}
+  ${s.output ? `<pre style="white-space:pre-wrap;word-break:break-word;font-size:var(--t2);line-height:1.5;margin:var(--s3) 0 0">${esc(s.output)}</pre>` : ""}
+</div>`).join("")}` : ""}
+${files.files > 0 ? `<h2>What's inside</h2>
+<p class="lede" style="font-size:var(--t2)">${files.files} ${files.files === 1 ? "file" : "files"}${
+  files.skills > 0 ? `, ${files.skills} ${files.skills === 1 ? "skill" : "skills"}` : ""
+} in the version you would get.</p>
+<div class="chips paths">${files.tree.slice(0, 40).map((path) => `<span class="tag">${esc(path)}</span>`).join("")}${
+  files.tree.length > 40 ? `<span class="tag">+${files.tree.length - 40} more</span>` : ""
+}</div>` : ""}
+${listing && listing.limitations.length ? `<h2>Known limitations</h2>
+${bullets(listing.limitations)}` : ""}
+${listing && listing.faq.length ? `<h2>Questions people ask</h2>
+${listing.faq.map((f) => `<details class="repo"><summary>${esc(f.q)}</summary>
+  <p class="fine">${esc(f.a)}</p></details>`).join("")}` : ""}
+<h2>Before you run it</h2>
+<div class="ctx">
+  <h4>Curation</h4>
+  <p class="fine">${p.status === "listed"
+    ? `Curated by the platform${p.listed_at ? `, reviewed and listed on ${esc(day(p.listed_at))}` : ""}. We do not run a security scan and do not claim one.`
+    : `Not on the shelf — this pack is ${esc(p.status)}.`}</p>
+  <h4>Price</h4>
+  <p class="fine">${free ? "Free to acquire; you pay for the runs." : `${esc(pts(p.price_points * 1000))} one-off${p.upgrade_points > 0 ? `, ${p.upgrade_points} points for later versions` : ""}.`}</p>
+  ${listing && listing.requirements.length ? `<h4>Requires</h4>
+  ${bullets(listing.requirements, "fine")}` : ""}
+  <h4>What it may do when it runs</h4>
+  ${bullets(permissions, "fine")}
+  <h4>Version</h4>
+  <p class="fine">${v ? `Version ${v.version}` : "Not published"}${updatedAt ? `, published ${esc(day(updatedAt))}` : ""}.</p>
+</div>
 `, { balance, viewer });
 }
 

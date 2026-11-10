@@ -430,6 +430,52 @@ export async function versionTree(packVersionId: string): Promise<PackTree> {
     "SELECT path, content FROM pack_version_files WHERE pack_version_id = $1 ORDER BY path", [packVersionId]);
 }
 
+/**
+ * What is in the folder, without reading the folder.
+ *
+ * The pack page says how many files and how many skills a buyer is getting,
+ * so it needs the manifest and not the contents — a pack's files are its
+ * product, and loading every one of them to count them would mean holding the
+ * whole thing in memory to render a number. Paths only, from the version a
+ * buyer would actually get.
+ *
+ * A skill is a directory under `skills/`, the same identity `findSkillDirs`
+ * gives it, so two files in one skill count as one skill.
+ */
+export async function packFileSummary(packId: string): Promise<{ files: number; skills: number; tree: string[] }> {
+  const version = await latestVersion(packId);
+  if (!version) return { files: 0, skills: 0, tree: [] };
+  const s = await sql();
+  const rows = await s.query<{ path: string }>(
+    "SELECT path FROM pack_version_files WHERE pack_version_id = $1 ORDER BY path", [version.id]);
+  const skills = new Set<string>();
+  for (const row of rows) {
+    const m = /^skills\/([^/]+)\//.exec(row.path);
+    if (m) skills.add(m[1]!);
+  }
+  return { files: rows.length, skills: skills.size, tree: rows.map((r) => r.path) };
+}
+
+/**
+ * The `tools:` block a pack's agent.md declared.
+ *
+ * Alphabetical, because `pack_tools` keys on `(pack_id, name)` and keeps no
+ * ordinal — declaration order is not recoverable, and a stable order beats an
+ * arbitrary one for a line of prose a buyer reads twice.
+ */
+export async function packTools(packId: string): Promise<Array<{ name: string; policy: string }>> {
+  const s = await sql();
+  return s.query<{ name: string; policy: string }>(
+    "SELECT name, policy FROM pack_tools WHERE pack_id = $1 ORDER BY name", [packId]);
+}
+
+/** The MCP servers a pack wires up, so the rail can name what it connects to. */
+export async function packMcpServers(packId: string): Promise<Array<{ name: string; url: string }>> {
+  const s = await sql();
+  return s.query<{ name: string; url: string }>(
+    "SELECT name, url FROM pack_mcp_servers WHERE pack_id = $1 ORDER BY name", [packId]);
+}
+
 /** Replace a pack's folder wholesale, after checking it is publishable. */
 export async function savePackTree(packId: string, files: PackTree): Promise<{
   warnings: ReturnType<typeof checkSkills>["warnings"];

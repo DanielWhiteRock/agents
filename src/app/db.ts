@@ -459,6 +459,13 @@ const MIGRATIONS = [
   // The runtime/model generation this pack's prose was written against, so a
   // claim like "built for Claude Opus 5" can be checked rather than asserted.
   "ALTER TABLE packs ADD COLUMN built_on TEXT",
+  // `setStatus` stamps listed_at from now on, but the packs already on the
+  // shelf reached it before the column existed. created_at is the only honest
+  // value available for them — it is not the day they were listed, but it is a
+  // date they really have, and the alternative is a rail that says nothing
+  // about a curated pack. Guarded on NULL so it never overwrites a real stamp,
+  // which also makes it harmless if it is ever reapplied.
+  "UPDATE packs SET listed_at = created_at WHERE listed_at IS NULL AND status = 'listed'",
 ];
 
 /**

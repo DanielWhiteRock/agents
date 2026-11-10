@@ -12,6 +12,8 @@ import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceMillipoints, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
+import * as L from "./listing.js";
+import { permissionSummary } from "../packs/permissions.js";
 import * as V from "./views.js";
 
 const PORT = Number(process.env["PORT"] ?? 4317);
@@ -145,8 +147,26 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       ? { turns: await settingInt("trial_turns"), budgetCents: await settingInt("trial_budget_cents"),
           used: await P.hasTriedPack(ctx.orgId, p.id) }
       : null;
+    // The permissions rail is derived from what the pack stored, falling back
+    // to the platform's own policy where a pack has no tools recorded — which
+    // is every pack published before they were persisted.
+    const permissions = permissionSummary({
+      tools: await P.packTools(p.id),
+      mcpServers: await P.packMcpServers(p.id),
+      web: P.packExtras(p).web ?? {},
+      defaultPolicy: await P.destructivePolicy(),
+    }).lines;
+    const extras: V.PackPageExtras = {
+      listing: L.hasListing(p) ? L.listingOf(p) : null,
+      stats: await P.packStats(p.id),
+      permissions,
+      files: await P.packFileSummary(p.id),
+      updatedAt: v?.created_at ?? null,
+      builtOn: p.built_on,
+      refundDays: await settingInt("refund_window_days"),
+    };
     return html(res, V.packPage(p, v, owned, await models(), await bal(),
-      url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId));
+      url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));
   }
 
   const pubMatch = /^\/packs\/([a-z0-9-]+)\/publish$/.exec(path);

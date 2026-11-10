@@ -195,6 +195,47 @@ test("submitting requires a published version, and listing requires the curator"
   assert.ok((await Auth.submittedPacks()).every((p) => p.slug !== slug), "it has left the queue");
 });
 
+test("reaching the shelf stamps listed_at once, and withdrawing does not unstamp it", async () => {
+  await org("Curator");                             // first org in this database curates
+  const author = await org("Author Listed");
+  const slug = `listed-at-${++n}`;
+  await Auth.createPack(author.orgId, { ...INPUT, slug });
+  await P.publishPack(slug);
+  assert.equal((await P.getPack(slug)).listed_at, null, "a draft has never been on the shelf");
+
+  const platform = await db.platformOrgId();
+  await Auth.setStatus(platform, slug, "listed");
+  const firstListing = (await P.getPack(slug)).listed_at;
+  assert.ok(firstListing, "reaching the shelf is dated");
+
+  await Auth.setStatus(platform, slug, "unlisted");
+  assert.equal((await P.getPack(slug)).listed_at, firstListing, "withdrawing keeps the debut date");
+  await Auth.setStatus(platform, slug, "listed");
+  assert.equal((await P.getPack(slug)).listed_at, firstListing, "and relisting does not move it");
+});
+
+test("packFileSummary counts the latest version's folder, skills and all", async () => {
+  const author = await org("Author Files");
+  const slug = `files-${++n}`;
+  const pack = await Auth.createPack(author.orgId, { ...INPUT, slug });
+  assert.deepEqual(await P.packFileSummary(pack.id), { files: 0, skills: 0, tree: [] },
+    "a pack with no version has no folder to describe");
+
+  await P.savePackTree(pack.id, [
+    { path: "agent.md", content: "---\nname: X\n---\nbody" },
+    { path: "README.md", content: "read me" },
+    { path: "skills/review/SKILL.md", content: "---\nname: review\ndescription: d\n---\nhow" },
+    { path: "skills/review/notes.md", content: "notes" },
+    { path: "skills/triage/SKILL.md", content: "---\nname: triage\ndescription: d\n---\nhow" },
+  ]);
+  await P.publishPack(slug);
+  const summary = await P.packFileSummary(pack.id);
+  assert.equal(summary.files, 5);
+  assert.equal(summary.skills, 2, "a skill is a directory, not a file");
+  assert.ok(summary.tree.includes("skills/review/SKILL.md"));
+  assert.deepEqual(summary.tree, [...summary.tree].sort(), "the tree reads in path order");
+});
+
 test("withdrawing takes a pack off the shelf and leaves its buyers alone", async () => {
   const author = await org("Author Three");
   const slug = `withdraw-${++n}`;
