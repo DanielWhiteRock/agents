@@ -226,3 +226,41 @@ test("the old byline becomes the built-on line", async () => {
   const setRow = await packRow(alreadySet);
   assert.equal(setRow.built_on, "claude-sonnet-4", "a built_on that is already set is never overwritten");
 });
+
+/**
+ * Drives the trigger, not the function. Every earlier test in this file
+ * calls `Cr.claimUnownedPacks` directly, which proves the UPDATE is correct
+ * but never proves it is actually wired into `upsertCreator` for the
+ * platform org — the one thing Task 7's controller ruling overrode the
+ * brief on. `A.signUp` claims `platform_org_id` via
+ * `INSERT ... ON CONFLICT DO NOTHING`, and an earlier test in this file
+ * already signed up the first org, so no later `org()` call can ever become
+ * the platform org through the application layer. Reassigning the setting
+ * with raw SQL — the same "reach past the application layer" move
+ * `legacyPack` already uses for a shape `createPack` cannot produce — is the
+ * only way left to exercise the real branch at creators.ts:
+ * `if (input.orgId === (await platformOrgId()))`.
+ *
+ * This is deliberately the last test in the file: it overwrites the global
+ * `platform_org_id` setting for the rest of this test file's database, and
+ * nothing after it may depend on the original value.
+ */
+test("upsertCreator claims the legacy catalog when the org is the platform org", async () => {
+  const platformOrg = await org("Reassigned Platform Org");
+  const s = await sql();
+  await s.query("UPDATE settings SET value = $1 WHERE key = 'platform_org_id'", [platformOrg.orgId]);
+  assert.equal(await db.platformOrgId(), platformOrg.orgId, "the setting now points at this org");
+
+  const packId = await legacyPack({ author: "typeui.sh" });
+
+  const creator = await Cr.upsertCreator({
+    orgId: platformOrg.orgId, userId: platformOrg.userId,
+    handle: `platform-${++n}`, displayName: "Platform Studio",
+  });
+
+  const row = await packRow(packId);
+  assert.equal(row.author_org_id, platformOrg.orgId,
+    "upsertCreator for the platform org claims the legacy pack on its own, with no direct claimUnownedPacks call");
+  assert.equal(row.creator_id, creator.id);
+  assert.equal(row.built_on, "typeui.sh", "upstream credit still moves to built_on through the trigger");
+});
