@@ -845,14 +845,24 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   if (method === "GET" && path === "/curate") {
     if ((await platformOrgId()) !== ctx.orgId) throw new Au.NotTheCuratorError();
     const s2 = await sql();
-    const listed = await s2.query<{ slug: string; name: string; author: string }>(
-      "SELECT slug, name, author FROM packs WHERE status = 'listed' ORDER BY name");
+    const listed = await s2.query<{ slug: string; name: string; author: string; featured_rank: number | null }>(
+      "SELECT slug, name, author, featured_rank FROM packs WHERE status = 'listed' ORDER BY name");
     return html(res, V.curatePage({
       queue: (await Au.submittedPacks()).map((q) => ({
         slug: q.slug, name: q.name, author: q.author, tagline: q.tagline, price_points: Number(q.price_points),
       })),
-      listed, balance: await bal(), viewer,
+      listed, balance: await bal(), viewer, err: url.searchParams.get("err") ?? undefined,
     }));
+  }
+  const featuredRankMatch = /^\/packs\/([a-z0-9-]+)\/featured-rank$/.exec(path);
+  if (method === "POST" && featuredRankMatch) {
+    ownerOnly();
+    const f = await body(req);
+    const raw = (f["featuredRank"] ?? "").trim();
+    try {
+      await Au.setFeaturedRank(ctx.orgId, featuredRankMatch[1]!, raw === "" ? null : Number(raw));
+      return redirect(res, "/curate");
+    } catch (e) { return redirect(res, `/curate?err=${encodeURIComponent(msg(e))}`); }
   }
 
   // ------------------------------------------------------------- schedules

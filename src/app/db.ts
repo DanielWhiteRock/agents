@@ -527,6 +527,12 @@ const MIGRATIONS = [
   // Null until a pack is attributed to a creator record (Task 7). packs.author
   // stays as the display fallback until then, so nothing breaks on day one.
   "ALTER TABLE packs ADD COLUMN creator_id TEXT",
+  // The one number a curator can set per row on /curate. Null for every pack
+  // nobody has placed — which, with essentially no runs, ratings or votes yet
+  // across the catalog, is almost all of them. `rankPacks` puts a set rank
+  // ahead of everything else, so this is the only honest ordering signal a
+  // freshly curated shelf actually has.
+  "ALTER TABLE packs ADD COLUMN featured_rank INTEGER",
 ];
 
 /**

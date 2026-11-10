@@ -90,7 +90,7 @@ function packRow(over: Partial<PackRow> = {}): PackRow {
     author_payout_email: null, extras: "{}", created_at: "2026-01-02T03:04:05.000Z",
     ...EMPTY_COLUMNS,
     listing_approved_at: null, listing_stale_at: null, listed_at: null, built_on: null,
-    creator_id: null,
+    creator_id: null, featured_rank: null,
     ...over,
   };
 }

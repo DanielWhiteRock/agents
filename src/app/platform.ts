@@ -19,6 +19,7 @@ import { SEED_PACKS } from "../packs/seed-packs.js";
 import { composeSystemPrompt } from "../packs/wrapper.js";
 import { PLATFORM_SKILLS } from "../packs/platform-skills.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
+import { RATING_THRESHOLD } from "./social.js";
 import { exportPackMarkdown } from "../packs/export.js";
 import {
   type PackTree, assertWithinLimits, checkSkills, findCommands, findDocs, findHooks, findWorkflows,
@@ -37,7 +38,53 @@ export type PackRow = {
   listing_approved_at: string | null; listing_stale_at: string | null; listed_at: string | null; built_on: string | null;
   /** Set by Task 7's re-attribution; null for a pack nobody has claimed yet. */
   creator_id: string | null;
+  /** Curator-set shelf position, lower first; null for every pack nobody has placed. */
+  featured_rank: number | null;
 };
+
+/** The ranking inputs `rankPacks` reads beyond what's already on `PackRow`. */
+export type RankingInputs = {
+  /** Completed, non-trial runs — the same count `packStats` shows. */
+  runs: number;
+  /**
+   * The pack's average rating, or `null` whenever it would not be shown —
+   * below `RATING_THRESHOLD`, or with no ratings at all. Callers must resolve
+   * this the same way `ratingOf` does: a rating nobody can see on the page
+   * must not be able to move it on the shelf either.
+   */
+  rating: number | null;
+  /** The sum of this pack's *positive* votes only; a downvote is not usefulness. */
+  votes: number;
+};
+
+/**
+ * The shelf's order, as a pure comparator over whatever rows are handed to
+ * it — no I/O, so it is trivial to test with made-up rows and impossible to
+ * make it do a second query per pack by accident.
+ *
+ * Order: `featured_rank` ascending where a curator set one (unset packs sort
+ * after every set one); then runs, rating and votes, each descending, each a
+ * weak signal on a catalog this new; then `created_at` descending, which is
+ * also the whole ordering when a pack carries none of the above — the
+ * regression this exists to fix was "most expensive first", so with no
+ * signal at all the newest pack must win, not the priciest one.
+ */
+export function rankPacks<T extends PackRow & RankingInputs>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) => {
+    if (a.featured_rank != null || b.featured_rank != null) {
+      if (a.featured_rank == null) return 1;
+      if (b.featured_rank == null) return -1;
+      if (a.featured_rank !== b.featured_rank) return a.featured_rank - b.featured_rank;
+    }
+    if (a.runs !== b.runs) return b.runs - a.runs;
+    const ratingA = a.rating ?? -1;
+    const ratingB = b.rating ?? -1;
+    if (ratingA !== ratingB) return ratingB - ratingA;
+    if (a.votes !== b.votes) return b.votes - a.votes;
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+    return 0;
+  });
+}
 export type PackVersionRow = {
   id: string; pack_id: string; version: number; runtime_pack_id: string;
   runtime_version: string; instructions: string; created_at: string;
@@ -130,18 +177,58 @@ export async function ensureDemoOrg(): Promise<{ orgId: string; userId: string }
  * is the whole of search, and anything cleverer would be guessing at a scale
  * we do not have yet.
  */
+type RankedPackRow = PackRow & { runs: number | string; rating: number | string | null; votes: number | string };
+
+// One query, joined across every candidate pack, rather than a round trip
+// per pack: `runs` from completed non-trial runs (the same count `packStats`
+// shows), `rating` from `pack_reviews` but only once `RATING_THRESHOLD`
+// ratings exist — the same gate `ratingOf` applies, so a rating the page
+// would hide cannot move a pack on the shelf either — and `votes` summing
+// only positive values, because a downvote is not usefulness.
+const RANKING_SELECT = `
+  SELECT p.*,
+    COALESCE(rc.runs, 0) AS runs,
+    CASE WHEN COALESCE(rt.cnt, 0) >= $1 THEN rt.avg_rating ELSE NULL END AS rating,
+    COALESCE(vt.votes, 0) AS votes
+  FROM packs p
+  LEFT JOIN (
+    SELECT v.pack_id, COUNT(*) AS runs
+    FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+    WHERE r.is_trial = 0
+    GROUP BY v.pack_id
+  ) rc ON rc.pack_id = p.id
+  LEFT JOIN (
+    SELECT pack_id, COUNT(*) AS cnt, AVG(rating) AS avg_rating
+    FROM pack_reviews WHERE rating IS NOT NULL
+    GROUP BY pack_id
+  ) rt ON rt.pack_id = p.id
+  LEFT JOIN (
+    SELECT pack_id, SUM(CASE WHEN value > 0 THEN value ELSE 0 END) AS votes
+    FROM pack_votes
+    GROUP BY pack_id
+  ) vt ON vt.pack_id = p.id
+  WHERE p.status = 'listed'`;
+
 export async function listPacks(query = ""): Promise<PackRow[]> {
   const s = await sql();
   const q = query.trim();
+  let rows: RankedPackRow[];
   if (!q) {
-    return s.query<PackRow>("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_points DESC");
+    rows = await s.query<RankedPackRow>(RANKING_SELECT, [RATING_THRESHOLD]);
+  } else {
+    const like = `%${q.toLowerCase()}%`;
+    rows = await s.query<RankedPackRow>(
+      `${RANKING_SELECT}
+         AND (LOWER(p.name) LIKE $2 OR LOWER(p.tagline) LIKE $2 OR LOWER(p.author) LIKE $2
+              OR LOWER(p.tags) LIKE $2 OR LOWER(p.role) = $3)`,
+      [RATING_THRESHOLD, like, q.toLowerCase()]);
   }
-  const like = `%${q.toLowerCase()}%`;
-  return s.query<PackRow>(
-    `SELECT * FROM packs WHERE status = 'listed'
-       AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1
-            OR LOWER(tags) LIKE $1 OR LOWER(role) = $2)
-     ORDER BY price_points DESC`, [like, q.toLowerCase()]);
+  return rankPacks(rows.map((r) => ({
+    ...r,
+    runs: Number(r.runs),
+    rating: r.rating == null ? null : Number(r.rating),
+    votes: Number(r.votes),
+  })));
 }
 /**
  * What the shelf can honestly say about a pack.

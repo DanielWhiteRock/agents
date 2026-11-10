@@ -1703,13 +1703,14 @@ ${packs.map((p) => `<tr>
 
 export function curatePage(args: {
   queue: Array<{ slug: string; name: string; author: string; tagline: string; price_points: number }>;
-  listed: Array<{ slug: string; name: string; author: string }>;
-  balance: number; viewer: Viewer;
+  listed: Array<{ slug: string; name: string; author: string; featured_rank: number | null }>;
+  balance: number; viewer: Viewer; err?: string;
 }): string {
   return layout("Curate", `
 <h1>Curating the catalog</h1>
 <p class="lede">A thin curated shelf beats a full unreliable one — marketplaces die of bad inventory faster than of
 empty inventory. You are the taste.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
 <h2>Waiting for a decision</h2>
 ${args.queue.length === 0 ? `<p class="lede">Nothing submitted.</p>` : `<table><tr><th>Pack</th><th>Author</th><th class="num">Price</th><th></th></tr>
 ${args.queue.map((q) => `<tr>
@@ -1720,11 +1721,16 @@ ${args.queue.map((q) => `<tr>
     <button class="btn ghost" name="status" value="draft">Send back</button></form></td>
 </tr>`).join("")}</table>`}
 <h2>On the shelf</h2>
-<table><tr><th>Pack</th><th>Author</th><th></th></tr>
+<p class="lede">Rank sets this pack's position on the shelf, lowest first. Leave it blank to let runs, rating and
+votes decide — almost every pack, for now.</p>
+<table><tr><th>Pack</th><th>Author</th><th>Rank</th><th></th></tr>
 ${args.listed.map((l) => `<tr><td><a href="/packs/${esc(l.slug)}">${esc(l.name)}</a></td><td>${esc(l.author)}</td>
+<td><form method="post" action="/packs/${esc(l.slug)}/featured-rank" class="inline">
+  <input type="number" name="featuredRank" value="${l.featured_rank ?? ""}" style="width:4em">
+  <button class="btn ghost" style="padding:5px 10px">Save</button></form></td>
 <td><form method="post" action="/packs/${esc(l.slug)}/status" class="inline">
   <input type="hidden" name="status" value="unlisted">
   <button class="btn ghost" style="padding:5px 10px">Withdraw</button></form></td></tr>`).join("")
-  || `<tr><td colspan="3">Nothing listed.</td></tr>`}
+  || `<tr><td colspan="4">Nothing listed.</td></tr>`}
 </table>`, { balance: args.balance, viewer: args.viewer });
 }

@@ -205,6 +205,25 @@ export async function setStatus(actorOrgId: string, slug: string, status: PackSt
 }
 
 /**
+ * The curator's one knob on shelf order: a plain integer, lower first, null
+ * to clear it. Until there is real usage to rank by, this is the only honest
+ * signal a curated shelf has — so only the curator may set it, same gate as
+ * every other `/curate` action.
+ */
+export async function setFeaturedRank(actorOrgId: string, slug: string, rank: number | null): Promise<void> {
+  const pack = await P.getPack(slug);
+  if (!pack) throw new PackConflictError(`no pack at /packs/${slug}`);
+  const curator = await platformOrgId();
+  if (curator === null || curator !== actorOrgId) throw new NotTheCuratorError();
+  if (rank != null && !Number.isFinite(rank)) {
+    throw new PackConflictError("featured rank must be a finite number or empty");
+  }
+  const s = await sql();
+  await s.query("UPDATE packs SET featured_rank = $1 WHERE id = $2",
+    [rank == null ? null : Math.round(rank), pack.id]);
+}
+
+/**
  * Deleting is only for packs nobody has. Once a pack has been bought or run it
  * is part of someone else's history, so it is withdrawn rather than erased.
  */
