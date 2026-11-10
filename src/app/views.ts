@@ -1505,6 +1505,66 @@ what lets you fix a mistake without quietly rewriting work somebody paid for.</p
 /** A stored `href` a creator typed into a free-text field, or nothing. */
 const safeHref = (url: string): string => /^https?:\/\//i.test(url.trim()) ? url.trim() : "";
 
+/** `links` as stored JSON, or an empty list for anything malformed. */
+function parseLinks(json: string): Array<{ label: string; url: string }> {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+/**
+ * The form behind `GET`/`POST /creators/me` — shaped like `invitePage`: one
+ * route's own page, built and tested here rather than assembled ad hoc
+ * inside the route handler.
+ *
+ * `canEdit` mirrors the route's own `ctx.role === "owner"` check. Editing the
+ * organisation's public identity is an owner's call, the same as editing a
+ * pack — but *looking* at what is there is not, so a member who cannot save
+ * still gets the facts and a reason, never a form that would just 403 on
+ * submit.
+ */
+export function creatorEditorPage(args: {
+  creator: Pick<CreatorRow, "handle" | "display_name" | "bio" | "avatar" | "links"> | null;
+  canEdit: boolean;
+  balance: number;
+  viewer: Viewer;
+  err?: string;
+}): string {
+  const { creator: c, canEdit, err, balance, viewer } = args;
+
+  if (!canEdit) {
+    return layout(c ? c.display_name : "Creator profile", `
+<h1>${c ? esc(c.display_name) : "No creator profile yet"}</h1>
+<p class="lede">${c
+    ? "Only an owner can change this organisation's creator profile."
+    : "This organisation has not set up a creator profile yet — only an owner can do that."}</p>
+${c ? `<p><a href="/creators/${esc(c.handle)}">View the public page</a></p>` : ""}`,
+    { balance, viewer });
+  }
+
+  const linksText = c
+    ? parseLinks(c.links).map((l) => `${l.label ?? ""} | ${l.url ?? ""}`).join("\n")
+    : "";
+
+  return layout(c ? `Edit ${c.display_name}` : "Set up your creator profile", `
+<h1>${c ? "Edit your creator profile" : "Set up your creator profile"}</h1>
+<p class="lede">This is the page your packs' byline links to.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+<form method="post" action="/creators/me" class="card">
+  <p><label>Handle<br><input type="text" name="handle" value="${esc(c?.handle ?? "")}" style="width:100%" required></label>
+    <span class="tag">/creators/${esc(c?.handle || "your-handle")}</span></p>
+  <p><label>Display name<br><input type="text" name="displayName" value="${esc(c?.display_name ?? "")}" style="width:100%" required></label></p>
+  <p><label>Avatar URL<br><input type="url" name="avatar" value="${esc(c?.avatar ?? "")}" style="width:100%" placeholder="https://…"></label></p>
+  <p><label>Bio<br><textarea name="bio" style="min-height:160px">${esc(c?.bio ?? "")}</textarea></label></p>
+  <p><label>Links <span style="color:var(--muted);font-size:13px">(one per line: label | https://url)</span><br>
+    <textarea name="links" style="min-height:100px">${esc(linksText)}</textarea></label></p>
+  <button class="btn" type="submit">Save</button>
+</form>
+${c ? `<p class="lede" style="margin-top:var(--s4)"><a href="/creators/${esc(c.handle)}">View your public page</a></p>` : ""}`,
+  { balance, viewer });
+}
+
 /**
  * A creator's own page: the record every byline on the site can now point
  * at, instead of a name nobody could click through on.
@@ -1527,11 +1587,7 @@ export function creatorPage(
   balance: number,
 ): string {
   const bio = creator.bio.trim();
-  let links: Array<{ label: string; url: string }> = [];
-  try {
-    const parsed = JSON.parse(creator.links);
-    if (Array.isArray(parsed)) links = parsed;
-  } catch { /* malformed stored JSON: show no links rather than throw */ }
+  const links = parseLinks(creator.links);
   const image = creator.avatar ? heroSrc(creator.avatar) : "";
 
   return layout(creator.display_name, `

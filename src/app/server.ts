@@ -557,32 +557,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   // since "me" would otherwise parse as a handle.
   if (method === "GET" && path === "/creators/me") {
     const mine = await Cr.creatorForOrg(ctx.orgId);
-    let linksText = "";
-    if (mine) {
-      try {
-        const parsed = JSON.parse(mine.links);
-        if (Array.isArray(parsed)) {
-          linksText = parsed.map((l: { label?: string; url?: string }) => `${l.label ?? ""} | ${l.url ?? ""}`).join("\n");
-        }
-      } catch { /* malformed stored JSON: start the field blank rather than throw */ }
-    }
-    const err = url.searchParams.get("err") ?? undefined;
-    return html(res, V.layout(mine ? `Edit ${mine.display_name}` : "Set up your creator profile", `
-<h1>${mine ? "Edit your creator profile" : "Set up your creator profile"}</h1>
-<p class="lede">This is the page your packs' byline links to.</p>
-${err ? `<div class="note bad">${V.esc(err)}</div>` : ""}
-<form method="post" action="/creators/me" class="card">
-  <p><label>Handle<br><input type="text" name="handle" value="${V.esc(mine?.handle ?? "")}" style="width:100%" required></label>
-    <span class="tag">/creators/${V.esc(mine?.handle ?? "your-handle")}</span></p>
-  <p><label>Display name<br><input type="text" name="displayName" value="${V.esc(mine?.display_name ?? "")}" style="width:100%" required></label></p>
-  <p><label>Avatar URL<br><input type="url" name="avatar" value="${V.esc(mine?.avatar ?? "")}" style="width:100%" placeholder="https://…"></label></p>
-  <p><label>Bio<br><textarea name="bio" style="min-height:160px">${V.esc(mine?.bio ?? "")}</textarea></label></p>
-  <p><label>Links <span style="color:var(--muted);font-size:13px">(one per line: label | https://url)</span><br>
-    <textarea name="links" style="min-height:100px">${V.esc(linksText)}</textarea></label></p>
-  <button class="btn" type="submit">Save</button>
-</form>
-${mine ? `<p class="lede" style="margin-top:var(--s4)"><a href="/creators/${V.esc(mine.handle)}">View your public page</a></p>` : ""}`,
-    { balance: await bal(), viewer }));
+    return html(res, V.creatorEditorPage({
+      creator: mine ?? null, canEdit: ctx.role === "owner", balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined,
+    }));
   }
   if (method === "POST" && path === "/creators/me") {
     ownerOnly();

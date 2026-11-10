@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parsePackMarkdown } from "../../src/packs/import.js";
-import { packPage, catalogPage, creatorPage, type PackPageExtras } from "../../src/app/views.js";
+import { packPage, catalogPage, creatorPage, creatorEditorPage, type PackPageExtras } from "../../src/app/views.js";
 import { hasListing, type Listing } from "../../src/app/listing.js";
 import type { PackRow, PackVersionRow } from "../../src/app/platform.js";
 import type { CreatorRow } from "../../src/app/creators.js";
@@ -473,5 +473,56 @@ describe("hasListing", () => {
 
   it("is false for a column that does not parse", () => {
     expect(hasListing(packRow({ use_cases: "not json at all" }))).toBe(false);
+  });
+});
+
+// ------------------------------------------------------- the creator editor
+
+describe("the creator editor page", () => {
+  it("offers an empty form to an owner with no creator profile yet", () => {
+    const h = creatorEditorPage({ creator: null, canEdit: true, balance: 0, viewer: null });
+    expect(h).toContain("<form");
+    expect(h).toContain("Set up your creator profile");
+    expect(h).not.toContain("Edit your creator profile");
+    expect(h).not.toContain("View your public page");
+  });
+
+  it("prefills the form from an existing profile, and links to the public page", () => {
+    const h = creatorEditorPage({
+      creator: creatorRow({ bio: "Writes the method down.", links: JSON.stringify([{ label: "Site", url: "https://typeui.sh" }]) }),
+      canEdit: true, balance: 0, viewer: null,
+    });
+    expect(h).toContain("Edit your creator profile");
+    expect(h).toContain(`value="typeui"`);
+    expect(h).toContain(`value="typeui.sh"`);
+    expect(h).toContain("Writes the method down.");
+    expect(h).toContain("Site | https://typeui.sh");
+    expect(h).toContain(`<a href="/creators/typeui">View your public page</a>`);
+  });
+
+  it("shows the submitted error beside the form", () => {
+    const h = creatorEditorPage({ creator: null, canEdit: true, balance: 0, viewer: null, err: `the handle "typeui" is already taken` });
+    expect(h).toContain(`the handle &quot;typeui&quot; is already taken`);
+  });
+
+  it("gives a non-owner the facts and a reason instead of a dead form", () => {
+    const h = creatorEditorPage({ creator: creatorRow(), canEdit: false, balance: 0, viewer: null });
+    expect(h).not.toContain("<form");
+    expect(h).toContain("Only an owner can change this organisation's creator profile.");
+    expect(h).toContain(`<a href="/creators/typeui">View the public page</a>`);
+  });
+
+  it("tells a non-owner there is nothing set up yet, rather than offering a form", () => {
+    const h = creatorEditorPage({ creator: null, canEdit: false, balance: 0, viewer: null });
+    expect(h).not.toContain("<form");
+    expect(h).toContain("has not set up a creator profile yet");
+  });
+
+  it("escapes a creator's free-text fields in the form and in the read-only view", () => {
+    const evil = creatorRow({ display_name: `<script>alert(1)</script>`, handle: "evil" });
+    const editable = creatorEditorPage({ creator: evil, canEdit: true, balance: 0, viewer: null });
+    expect(editable).not.toContain("<script>alert(1)</script>");
+    const readOnly = creatorEditorPage({ creator: evil, canEdit: false, balance: 0, viewer: null });
+    expect(readOnly).not.toContain("<script>alert(1)</script>");
   });
 });
