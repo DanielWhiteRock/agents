@@ -483,7 +483,7 @@ Perspective's own brief, rendered.
 
 | Section | File | Reads as |
 |---|---|---|
-| 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` · poster | someone buried in work; four specialists walking in with their toolcases; one case open on the desk, throwing green light over the papers. See below. |
+| 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` · poster | a founder moving along an endless wall of other people's toolkits, each lighting up as he passes. Bright, delighted, loops. See below. |
 | 4 What's in a worker | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/anatomy.webp` | a solid block exploded into six stacked plates, the top one lit. A folder, not a file. |
 | 6b Somebody wrote this | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | the same frame held: the people who turned up, and what they brought. |
 | 7 It runs here | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/runs-here.webp` | a sealed enclosure with a glowing core, a measured ribbon unrolling out of it. Hosted, and metered. |
@@ -506,41 +506,37 @@ image as literal text, despite "no text" in the same prompt. Describe colour
 in words — "warm off-white", "emerald" — and say "no written characters of any
 kind". The four that did so came back clean first time.
 
-### The hero is the buyer's moment, not the author's
+### The hero is a founder spoilt for choice
 
-The person on the front page is the one with too much to do. She is at a desk
-buried in work; four specialists walk in out of the dark, each carrying their
-own toolcase; one sets hers down open on the desk and it throws green light
-across the papers. That is the product in one frame — you are not buying a
-file, you are buying somebody turning up with their method.
+Not somebody being rescued — somebody enjoying themselves. He is moving along
+a wall of other people's toolkits, each one different, each lighting up as he
+passes, and the wall does not end. The feeling is abundance, and the second
+beat is the one the economics make possible: he hires fifty, because he can.
 
 | File | What it is |
 |---|---|
-| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` | 4s, 1152×648, h264, no audio, 276KB |
-| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero-poster.webp` | first frame, 83KB |
-| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | the same frame held, for section 6b |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` | 4s loop, 1152×648, h264, no audio, 257KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero-poster.webp` | first frame, 70KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hired-fifty.webp` | fifty specialists, each with their own kit, and one delighted founder. Section 3, Roles. |
 
-**No webm.** VP9 came out 1.36× the size of the h264 on this footage — all
-those paper stacks are high-entropy detail and vp9's gains do not survive it.
-A second format that is bigger than the first is a pessimisation with extra
-steps, so there is one file. Measured, not assumed; re-measure if the footage
-changes.
+**The sweep was chosen because it loops and an arrival does not.** Our own
+Video Producer's Brief pack made that argument: an arrival needs a before and
+an after, and a seamless loop has neither. A lateral track along an endless
+wall has no before and no after by construction, which is exactly what a
+four-second loop wants.
 
-**It must not autoplay for everyone.** Our own rule, from
-`docs/design/perspective.md` and enforced by the judge: motion is a
-preference. The markup is a `<video>` with `poster`, `muted`, `playsinline`,
-`loop` and `autoplay`, wrapped so that under
-`@media (prefers-reduced-motion: reduce)` the video is hidden and the poster
-shows as a plain `<img>`. 276KB also means `preload="none"` and video only
-where the screen is wide enough to be worth it; on a phone the poster is the
-hero.
+**It still did not loop on the first encode.** The generated plate brightens
+monotonically — the wall is greener at frame 96 than at frame 0 — so cutting
+it straight gives a visible flash every four seconds. The remedy is the
+producer's own: overlap the join and cross-dissolve it rather than cut. Half a
+second of overlap, and because the content is self-similar repeating recesses,
+the dissolve is invisible. Verified by extracting the frames either side of
+the join and comparing them.
 
-**The people are generated, and that is fine here.** The frame makes no claim
-about any particular individual — it is a scene, the way a stock photograph on
-any marketing page is a scene. An avatar on a pack card is a different thing,
-because it asserts that this person made this pack, which is why those stay
-initials until somebody uploads their own face.
+257KB at crf 33 against the producer's 300KB budget. crf 35 gets to 209KB if
+the page needs the headroom; the wall mottles slightly at that setting, which
+is the trade it named.
 
-The cast is mixed by instruction rather than by luck. The first two passes
-produced five men, which is the default you get by not asking, and a default
-is still a choice once you have seen it.
+**Reduced motion still wins.** Hidden under
+`prefers-reduced-motion: reduce`, poster shown instead, `preload="none"`, and
+on a phone the poster is the hero.
