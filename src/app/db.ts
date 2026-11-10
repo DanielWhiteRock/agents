@@ -351,6 +351,44 @@ CREATE TABLE IF NOT EXISTS creators (
   verified INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
+
+-- An organisation's position on a pack, one row per org, editable forever.
+-- rating is nullable — a review can carry text with no star — but nothing in
+-- social.ts's aggregate counts a row where it is null. byline is a name
+-- chosen at submit time; an anonymous review stores no byline at all, and
+-- user_id is kept for audit only, never for display: the individual's name
+-- and email live in users, not here.
+CREATE TABLE IF NOT EXISTS pack_reviews (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  rating INTEGER CHECK (rating IS NULL OR (rating BETWEEN 1 AND 5)),
+  body TEXT NOT NULL DEFAULT '',
+  byline TEXT,
+  anonymous INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (pack_id, org_id)
+);
+
+-- A lighter signal than a review: "this looks good", needing no run at all.
+-- One vote per organisation per pack.
+CREATE TABLE IF NOT EXISTS pack_votes (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  value INTEGER NOT NULL,
+  PRIMARY KEY (pack_id, org_id)
+);
+
+-- A bookmark. One per organisation per pack; user_id is whoever last toggled it.
+CREATE TABLE IF NOT EXISTS pack_saves (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (pack_id, org_id)
+);
 `;
 
 const SUBSTITUTIONS = {
