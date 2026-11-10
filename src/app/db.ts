@@ -331,6 +331,26 @@ CREATE TABLE IF NOT EXISTS pack_listing_drafts (
   -- can tell a stale draft from one still describing what is actually live.
   source_version INTEGER
 );
+
+-- A creator: the person or org behind a pack, with a page of their own
+-- instead of a bare string in packs.author. One per organisation — the same
+-- org_id a pack's author_org_id already points to — so saving a profile
+-- twice edits one row rather than creating a second.
+CREATE TABLE IF NOT EXISTS creators (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id) UNIQUE,
+  handle TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  bio TEXT NOT NULL DEFAULT '',
+  avatar TEXT,
+  -- An array of { label, url }, stored as JSON text like pinned_models and
+  -- extras already are elsewhere in this schema.
+  links TEXT NOT NULL DEFAULT '[]',
+  -- Curator-set, nothing more: there is no self-serve verification flow.
+  verified INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
 `;
 
 const SUBSTITUTIONS = {
@@ -466,6 +486,9 @@ const MIGRATIONS = [
   // about a curated pack. Guarded on NULL so it never overwrites a real stamp,
   // which also makes it harmless if it is ever reapplied.
   "UPDATE packs SET listed_at = created_at WHERE listed_at IS NULL AND status = 'listed'",
+  // Null until a pack is attributed to a creator record (Task 7). packs.author
+  // stays as the display fallback until then, so nothing breaks on day one.
+  "ALTER TABLE packs ADD COLUMN creator_id TEXT",
 ];
 
 /**
