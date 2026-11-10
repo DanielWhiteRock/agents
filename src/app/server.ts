@@ -105,11 +105,12 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   const ownerOnly = (): void => { if (ctx.role !== "owner") throw new A.ForbiddenError(); };
 
   if (method === "GET" && path === "/") {
-    const packs = await Promise.all((await P.listPacks()).map(async (p) => {
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const packs = await Promise.all((await P.listPacks(q)).map(async (p) => {
       const v = await P.latestVersion(p.id);
       return { ...p, published: Boolean(v), owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))) };
     }));
-    return html(res, V.catalogPage(packs, await bal(), viewer));
+    return html(res, V.catalogPage(packs, await bal(), viewer, q));
   }
 
   const packMatch = /^\/packs\/([a-z0-9-]+)$/.exec(path);
@@ -279,7 +280,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     }
     return html(res, V.runPage(run, await packNameOf(run.pack_version_id), await bal(),
       run.stop_reason === "budget_reached", asks, viewer, trial,
-      (await P.runOutputs(run.id)).map((o) => ({ file_id: o.file_id, filename: o.filename, size_bytes: Number(o.size_bytes) }))));
+      (await P.runOutputs(run.id)).map((o) => ({ file_id: o.file_id, filename: o.filename, size_bytes: Number(o.size_bytes) })),
+      await P.runUsage(run.id)));
   }
 
   // Deliverables the agent wrote

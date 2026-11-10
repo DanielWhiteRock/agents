@@ -29,6 +29,7 @@ async function waitFor(predicate, what, timeoutMs = 2000) {
 }
 
 const stubRuntime = () => ({
+  countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
   publishPack: async () => ({ runtimePackId: "agt_s", version: "1", skills: [], subagents: [] }),
   ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),

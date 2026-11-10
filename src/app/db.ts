@@ -313,6 +313,10 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   "tier.enterprise.concurrency": "999",
   "tier.enterprise.seats": "500",
   allowed_models: "claude-opus-5,claude-sonnet-5,claude-haiku-4-5",
+  // How much context each model has, so the trace can say how full it is.
+  // Adjustable, because this moves and a wrong constant here would quietly
+  // mislead rather than fail.
+  model_context_windows: "claude-opus-5=200000,claude-sonnet-5=200000,claude-haiku-4-5=200000",
   // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
@@ -348,6 +352,7 @@ const MIGRATIONS = [
   "ALTER TABLE runs ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE runs ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE packs ADD COLUMN extras TEXT NOT NULL DEFAULT '{}'",
+  "ALTER TABLE pack_versions ADD COLUMN system_tokens INTEGER NOT NULL DEFAULT 0",
 ];
 
 /**

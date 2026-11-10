@@ -35,6 +35,7 @@ before(async () => {
   await db.initDb();
   await P.seedCatalog();
   P.setRuntime({
+    countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
     publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
@@ -205,6 +206,7 @@ test("a refund stops the run, and the pack cannot be run again", async () => {
   const out = await Pay.beginPurchase({ orgId, userId, packVersionId: v.id, amountCents: 9900, description: "x", ...ARGS });
 
   P.setRuntime({
+    countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
     publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
@@ -238,6 +240,7 @@ test("a run is refused when the balance is empty, and allowed once topped up", a
   const v = await P.publishPack("guardrails");
   await Pay.beginPurchase({ orgId, userId, packVersionId: v.id, amountCents: 0, description: "free", ...ARGS });
   P.setRuntime({
+    countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
     publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),

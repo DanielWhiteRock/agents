@@ -17,6 +17,7 @@ function fakeRuntime(script) {
   return {
     ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
+    countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
     publishPack: async () => ({ runtimePackId: "agt_1", version: "1", skills: [], subagents: [] }),
     createSession: async () => ({ id: "sesn_1", status: "running", stopReason: null, usage: zero }),
     sendMessage: async () => {},
@@ -118,6 +119,7 @@ test("a budget_reached recorded from the stream is not wiped by the session's nu
   // A runtime whose stream reports the cap but whose session object does not —
   // which is exactly what the live platform does.
   P.setRuntime({
+    countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
     publishPack: async () => ({ runtimePackId: "agt_b", version: "1", skills: [], subagents: [], mounts: [] }),
     ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
@@ -167,6 +169,7 @@ test("only what the platform marks downloadable is reported as a deliverable", a
   P.setRuntime({
     ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),
+    countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
     publishPack: async () => ({
       runtimePackId: "agt_o", version: "1", skills: [], subagents: [],
       mounts: [{ path: "agent.md", fileId: "file_mounted", mountPath: "pack/agent.md" }],
@@ -228,4 +231,49 @@ test("a restart closes the runs it left open, and frees the slots they held", as
   const events = await P.runEvents(run.id);
   assert.ok(events.some((e) => e.kind === "run.interrupted"),
     "and the transcript says why it stopped, rather than going silent");
+});
+
+test("the usage breakdown is measured, and context is the last request not a sum", async () => {
+  // The page exists to tell a buyer where their context and money went, so the
+  // numbers have to be the provider's, not ours. Two requests: the second's
+  // figures are what the model was holding when it last answered, and adding
+  // the two together would produce a number that means nothing.
+  P.setRuntime(fakeRuntime([{ finalCost: 3, out: 20 }]));
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  await P.reconcileOpenRuns();
+
+  P.setRuntime(fakeRuntime([{ finalCost: 3, out: 20 }]));
+  const run = await P.startRun({ orgId, userId, packVersionId: version.id });
+  await P.recordEvent(run.id, "model.usage",
+    { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 4000 });
+  await P.recordEvent(run.id, "model.usage",
+    { inputTokens: 40, outputTokens: 9, cacheReadTokens: 4000, cacheCreationTokens: 60 });
+  await P.recordEvent(run.id, "tool.use", { name: "bash", input: {}, permission: "allow" });
+  await P.recordEvent(run.id, "tool.use", { name: "bash", input: {}, permission: "allow" });
+  await P.recordEvent(run.id, "tool.use", { name: "web_search", input: {}, permission: "allow" });
+
+  const u = await P.runUsage(run.id);
+  assert.equal(u.used, 4100, "the last request's in + cache read + cache write, not the sum of both");
+  assert.equal(u.requests, 2);
+  assert.equal(u.cacheRead, 4000);
+  assert.equal(u.cacheCreation, 60);
+  assert.equal(u.systemTokens + u.conversation, u.used, "the parts account for the whole");
+  assert.ok(u.window >= u.used, "and none of it exceeds the window");
+  assert.deepEqual(u.tools, [{ name: "bash", calls: 2 }, { name: "web_search", calls: 1 }],
+    "tools are counted and ordered by how often they were reached for");
+});
+
+test("a run that has sent nothing reports an empty breakdown rather than guessing", async () => {
+  P.setRuntime(fakeRuntime([{ finalCost: 1, out: 1 }]));
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  await P.reconcileOpenRuns();
+  P.setRuntime(fakeRuntime([{ finalCost: 1, out: 1 }]));
+  const run = await P.startRun({ orgId, userId, packVersionId: version.id });
+  const u = await P.runUsage(run.id);
+  assert.equal(u.used, 0);
+  assert.equal(u.tools.length, 0);
 });

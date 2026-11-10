@@ -14,6 +14,7 @@ let n = 0;
 const email = () => `t${++n}-${Date.now()}@example.com`;
 
 const stubRuntime = () => ({
+  countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
   publishPack: async () => ({ runtimePackId: "agt_t", version: "1", skills: [], subagents: [] }),
   ensureEnvironment: async () => "env_1",
     uploadSkill: async () => ({ name: "x", skillId: "skill_platform", skillVersion: "1" }),

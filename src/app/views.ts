@@ -81,6 +81,16 @@ nav a:active{background:color-mix(in oklab,var(--ink) 12%,transparent)}
 /* Where am I: the current section is stated, not left to be inferred. */
 nav a[aria-current=page]{color:var(--ink);background:color-mix(in oklab,var(--ink) 9%,transparent);font-weight:560}
 
+/* ---------------------------------------------------------------- search
+   The first thing on the shelf, because finding the right worker is the whole
+   job and a curated catalog still has to be searchable to be a catalog.      */
+.search{display:flex;gap:.5rem;margin:0 0 1.25rem;max-width:34rem}
+.search input{flex:1;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+border-radius:.625rem;padding:.625rem .75rem;font:inherit;
+transition:border-color var(--dur-snappy) var(--spring),box-shadow var(--dur-snappy) var(--spring)}
+.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklab,var(--accent) 18%,transparent)}
+.search input::-webkit-search-cancel-button{filter:grayscale(1) opacity(.6)}
+
 /* ------------------------------------------------------------- surfaces */
 .grid{display:grid;gap:.875rem;grid-template-columns:repeat(auto-fill,minmax(18.125rem,1fr))}
 /* Column, so the action sits on the baseline across cards of different
@@ -141,11 +151,53 @@ letter-spacing:-.01em}
 .bar>i{display:block;height:100%;background:var(--accent);width:100%;transform-origin:left center;
 transform:scaleX(0);transition:transform var(--dur) var(--spring)}
 
+/* ---------------------------------------------------------------- usage
+   One bar, three segments, no legend to decode: each segment names itself in
+   the list below with its own colour swatch.                                 */
+.ctx{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;
+padding:1rem 1.125rem;box-shadow:var(--lift);margin:0 0 1rem}
+.ctx .top{display:flex;justify-content:space-between;align-items:baseline;gap:.75rem;flex-wrap:wrap}
+.ctx .top b{font-weight:620;letter-spacing:-.01em}
+.ctx .pct{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted);font-size:.875rem}
+.ctxbar{display:flex;height:.5rem;border-radius:99px;overflow:hidden;background:var(--line);margin:.625rem 0 .5rem}
+.ctxbar span{display:block;height:100%;transform-origin:left center;
+transition:flex-basis var(--dur) var(--spring)}
+.s-sys{background:var(--accent)}
+.s-talk{background:color-mix(in oklab,var(--accent) 45%,var(--muted))}
+.ctxlist{list-style:none;margin:.75rem 0 0;padding:0;display:grid;gap:.3125rem}
+.ctxlist li{display:flex;align-items:center;gap:.5rem;font-size:.875rem}
+.ctxlist .sw{width:.5rem;height:.5rem;border-radius:2px;flex:none}
+.ctxlist .nm{flex:1;min-width:0}
+.ctxlist .amt{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.ctxlist .pc{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted);
+min-width:3.5rem;text-align:right}
+.chips{display:flex;flex-wrap:wrap;gap:.375rem;margin:.5rem 0 0}
+.chips .tag b{font-weight:600;color:var(--ink)}
+.ctx h4{margin:1rem 0 .25rem;font-size:.71875rem;text-transform:uppercase;letter-spacing:.055em;
+color:var(--muted);font-weight:560}
+.ctx .fine{font-size:.8125rem;color:var(--muted);margin:.625rem 0 0;line-height:1.45}
+
 /* ---------------------------------------------------------------- trace */
 #trace{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;padding:.25rem 0;
 max-height:60vh;overflow:auto;box-shadow:var(--lift);overscroll-behavior:contain}
 .ev{padding:.5625rem .875rem;border-bottom:1px solid var(--line);font-size:.875rem;
 animation:arrive var(--dur-snappy) var(--spring) both}
+/* What was said is what the buyer paid for; everything else is instrumentation
+   and should read like it. Same transcript, two weights. */
+.ev.say{padding:.875rem 1rem;font-size:1rem;line-height:1.55}
+.ev.say .k{font-size:.8125rem;font-family:inherit;text-transform:none;letter-spacing:0;
+font-weight:600;color:var(--ink)}
+.ev.say.from-agent .k{color:var(--accent)}
+.ev.say pre{margin-top:.375rem}
+.ev.sys{padding:.375rem .875rem;font-size:.8125rem;color:var(--muted)}
+.ev.sys .k{font-size:.65625rem;opacity:.75}
+.ev.sys pre{color:var(--muted)}
+/* Hidden, not deleted: the full record is one checkbox away and the costs
+   stay visible either way, because that is the promise the product makes. */
+#trace.conversation .ev.sys{display:none}
+.tracebar{display:flex;gap:.75rem;align-items:center;justify-content:space-between;
+margin:0 0 .5rem;flex-wrap:wrap}
+.tracebar label{font-size:.8125rem;color:var(--muted);display:flex;gap:.375rem;align-items:center;cursor:pointer}
 .ev:last-child{border-bottom:0}
 .ev .k{font-family:var(--mono);font-size:.6875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.055em}
 .ev pre{margin:.25rem 0 0;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.5}
@@ -217,18 +269,32 @@ if(best)best.setAttribute('aria-current','page');})();
 </div></body></html>`;
 }
 
-export function catalogPage(packs: Array<PackRow & { published: boolean; owned: boolean }>, balance: number, viewer: Viewer = null): string {
+export function catalogPage(packs: Array<PackRow & { published: boolean; owned: boolean }>, balance: number, viewer: Viewer = null, query = ""): string {
   const cards = packs.map((p) => `<div class="card">
   <div class="spread"><h3>${esc(p.name)}</h3><span class="price">${p.price_cents === 0 ? "free" : esc(fmt(p.price_cents))}</span></div>
-  <p class="by">by ${esc(p.author)} · <span class="tag">${esc(p.model)}</span> <span class="tag">effort ${esc(p.effort)}</span></p>
+  <p class="by">by ${esc(p.author)}</p>
+  <p class="row" style="gap:6px;margin:0 0 10px"><span class="tag">${esc(p.model)}</span><span class="tag">effort ${esc(p.effort)}</span></p>
   <p>${esc(p.tagline)}</p>
   <div class="row">
     <a class="btn" href="/packs/${esc(p.slug)}">${p.owned ? "Open" : "View"}</a>
     ${p.published ? "" : `<span class="tag">not yet published</span>`}
   </div></div>`).join("");
+  const found = packs.length;
   return layout("Catalog", `<h1>Hire a worker</h1>
 <p class="lede">Each pack is an expert's method, packaged. You buy it once, it runs here on your side of the fence, and you see exactly what every run cost.</p>
-<div class="grid">${cards}</div>`, { balance, viewer });
+<form method="get" action="/" class="search" role="search">
+  <input type="search" name="q" value="${esc(query)}" autofocus
+         placeholder="Search by what you need done, or who wrote it" aria-label="Search packs">
+  <button class="btn" type="submit">Search</button>
+  ${query ? `<a class="btn ghost" href="/">Clear</a>` : ""}
+</form>
+${query
+  ? `<p class="lede" style="font-size:.875rem">${found === 0
+      ? `Nothing matches <strong>${esc(query)}</strong>. The shelf is curated, so it is short on purpose — try a broader word.`
+      : `${found} ${found === 1 ? "pack" : "packs"} matching <strong>${esc(query)}</strong>.`}</p>`
+  : ""}
+${found === 0 && !query ? `<p class="lede">The shelf is empty.</p>` : `<div class="grid">${cards}</div>`}`,
+    { balance, viewer });
 }
 
 export function packPage(
@@ -295,12 +361,74 @@ ${runs.map((r) => `<tr>
 </table>`, { balance, viewer });
 }
 
+export type RunUsageView = {
+  window: number; used: number; systemTokens: number; conversation: number;
+  cacheRead: number; cacheCreation: number; outputTokens: number;
+  skills: Array<{ name: string }>; tools: Array<{ name: string; calls: number }>;
+  requests: number;
+};
+
+const tok = (n: number): string =>
+  n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
+
+/**
+ * Where the context went, and what the worker reached for.
+ *
+ * Every number here is measured. The pack's prompt was counted against the
+ * tokenizer when it was published; the rest comes from what the provider
+ * reported per request. Nothing is split further than the measurements allow,
+ * which is why "conversation and tools" is one line rather than two.
+ */
+export function usagePanel(u: RunUsageView): string {
+  if (u.used === 0) {
+    return `<div class="ctx"><div class="top"><b>Context</b><span class="pct">nothing sent yet</span></div>
+    <p class="fine">Send a brief and this fills in: how much of the window the pack's own instructions
+    take, what the conversation adds, and every tool the worker reaches for.</p></div>`;
+  }
+  const pct = (n: number): string => `${((n / u.window) * 100).toFixed(1)}%`;
+  const free = Math.max(0, u.window - u.used);
+  const row = (cls: string, name: string, n: number, note = ""): string =>
+    `<li><i class="sw ${cls}"></i><span class="nm">${esc(name)}${note ? ` <span class="pc" style="min-width:0">${esc(note)}</span>` : ""}</span>
+     <span class="amt">${tok(n)}</span><span class="pc">${pct(n)}</span></li>`;
+  return `<div class="ctx">
+  <div class="top"><b>Context window</b>
+    <span class="pct">${((u.used / u.window) * 100).toFixed(1)}% used · ${tok(u.used)} of ${tok(u.window)}</span></div>
+  <div class="ctxbar">
+    <span class="s-sys" style="flex:0 0 ${((u.systemTokens / u.window) * 100).toFixed(2)}%"></span>
+    <span class="s-talk" style="flex:0 0 ${((u.conversation / u.window) * 100).toFixed(2)}%"></span>
+  </div>
+  <ul class="ctxlist">
+    ${row("s-sys", "The pack's instructions", u.systemTokens, "measured at publish")}
+    ${row("s-talk", "Conversation and tool definitions", u.conversation)}
+    <li><i class="sw" style="background:var(--line)"></i><span class="nm">Free</span>
+      <span class="amt">${tok(free)}</span><span class="pc">${pct(free)}</span></li>
+  </ul>
+  <h4>Cache</h4>
+  <ul class="ctxlist">
+    <li><i class="sw" style="background:var(--good)"></i><span class="nm">Read from cache</span>
+      <span class="amt">${tok(u.cacheRead)}</span><span class="pc">${u.cacheRead > 0 ? "cheap" : "—"}</span></li>
+    <li><i class="sw" style="background:var(--warn)"></i><span class="nm">Written to cache</span>
+      <span class="amt">${tok(u.cacheCreation)}</span><span class="pc">${u.cacheCreation > 0 ? "paid once" : "—"}</span></li>
+  </ul>
+  ${u.skills.length ? `<h4>Skills loaded</h4><div class="chips">
+    ${u.skills.map((k) => `<span class="tag">${esc(k.name)}</span>`).join("")}</div>` : ""}
+  <h4>Tools used</h4>
+  ${u.tools.length
+    ? `<div class="chips">${u.tools.map((t) =>
+        `<span class="tag">${esc(t.name)} <b>×${t.calls}</b></span>`).join("")}</div>`
+    : `<p class="fine">None yet — it answered from what it already knew.</p>`}
+  <p class="fine">Context is the last request's, not a running total: it is what the model was holding
+  when it last answered. ${u.requests} model ${u.requests === 1 ? "request" : "requests"} so far.</p>
+</div>`;
+}
+
 export type Ask = { event_id: string; name: string; input: string };
 
 export function runPage(
   run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = [], viewer: Viewer = null,
   trial: { turns: number; slug: string; priceCents: number } | null = null,
   outputs: Array<{ file_id: string; filename: string; size_bytes: number }> = [],
+  usage: RunUsageView | null = null,
 ): string {
   return layout(`Run · ${packName}`, `
 <h1>${esc(packName)}</h1>
@@ -346,18 +474,27 @@ ${outputs.map((o) => `<tr><td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file
 <td class="num">${(o.size_bytes / 1024).toFixed(1)} KB</td>
 <td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file_id)}" download>download</a></td></tr>`).join("")}
 </table>` : ""}
+${usage ? `<h2>Where the context and the money went</h2>${usagePanel(usage)}` : ""}
 <h2>Trace</h2>
+<div class="tracebar">
+  <label><input type="checkbox" id="onlytalk"> Just the conversation</label>
+  <span class="tag" id="evcount">0 events</span>
+</div>
 <div id="trace"></div>
 <script>
 const trace = document.getElementById('trace');
 const live = document.getElementById('live');
+const PACK = ${JSON.stringify(packName).replace(/</g, "\\u003c")};
+const SAY = {'user.message':'You','agent.text':PACK};
 const KIND = {'user.message':'user','user.decision':'user','run.metered':'meter',
   'usage.snapshot':'meter','workflow.run':'meter','workflow.phase':'meter','run.error':'err','error':'err',
   'run.interrupted':'err','run.budget_reached':'warnrow','tool.use':'warnrow','hook.decision':'warnrow',
   'run.topped_up':'meter'};
 function render(e){
   const d = document.createElement('div');
-  d.className = 'ev ' + (KIND[e.kind] || '');
+  const said = SAY[e.kind];
+  d.className = 'ev ' + (said ? 'say' + (e.kind === 'agent.text' ? ' from-agent' : '') : 'sys')
+    + ' ' + (KIND[e.kind] || '');
   let body = '';
   try {
     const p = JSON.parse(e.payload);
@@ -388,11 +525,19 @@ function render(e){
     else if (e.kind === 'raw') body = (p.payload && p.payload.type) ? p.payload.type : JSON.stringify(p).slice(0,200);
     else body = JSON.stringify(p);
   } catch { body = e.payload; }
-  d.innerHTML = '<div class="k">' + e.kind + ' · ' + e.created_at.slice(11,19) + '</div><pre></pre>';
+  d.innerHTML = '<div class="k"></div><pre></pre>';
+  d.querySelector('.k').textContent = (said || e.kind) + ' · ' + e.created_at.slice(11,19);
   d.querySelector('pre').textContent = body || '';
   trace.appendChild(d);
+  evcount.textContent = trace.children.length + ' events';
   trace.scrollTop = trace.scrollHeight;
 }
+const only = document.getElementById('onlytalk');
+const evcount = document.getElementById('evcount');
+only.addEventListener('change', () => {
+  trace.classList.toggle('conversation', only.checked);
+  trace.scrollTop = trace.scrollHeight;
+});
 const src = new EventSource('/runs/${run.id}/stream');
 src.addEventListener('open', () => { live.textContent = 'live'; });
 src.addEventListener('event', (m) => render(JSON.parse(m.data)));

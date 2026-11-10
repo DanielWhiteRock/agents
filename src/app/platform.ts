@@ -16,6 +16,7 @@ import { BudgetExhaustedError, type AgentRuntime, type PendingAsk, type RuntimeE
 import { DomainError } from "./errors.js";
 import type { PackDefinition } from "../packs/types.js";
 import { SEED_PACKS } from "../packs/seed-packs.js";
+import { composeSystemPrompt } from "../packs/wrapper.js";
 import { PLATFORM_SKILLS } from "../packs/platform-skills.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
 import { exportPackMarkdown } from "../packs/export.js";
@@ -36,6 +37,8 @@ export type PackRow = {
 export type PackVersionRow = {
   id: string; pack_id: string; version: number; runtime_pack_id: string;
   runtime_version: string; instructions: string; created_at: string;
+  /** Measured at publish against the tokenizer, so the trace need not guess. */
+  system_tokens?: number;
 };
 export type RunRow = {
   id: string; org_id: string; user_id: string; pack_version_id: string; session_id: string;
@@ -111,9 +114,26 @@ export async function ensureDemoOrg(): Promise<{ orgId: string; userId: string }
 
 // ------------------------------------------------------------------- packs
 
-export async function listPacks(): Promise<PackRow[]> {
+/**
+ * The shelf, optionally narrowed by what somebody typed.
+ *
+ * Name, tagline and author, because those are the three things a buyer knows
+ * before they know the catalog: what it is, what it does, who stands behind
+ * it. Matching is case-insensitive and substring — with a curated shelf this
+ * is the whole of search, and anything cleverer would be guessing at a scale
+ * we do not have yet.
+ */
+export async function listPacks(query = ""): Promise<PackRow[]> {
   const s = await sql();
-  return s.query<PackRow>("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_cents DESC");
+  const q = query.trim();
+  if (!q) {
+    return s.query<PackRow>("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_cents DESC");
+  }
+  const like = `%${q.toLowerCase()}%`;
+  return s.query<PackRow>(
+    `SELECT * FROM packs WHERE status = 'listed'
+       AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1)
+     ORDER BY price_cents DESC`, [like]);
 }
 export async function getPack(slug: string): Promise<PackRow | undefined> {
   const s = await sql();
@@ -243,13 +263,20 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     toMount,
   );
 
+  // Price the prompt once, here, so every run page can show where its context
+  // went without another API call. A failure to count must not fail a publish.
+  const systemTokens = await runtime()
+    .countSystemTokens(def.model, composeSystemPrompt(def, tree.length > 0 ? folderBrief(tree) : undefined))
+    .catch(() => 0);
+
   const prev = await latestVersion(pack.id);
   const vid = id("pv");
   const s = await sql();
   await s.query(
-    `INSERT INTO pack_versions (id, pack_id, version, runtime_pack_id, runtime_version, instructions, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [vid, pack.id, (prev?.version ?? 0) + 1, published.runtimePackId, published.version, pack.instructions, now()]);
+    `INSERT INTO pack_versions (id, pack_id, version, runtime_pack_id, runtime_version, instructions, system_tokens, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [vid, pack.id, (prev?.version ?? 0) + 1, published.runtimePackId, published.version, pack.instructions,
+      systemTokens, now()]);
   // Snapshot the folder and the uploaded skills, so a buyer exports what they
   // bought however the author edits it afterwards.
   for (const f of tree) {
@@ -260,6 +287,16 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     await s.query(
       "INSERT INTO pack_version_skills (pack_version_id, name, skill_id, skill_version) VALUES ($1,$2,$3,$4)",
       [vid, sk.name, sk.skillId, sk.skillVersion]);
+  }
+  // The platform's own skills are attached to every pack and are just as much
+  // a part of what the agent can do, so they belong in the record a buyer
+  // reads. Recording only the author's would have made the trace say a pack
+  // had no skills while it was busy rendering a page with one.
+  for (const [i, skillId] of (def.attachSkillIds ?? []).entries()) {
+    const name = PLATFORM_SKILLS[i]?.name ?? "platform skill";
+    await s.query(
+      "INSERT INTO pack_version_skills (pack_version_id, name, skill_id, skill_version) VALUES ($1,$2,$3,$4)",
+      [vid, name, skillId, "latest"]);
   }
   for (const m of published.mounts ?? []) {
     await s.query(
@@ -885,6 +922,76 @@ export async function hasTriedPack(orgId: string, packId: string): Promise<boole
     `SELECT 1 AS ok FROM runs r JOIN pack_versions pv ON pv.id = r.pack_version_id
      WHERE r.org_id = $1 AND pv.pack_id = $2 AND r.is_trial = 1 LIMIT 1`, [orgId, packId]);
   return Boolean(row);
+}
+
+export type RunUsage = {
+  window: number; used: number; systemTokens: number; conversation: number;
+  cacheRead: number; cacheCreation: number; outputTokens: number;
+  skills: Array<{ name: string }>; tools: Array<{ name: string; calls: number }>;
+  requests: number;
+};
+
+/**
+ * Where a run's context and money went, decomposed only as far as honesty allows.
+ *
+ * Three of these are exact because the provider reports them per request:
+ * input, cache read and cache write. The pack's own prompt is exact too — it
+ * was counted against the tokenizer at publish time, not estimated from
+ * characters. What is left over after subtracting the prompt is the tool and
+ * skill definitions plus the conversation, and it is labelled as that rather
+ * than split further, because splitting it further would mean guessing.
+ *
+ * The context figure is the last request's, not a running total: context is
+ * what the model was holding when it last answered, and summing it across
+ * requests would produce a number that means nothing.
+ */
+export async function runUsage(runId: string): Promise<RunUsage> {
+  const s = await sql();
+  const run = await getRun(runId);
+  if (!run) throw new DomainError("no such run", 404, "NotFoundError");
+  const version = await getVersion(run.pack_version_id);
+
+  const windows = new Map((await setting("model_context_windows"))
+    .split(",").map((pair) => pair.split("=") as [string, string])
+    .filter((kv) => kv.length === 2)
+    .map(([m, n]) => [m.trim(), Number(n)] as const));
+
+  const rows = await s.query<{ kind: string; payload: string }>(
+    "SELECT kind, payload FROM run_events WHERE run_id = $1 ORDER BY id", [runId]);
+
+  let cacheRead = 0, cacheCreation = 0, inputTokens = 0, requests = 0;
+  const tools = new Map<string, number>();
+  for (const r of rows) {
+    let p: Record<string, unknown>;
+    try { p = JSON.parse(r.payload) as Record<string, unknown>; } catch { continue; }
+    if (r.kind === "model.usage") {
+      // The last request's figures, because that is what the model was holding.
+      requests += 1;
+      cacheRead = Number(p["cacheReadTokens"] ?? 0);
+      cacheCreation = Number(p["cacheCreationTokens"] ?? 0);
+      inputTokens = Number(p["inputTokens"] ?? 0);
+    }
+    if (r.kind === "tool.use") {
+      const name = String(p["name"] ?? "tool");
+      tools.set(name, (tools.get(name) ?? 0) + 1);
+    }
+  }
+
+  const skills = await s.query<{ name: string }>(
+    "SELECT name FROM pack_version_skills WHERE pack_version_id = $1 ORDER BY name",
+    [run.pack_version_id]);
+
+  const used = inputTokens + cacheRead + cacheCreation;
+  const systemTokens = Math.min(Number(version?.system_tokens ?? 0), used);
+  return {
+    window: windows.get(run.model) ?? 200000,
+    used, systemTokens,
+    conversation: Math.max(0, used - systemTokens),
+    cacheRead, cacheCreation, outputTokens: run.output_tokens,
+    skills, tools: [...tools].map(([name, calls]) => ({ name, calls }))
+      .sort((a, b) => b.calls - a.calls),
+    requests,
+  };
 }
 
 /**

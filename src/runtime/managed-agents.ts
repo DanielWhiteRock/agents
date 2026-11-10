@@ -18,6 +18,8 @@ import { composeSystemPrompt } from "../packs/wrapper.js";
 export type ManagedAgentsClient = {
   /** Skills are out of beta: client.skills, not client.beta.skills. */
   skills: { create(body: any): Promise<{ id: string; latest_version_id?: string }> };
+  /** Plain Messages API, used only to price a prompt — not to run anything. */
+  messages: { countTokens(body: any): Promise<{ input_tokens: number }> };
   beta: {
     files: {
       upload(body: any): Promise<{ id: string }>;
@@ -214,6 +216,23 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       out.push({ path: f.path, fileId: uploaded.id, mountPath: requestedMount(f.path) });
     }
     return out;
+  }
+
+  /**
+   * What the pack's own instructions cost in context, measured not guessed.
+   *
+   * Counted twice and subtracted: the endpoint prices a whole request, so the
+   * difference between one carrying the system prompt and one without it is
+   * the prompt itself, with the probe message cancelling out. Counting is not
+   * billed, and this runs once per publish rather than once per page view.
+   */
+  async countSystemTokens(model: string, system: string): Promise<number> {
+    const probe = [{ role: "user" as const, content: "." }];
+    const [withSystem, without] = await Promise.all([
+      this.client.messages.countTokens({ model, system, messages: probe }),
+      this.client.messages.countTokens({ model, messages: probe }),
+    ]);
+    return Math.max(0, withSystem.input_tokens - without.input_tokens);
   }
 
   async publishPack(
