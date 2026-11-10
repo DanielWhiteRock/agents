@@ -70,7 +70,8 @@ describe("runTurn", () => {
   });
   it("reports each event to the observer as it arrives", async () => {
     const seen: string[] = [];
-    await runTurn(fakeRuntime([{ type: "agent.text", text: "a" }, idle]), "s1", "hi", (e) => seen.push(e.type));
+    await runTurn(fakeRuntime([{ type: "agent.text", text: "a" }, idle]), "s1", "hi",
+      { onEvent: (e) => { seen.push(e.type); } });
     expect(seen).toEqual(["agent.text", "status"]);
   });
 });
@@ -86,5 +87,66 @@ describe("resumeAfterDecision", () => {
     const { events } = await resumeAfterDecision(
       fakeRuntime([{ type: "agent.text", text: "carried on" }, idle]), "s1", async () => {});
     expect(events.some((e) => e.type === "agent.text" && e.text === "carried on")).toBe(true);
+  });
+});
+
+describe("intercepting a paused tool call", () => {
+  const ask = (name: string, input: unknown): RuntimeEvent =>
+    ({ type: "tool.use", eventId: "sevt_1", name, input, permission: "ask", source: "builtin" });
+
+  function interceptingRuntime(events: RuntimeEvent[], confirmed: Array<[string, string, string | undefined]>) {
+    return {
+      ...fakeRuntime(events),
+      confirmTool: vi.fn(async (_s: string, id: string, result: string, reason?: string) => {
+        confirmed.push([id, result, reason]);
+      }),
+    } as unknown as AgentRuntime;
+  }
+
+  it("answers the pause itself, so nothing is left for a human", async () => {
+    const confirmed: Array<[string, string, string | undefined]> = [];
+    const { pendingAsks } = await runTurn(
+      interceptingRuntime([ask("bash", { command: "rm -rf /" }), idle], confirmed), "s1", "go", {
+        intercept: async () => ({ result: "deny", reason: "Deletes are forbidden." }),
+      });
+    expect(confirmed).toEqual([["sevt_1", "deny", "Deletes are forbidden."]]);
+    expect(pendingAsks).toEqual([]);
+  });
+
+  it("keeps going after it allows, rather than ending the turn", async () => {
+    const confirmed: Array<[string, string, string | undefined]> = [];
+    const { events } = await runTurn(interceptingRuntime(
+      [ask("bash", { command: "ls" }), { type: "agent.text", text: "carried on" }, idle], confirmed), "s1", "go", {
+        intercept: async () => ({ result: "allow" }),
+      });
+    expect(confirmed[0]![1]).toBe("allow");
+    expect(events.some((e) => e.type === "agent.text" && e.text === "carried on")).toBe(true);
+  });
+
+  it("leaves the pause for a person when the interceptor declines to decide", async () => {
+    const confirmed: Array<[string, string, string | undefined]> = [];
+    const { pendingAsks } = await runTurn(
+      interceptingRuntime([ask("bash", { command: "ls" }), idle], confirmed), "s1", "go", {
+        intercept: async () => null,
+      });
+    expect(confirmed).toEqual([]);
+    expect(pendingAsks).toHaveLength(1);
+  });
+
+  it("reports what it decided and why, so a trace can explain itself", async () => {
+    const seen: Array<{ tool: string; result: string }> = [];
+    await runTurn(interceptingRuntime([ask("write", { file_path: "/.env" }), idle], []), "s1", "go", {
+      intercept: async () => ({ result: "deny", reason: "Never touch .env." }),
+      onIntercepted: (a, d) => seen.push({ tool: a.name, result: d.result }),
+    });
+    expect(seen).toEqual([{ tool: "write", result: "deny" }]);
+  });
+
+  it("passes SessionStart context to the send, for this turn and the ones after", async () => {
+    const sent: Array<string | undefined> = [];
+    const rt = { ...fakeRuntime([idle]),
+      sendMessage: vi.fn(async (_s: string, _t: string, ctx?: string) => { sent.push(ctx); }) } as unknown as AgentRuntime;
+    await runTurn(rt, "s1", "go", { systemContext: "The client is in Berlin." });
+    expect(sent).toEqual(["The client is in Berlin."]);
   });
 });

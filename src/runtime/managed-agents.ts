@@ -268,10 +268,18 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     return toSession(raw);
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<void> {
+  async sendMessage(sessionId: string, text: string, systemContext?: string): Promise<void> {
     try {
       await this.client.beta.sessions.events.send(sessionId, {
-        events: [{ type: "user.message", content: [{ type: "text", text }] }],
+        events: [
+          { type: "user.message", content: [{ type: "text", text }] },
+          // A system.message appends privileged context for this turn and every
+          // turn after it, and the API requires it to be LAST in the request:
+          // putting it first returns "`system.message` must be the last event".
+          ...(systemContext
+            ? [{ type: "system.message", content: [{ type: "text", text: systemContext }] }]
+            : []),
+        ],
       });
     } catch (err) {
       if (isBudgetReached(err)) throw new BudgetExhaustedError(sessionId);

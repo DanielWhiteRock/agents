@@ -91,7 +91,11 @@ export interface AgentRuntime {
     mount?: Array<{ path: string; content: string }>,
   ): Promise<PublishedPack>;
   createSession(opts: CreateSessionOptions): Promise<RuntimeSession>;
-  sendMessage(sessionId: string, text: string): Promise<void>;
+  /**
+   * `systemContext` is appended as privileged context for this turn and every
+   * turn after it — how a SessionStart hook reaches the agent.
+   */
+  sendMessage(sessionId: string, text: string, systemContext?: string): Promise<void>;
   streamEvents(sessionId: string): Promise<AsyncIterable<RuntimeEvent>>;
   readSession(sessionId: string): Promise<RuntimeSession>;
   raiseBudgetTo(sessionId: string, headroomCents: bigint): Promise<RuntimeSession>;

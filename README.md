@@ -44,13 +44,40 @@ platform wrapper and the licence notice, because that is the file they run.
 | `skills/<name>/` | uploaded to the Skills API, attached to the agent, mounted at `/workspace/skills/<name>/`. The model reads the one a task calls for |
 | `agents/<name>.md` | created as its own agent and listed in `multiagent.subagents.predefined_agents`, with inline agents disabled |
 | `commands/<name>.md` | uploaded and mounted, and named in the system prompt so the agent runs it when asked for `/name` |
-| `hooks/`, `workflows/`, `docs/` | uploaded and mounted at `/mnt/session/uploads/pack/`, and described to the agent |
+| `hooks/<name>.md` | **enforced.** A `PreToolUse` hook publishes the pack with `always_ask`, and the server answers every pause from the hooks — denying what they forbid, allowing everything else at once. A `SessionStart` hook is injected as privileged context |
+| `workflows/`, `docs/` | uploaded and mounted at `/mnt/session/uploads/pack/`, and described to the agent |
 | `.claude-plugin/`, README, LICENSE | carried and exported |
 
 The runtime has fields for the first two. The rest it has no fields for, so the
 files are put on the machine and the agent is told where they are and what they
 mean — which is why `/audit` works even though no platform feature implements
 slash commands.
+
+### Hooks
+
+```markdown
+---
+name: no-shell-poking
+event: PreToolUse
+tool: bash
+match: ^\s*(ls|find|cat)\b
+action: deny
+---
+This pack does not browse the filesystem from the shell. Read the files directly.
+```
+
+Declarative on purpose: a hook is a matcher and a message, never a command we
+run — executing an author's shell on our own machine is a much larger decision
+than making hooks work. `event` is `PreToolUse` or `SessionStart`; anything else
+is refused at upload rather than accepted and ignored. A deny wins over an allow
+whatever the file order, and a call no hook mentions is allowed, because hooks
+restrict rather than gate.
+
+The enforcement is the pause itself. A tool set to `always_ask` waits for a
+confirmation, and nothing says a human has to send it — so the server answers
+from the hooks. Rules bind; nobody is blocked. Every decision is written to the
+transcript naming the hook that made it, because a denial a buyer cannot explain
+is worse than no denial.
 
 An uploaded pack is checked against Anthropic's published `SKILL.md` rules
 before it can be published: the name format, the 64- and 1024-character limits,

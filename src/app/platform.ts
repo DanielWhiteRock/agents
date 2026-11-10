@@ -10,6 +10,7 @@ import { sql } from "./sql.js";
 import { balanceCents, credit, creditAuthor, debit } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
 import { resumeAfterDecision, runTurn, type TurnResult } from "../runtime/run.js";
+import { decidePreToolUse, needsInterception, parseHooks, sessionStartContext, type Hook } from "../packs/hooks.js";
 import { cents, fromCents } from "../runtime/money.js";
 import { BudgetExhaustedError, type AgentRuntime, type PendingAsk, type RuntimeEvent } from "../runtime/types.js";
 import { DomainError } from "./errors.js";
@@ -172,10 +173,16 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
     destructivePolicy: await destructivePolicy(),
   };
+
   // The folder, if the author uploaded one. Its skills/ become real platform
   // skills; a pack with no folder still publishes from its instructions alone.
   const tree = await packTree(pack.id);
   const parsed = tree.length > 0 ? validateTree(tree) : null;
+  // A hook can only bind if the call pauses, so a pack declaring PreToolUse
+  // hooks is published with always_ask whatever the platform default is. The
+  // server answers those pauses itself, so nobody is blocked by it.
+  const hooks = tree.length > 0 ? parseHooks(tree) : [];
+  if (needsInterception(hooks)) def.destructivePolicy = "always_ask";
   const skills = parsed?.skills ?? [];
   const subagents = (parsed?.subagents ?? []).map((sa) => {
     const meta = readFrontMatterMeta(sa.file.content);
@@ -274,6 +281,19 @@ export async function versionMounts(packVersionId: string): Promise<MountedFile[
     "SELECT path, file_id, mount_path FROM pack_version_mounts WHERE pack_version_id = $1 ORDER BY path",
     [packVersionId]);
   return rows.map((r) => ({ path: r.path, fileId: r.file_id, mountPath: r.mount_path }));
+}
+
+/**
+ * The hooks a run's pack version declares.
+ *
+ * Read from the version's own snapshot, so changing a pack's hooks does not
+ * silently change the rules a buyer is already running under.
+ */
+export async function runHooks(packVersionId: string): Promise<Hook[]> {
+  const tree = await versionTree(packVersionId);
+  if (tree.length === 0) return [];
+  try { return parseHooks(tree); }
+  catch { return []; }
 }
 
 /** What this pack brought beyond its skills, for the agent's own briefing. */
@@ -498,11 +518,14 @@ async function recordAsk(runId: string, a: PendingAsk): Promise<void> {
  * counts recorded only at the end leave the spend meter at zero for the whole
  * of a two-minute run.
  */
-function observe(runId: string, e: RuntimeEvent): void {
+function observe(runId: string, e: RuntimeEvent, recordAsks = true): void {
   serial(runId, async () => {
     const s = await sql();
     await recordEvent(runId, e.type, e);
-    if (e.type === "tool.use" && e.permission === "ask") {
+    // With hooks enforcing, the turn loop answers every pause itself, so
+    // recording one here would show the buyer a prompt for a decision already
+    // made.
+    if (recordAsks && e.type === "tool.use" && e.permission === "ask") {
       await recordAsk(runId, { eventId: e.eventId, name: e.name, input: e.input });
     }
     if (e.type === "usage.snapshot") {
@@ -564,6 +587,34 @@ async function meter(runId: string, result: TurnResult): Promise<{ billedCents: 
   return { billedCents: billed, authorCents: authorMilli };
 }
 
+/**
+ * Enforcement, wired into the turn loop.
+ *
+ * With PreToolUse hooks a pack is published with always_ask, so every tool call
+ * pauses. The server answers each pause from the hooks — denying what they
+ * forbid and allowing everything else at once — so the rules bind without a
+ * person waiting on anything. Each decision is written to the transcript naming
+ * the hook that made it, because a denial the buyer cannot explain is worse
+ * than no denial.
+ */
+function interception(runId: string, hooks: Hook[]): {
+  intercept?: (ask: PendingAsk) => Promise<{ result: "allow" | "deny"; reason?: string } | null>;
+  onIntercepted?: (ask: PendingAsk, d: { result: "allow" | "deny"; reason?: string }) => void;
+} {
+  if (!needsInterception(hooks)) return {};
+  return {
+    intercept: async (ask) => decidePreToolUse(hooks, { tool: ask.name, input: ask.input }),
+    onIntercepted: (ask, decision) => {
+      serial(runId, async () => {
+        await recordEvent(runId, "hook.decision", {
+          tool: ask.name, result: decision.result,
+          ...(decision.reason ? { reason: decision.reason } : {}),
+        });
+      });
+    },
+  };
+}
+
 async function onBudgetExhausted(runId: string, err: unknown): Promise<boolean> {
   if (!(err instanceof BudgetExhaustedError)) return false;
   const s = await sql();
@@ -590,7 +641,17 @@ export async function sendTurn(runId: string, text: string, onEvent?: (e: Runtim
   await recordEvent(runId, "user.message", { text });
   draining.add(runId);
   try {
-    const result = await runTurn(runtime(), run.session_id, text, (e) => { observe(runId, e); onEvent?.(e); });
+    const hooks = await runHooks(run.pack_version_id);
+    // SessionStart context goes with the first turn only: it is appended as
+    // privileged context and persists for every turn after it.
+    const context = run.turn_count === 0 ? sessionStartContext(hooks) : null;
+
+    const enforcing = needsInterception(hooks);
+    const result = await runTurn(runtime(), run.session_id, text, {
+      onEvent: (e) => { observe(runId, e, !enforcing); onEvent?.(e); },
+      ...(context ? { systemContext: context } : {}),
+      ...interception(runId, hooks),
+    });
     const { billedCents, authorCents } = await meter(runId, result);
     return { run: (await getRun(runId))!, exhausted: false, billedCents, authorCents };
   } catch (err) {
@@ -635,8 +696,11 @@ export async function decide(
       return (await getRun(runId))!;
     }
     draining.add(runId);
-    const result = await resumeAfterDecision(runtime(), run.session_id, confirm,
-      (e) => { observe(runId, e); onEvent?.(e); });
+    const resumeHooks = await runHooks(run.pack_version_id);
+    const result = await resumeAfterDecision(runtime(), run.session_id, confirm, {
+      onEvent: (e) => { observe(runId, e, !needsInterception(resumeHooks)); onEvent?.(e); },
+      ...interception(runId, resumeHooks),
+    });
     await meter(runId, result);
   } catch (err) {
     if (!(await onBudgetExhausted(runId, err))) {

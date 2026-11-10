@@ -313,3 +313,19 @@ describe("mounting the pack folder", () => {
     expect(fake.beta.sessions.create.mock.calls[0]![0].resources).toBeUndefined();
   });
 });
+
+describe("sending a turn with privileged context", () => {
+  it("puts system.message last, which the API requires", async () => {
+    await runtime.sendMessage("s1", "do the thing", "House rule: quote GBP.");
+    const events = fake.beta.sessions.events.send.mock.calls[0]![1].events;
+    // Putting it first returns 400 "`system.message` must be the last event".
+    expect(events.map((e: { type: string }) => e.type)).toEqual(["user.message", "system.message"]);
+    expect(events[1].content[0].text).toBe("House rule: quote GBP.");
+  });
+
+  it("sends the message alone when there is no context to add", async () => {
+    await runtime.sendMessage("s1", "do the thing");
+    expect(fake.beta.sessions.events.send.mock.calls[0]![1].events.map((e: { type: string }) => e.type))
+      .toEqual(["user.message"]);
+  });
+});
