@@ -69,6 +69,7 @@ export function layout(
   const v = opts.viewer;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico" type="image/svg+xml">
 <title>${esc(title)} · agents.alphaceo.ai</title><style>${CSS}</style></head><body>
 <header class="top"><div class="wrap">
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
@@ -537,9 +538,11 @@ ${justCreated ? `<div class="note" style="border-color:var(--good);background:co
 <p class="lede" style="font-size:14px">Endpoint and authentication:</p>
 <pre class="card" style="white-space:pre-wrap;word-break:break-all;font-size:13px">${esc(base)}/mcp
 Authorization: Bearer &lt;your token&gt;</pre>
-<p class="lede" style="font-size:14px">Six tools: <code>search_packs</code>, <code>pack_details</code>,
-<code>my_library</code>, <code>install_pack</code>, <code>list_runs</code>, <code>run_trace</code>.
-Nothing here spends money — buying needs a browser, so <code>install_pack</code> hands back a link instead.</p>
+<p class="lede" style="font-size:14px">Seven tools: <code>search_packs</code>, <code>pack_details</code>,
+<code>my_library</code>, <code>install_pack</code>, <code>export_pack</code>, <code>list_runs</code>,
+<code>run_trace</code>.
+Nothing here spends money — buying needs a browser, so <code>install_pack</code> hands back a link instead.
+Running a pack you already own needs the browser too, for now.</p>
 
 <h2>Tokens</h2>
 <table><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>

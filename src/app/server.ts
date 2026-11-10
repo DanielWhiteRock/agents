@@ -882,6 +882,16 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method ?? "GET";
 
+  // Inline, so there is no static file to serve and no 404 on every page load.
+  if (method === "GET" && path === "/favicon.ico") {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">`
+      + `<rect width="32" height="32" rx="7" fill="#11110f"/>`
+      + `<circle cx="16" cy="16" r="7" fill="none" stroke="#8fcbb0" stroke-width="2.5"/>`
+      + `<circle cx="16" cy="16" r="2.5" fill="#8fcbb0"/></svg>`;
+    res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "max-age=86400" });
+    return void res.end(svg);
+  }
+
   if (method === "GET" && path === "/healthz") {
     // Before the session gate: a health check has no cookie.
     const s2 = await sql();
