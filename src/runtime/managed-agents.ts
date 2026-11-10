@@ -8,7 +8,7 @@ import { parseUsage } from "./usage.js";
 import {
   type AgentRuntime, type CreateSessionOptions, type PublishedPack,
   type RuntimeEvent, type RuntimeSession, type SessionStatus, type SkillUpload, type ToolDecision,
-  type PublishedSkill, type PublishedSubagent, type SubagentUpload,
+  type MountedFile, type PublishedSkill, type PublishedSubagent, type SubagentUpload,
   BudgetExhaustedError, BudgetRemovalForbiddenError, BudgetRequiredError,
 } from "./types.js";
 import type { PackDefinition } from "../packs/types.js";
@@ -19,6 +19,7 @@ export type ManagedAgentsClient = {
   /** Skills are out of beta: client.skills, not client.beta.skills. */
   skills: { create(body: any): Promise<{ id: string; latest_version_id?: string }> };
   beta: {
+    files: { upload(body: any): Promise<{ id: string }> };
     environments: { create(body: any): Promise<{ id: string }> };
     agents: { create(body: any): Promise<{ id: string; version: number }> };
     sessions: {
@@ -39,6 +40,20 @@ const DESTRUCTIVE = ["bash", "write", "edit"] as const;
 
 /** The platform caps a subagents.predefined_agents list at 20. */
 export const MAX_SUBAGENTS = 20;
+
+/**
+ * Where a pack's non-skill files actually end up.
+ *
+ * A requested mount_path is advisory: the platform places uploads under
+ * /mnt/session/uploads/<requested>. So we ask for a bare `pack/...` and the
+ * real root is the constant below — which is what the agent is told. Telling it
+ * the path we asked for instead of the path that exists sends it looking for
+ * files that are not there, and it will say so.
+ */
+export const UPLOAD_ROOT = "/mnt/session/uploads";
+export const PACK_MOUNT = `${UPLOAD_ROOT}/pack`;
+/** What we ask for, relative, so the rewrite lands on PACK_MOUNT. */
+const requestedMount = (path: string): string => `pack/${path}`;
 
 const STATUSES: Record<string, SessionStatus> = {
   running: "running", idle: "idle", requires_action: "requires_action", terminated: "terminated",
@@ -132,8 +147,28 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     return { name: sub.name, agentId: agent.id, version: String(agent.version) };
   }
 
+  /**
+   * Upload the pack's other files once, so every session can mount them
+   * without re-uploading. The requested mount path is advisory — the platform
+   * rewrites it — so the real location is read back from the session later and
+   * told to the agent in its prompt.
+   */
+  private async uploadMounts(files: Array<{ path: string; content: string }>): Promise<MountedFile[]> {
+    const { toFile } = await import("@anthropic-ai/sdk");
+    const out: MountedFile[] = [];
+    for (const f of files) {
+      const uploaded = await this.client.beta.files.upload({
+        file: await toFile(Buffer.from(f.content, "utf8"), f.path.split("/").pop() ?? "file"),
+        purpose: "agent",
+      });
+      out.push({ path: f.path, fileId: uploaded.id, mountPath: requestedMount(f.path) });
+    }
+    return out;
+  }
+
   async publishPack(
     pack: PackDefinition, skills: SkillUpload[] = [], subagents: SubagentUpload[] = [],
+    mount: Array<{ path: string; content: string }> = [],
   ): Promise<PublishedPack> {
     if (subagents.length > MAX_SUBAGENTS) {
       throw new Error(`a pack may declare at most ${MAX_SUBAGENTS} subagents; this one has ${subagents.length}`);
@@ -160,6 +195,8 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     const published: PublishedSkill[] = [];
     for (const skill of skills) published.push(await this.uploadSkill(skill));
 
+    const mounts = mount.length > 0 ? await this.uploadMounts(mount) : [];
+
     const publishedSubagents: PublishedSubagent[] = [];
     for (const sub of subagents) {
       publishedSubagents.push(await this.createSubagent(sub, pack.model, policy));
@@ -168,7 +205,7 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     const agent = await this.client.beta.agents.create({
       name: pack.name,
       model: { id: pack.model, ...(pack.effort ? { effort: pack.effort } : {}) },
-      system: composeSystemPrompt(pack),
+      system: composeSystemPrompt(pack, pack.folder),
       description: pack.tagline,
       tools,
       ...(pack.mcpServers?.length
@@ -198,7 +235,7 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     });
     return {
       runtimePackId: agent.id, version: String(agent.version),
-      skills: published, subagents: publishedSubagents,
+      skills: published, subagents: publishedSubagents, mounts,
     };
   }
 
@@ -223,6 +260,9 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       agent,
       environment_id: opts.environmentId,
       ...(opts.title ? { title: opts.title } : {}),
+      ...(opts.mounts?.length
+        ? { resources: opts.mounts.map((m) => ({ type: "file", file_id: m.fileId, mount_path: m.mountPath })) }
+        : {}),
       budget: { type: "limit", max_list_cost: budget },
     });
     return toSession(raw);

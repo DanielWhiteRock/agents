@@ -4,7 +4,9 @@ import { DomainError } from "./errors.js";
 import * as P from "./platform.js";
 import type { PackDefinition } from "../packs/types.js";
 import { parsePackMarkdown, type ParsedPack } from "../packs/import.js";
-import { normaliseTree, validateTree, type PackTree } from "../packs/tree.js";
+import {
+  findCommands, findHooks, findWorkflows, normaliseTree, validateTree, type PackTree,
+} from "../packs/tree.js";
 
 /**
  * Creating, editing, withdrawing and deleting packs — the supply side.
@@ -177,6 +179,7 @@ export async function importPack(args: {
 }): Promise<{
   pack: P.PackRow; created: boolean; parsed: ParsedPack;
   skills: string[]; subagents: string[]; inert: string[];
+  commands: string[]; hooks: string[]; workflows: string[];
   warnings: Array<{ skill: string; file: string; message: string }>;
 }> {
   // The folder is stored as a folder. Only agent.md's body becomes the system
@@ -216,6 +219,9 @@ export async function importPack(args: {
     pack: (await P.getPack(slug))!, created, parsed,
     skills: skills.map((sk) => sk.name),
     subagents: subagents.map((sa) => sa.name),
+    commands: findCommands(tree).map((c) => c.name),
+    hooks: findHooks(tree),
+    workflows: findWorkflows(tree),
     inert, warnings,
   };
 }

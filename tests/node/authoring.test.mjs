@@ -274,3 +274,66 @@ test("an exported pack can be re-imported unchanged", async () => {
     "no platform wrapper and no provenance comment smuggled into the author's text");
   assert.equal(back.pack.name, INPUT.name);
 });
+
+test("an author can pull their own pack back without buying it", async () => {
+  const { orgId } = await org();
+  const slug = `mypull-${++n}`;
+  await Auth.createPack(orgId, { ...INPUT, slug, priceCents: 24900 });
+  await P.publishPack(slug);
+  assert.equal(await P.entitled(orgId, (await P.latestVersion((await P.getPack(slug)).id)).id), false);
+  const md = await P.exportPack(orgId, slug);
+  assert.ok(md.includes(INPUT.instructions), "the author gets their own method back");
+});
+
+test("someone who neither wrote nor bought a pack still cannot export it", async () => {
+  const mine = await org();
+  const stranger = await org("Stranger");
+  const slug = `locked-${++n}`;
+  await Auth.createPack(mine.orgId, { ...INPUT, slug });
+  await P.publishPack(slug);
+  await assert.rejects(P.exportPack(stranger.orgId, slug), (e) => e.name === "NotEntitledError");
+});
+
+test("the curator can export anything, since it has to review it", async () => {
+  const author = await org("Reviewed Co");
+  const slug = `curated-${++n}`;
+  await Auth.createPack(author.orgId, { ...INPUT, slug });
+  await P.publishPack(slug);
+  const curator = await db.platformOrgId();
+  const md = await P.exportPack(curator, slug);
+  assert.ok(md.length > 0);
+});
+
+test("an author pulls back exactly what they pushed, so sync is idempotent", async () => {
+  const { orgId } = await org();
+  const slug = `idem-${++n}`;
+  const agentMd = `---\nname: Idem\nslug: ${slug}\nmodel: claude-opus-5\n---\nThe author's own words.`;
+  await Auth.importPack({ orgId, files: [
+    { path: "agent.md", text: agentMd },
+    { path: "skills/thing/SKILL.md",
+      text: "---\nname: thing\ndescription: Does it. Use when asked.\n---\nhow" },
+  ] });
+  await P.publishPack(slug);
+
+  const pulled = await P.exportPackTree(orgId, slug);
+  const definition = pulled.find((f) => f.path === "agent.md");
+  assert.equal(definition.content, agentMd, "byte for byte, not regenerated");
+  assert.ok(!definition.content.includes("alphaCEO agent platform"), "no platform wrapper in the author's own file");
+});
+
+test("a buyer's export carries the platform wrapper and the licence notice", async () => {
+  const author = await org("Seller");
+  const buyer = await org("Buyer");
+  const slug = `wrapped-${++n}`;
+  await Auth.importPack({ orgId: author.orgId, files: [
+    { path: "agent.md", text: `---\nname: Wrapped\nslug: ${slug}\nmodel: claude-opus-5\n---\nmethod` },
+  ] });
+  const v = await P.publishPack(slug);
+  await Pay.beginPurchase({ orgId: buyer.orgId, userId: buyer.userId, packVersionId: v.id,
+    amountCents: 0, description: "x", baseUrl: "http://localhost:4317" });
+
+  const pulled = await P.exportPackTree(buyer.orgId, slug);
+  const definition = pulled.find((f) => f.path === "agent.md");
+  assert.ok(definition.content.includes("alphaCEO agent platform"), "the buyer runs it with our rules on top");
+  assert.ok(definition.content.includes("not for redistribution"));
+});

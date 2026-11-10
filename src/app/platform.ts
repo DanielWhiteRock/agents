@@ -5,7 +5,7 @@
  * list_cost into a points debit and an author credit.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { id, initDb, now, setting, settingInt } from "./db.js";
+import { id, initDb, now, platformOrgId, setting, settingInt } from "./db.js";
 import { sql } from "./sql.js";
 import { balanceCents, credit, creditAuthor, debit } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -18,8 +18,12 @@ import { SEED_PACKS } from "../packs/seed-packs.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
 import { exportPackMarkdown } from "../packs/export.js";
 import {
-  type PackTree, assertWithinLimits, checkSkills, normaliseTree, readFrontMatterMeta, validateTree,
+  type PackTree, assertWithinLimits, checkSkills, findCommands, findDocs, findHooks, findWorkflows,
+  mountableFiles, normaliseTree, readFrontMatterMeta, validateTree,
 } from "../packs/tree.js";
+import { PACK_MOUNT } from "../runtime/managed-agents.js";
+import type { FolderBrief } from "../packs/wrapper.js";
+import type { MountedFile } from "../runtime/types.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
@@ -183,10 +187,15 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     };
   });
 
+  // Everything that is not a skill is uploaded and mounted, so commands,
+  // hooks, workflows and docs are actually on the machine.
+  const toMount = tree.length > 0 ? mountableFiles(tree) : [];
+
   const published = await runtime().publishPack(
-    def,
+    { ...def, folder: tree.length > 0 ? folderBrief(tree) : undefined },
     skills.map((sk) => ({ name: sk.name, files: sk.files.map((f) => ({ path: f.path, content: f.content })) })),
     subagents,
+    toMount,
   );
 
   const prev = await latestVersion(pack.id);
@@ -206,6 +215,11 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     await s.query(
       "INSERT INTO pack_version_skills (pack_version_id, name, skill_id, skill_version) VALUES ($1,$2,$3,$4)",
       [vid, sk.name, sk.skillId, sk.skillVersion]);
+  }
+  for (const m of published.mounts ?? []) {
+    await s.query(
+      "INSERT INTO pack_version_mounts (pack_version_id, path, file_id, mount_path) VALUES ($1,$2,$3,$4)",
+      [vid, m.path, m.fileId, m.mountPath]);
   }
   for (const sa of published.subagents ?? []) {
     await s.query(
@@ -252,6 +266,25 @@ export class PackTreeRejected extends DomainError {
   constructor(readonly problems: string[]) {
     super(`that pack is not publishable yet:\n- ${problems.join("\n- ")}`, 409, "PackTreeRejected");
   }
+}
+
+export async function versionMounts(packVersionId: string): Promise<MountedFile[]> {
+  const s = await sql();
+  const rows = await s.query<{ path: string; file_id: string; mount_path: string }>(
+    "SELECT path, file_id, mount_path FROM pack_version_mounts WHERE pack_version_id = $1 ORDER BY path",
+    [packVersionId]);
+  return rows.map((r) => ({ path: r.path, fileId: r.file_id, mountPath: r.mount_path }));
+}
+
+/** What this pack brought beyond its skills, for the agent's own briefing. */
+export function folderBrief(tree: PackTree): FolderBrief {
+  return {
+    root: PACK_MOUNT,
+    commands: findCommands(tree),
+    hooks: findHooks(tree),
+    workflows: findWorkflows(tree),
+    docs: findDocs(tree),
+  };
 }
 
 export async function versionSkills(packVersionId: string): Promise<Array<{
@@ -361,9 +394,11 @@ export async function startRun(args: {
 
   const budgetCents = await settingInt(args.trial ? "trial_budget_cents" : "default_run_budget_cents");
   const effort = await effortFor(model, pack.effort);
+  const mounts = await versionMounts(version.id);
   const session = await runtime().createSession({
     pack: { runtimePackId: version.runtime_pack_id, version: version.runtime_version },
     environmentId: await env(),
+    ...(mounts.length > 0 ? { mounts } : {}),
     budget: fromCents(BigInt(budgetCents)),
     title: `${pack.name} — ${args.orgId}`,
     // Only override when it differs: an override replaces the model object in
@@ -507,11 +542,17 @@ async function meter(runId: string, result: TurnResult): Promise<{ billedCents: 
   // subsidy the owner chose, not the author's problem.
   const authorMilli = await creditAuthor(version.pack_id, runId, delta);
 
+  // The session object reports stop_reason as null even at its cap, while the
+  // event stream says budget_reached. Taking the session's null here would wipe
+  // the one signal the UI needs to offer a top-up, so a reason already recorded
+  // from the stream wins over an empty one.
+  const stopReason = session.stopReason ?? run.stop_reason;
+
   await s.query(
     `UPDATE runs SET status = $1, stop_reason = $2, input_tokens = $3, output_tokens = $4,
        active_seconds = $5, list_cost_cents = $6, billed_up_to_cents = $7,
        billed_cents = billed_cents + $8 WHERE id = $9`,
-    [session.status, session.stopReason, session.usage.inputTokens, session.usage.outputTokens,
+    [session.status, stopReason, session.usage.inputTokens, session.usage.outputTokens,
       session.usage.activeSeconds, costCents, costCents, billed, runId]);
 
   for (const a of result.pendingAsks) await recordAsk(runId, a);
@@ -623,11 +664,22 @@ export async function topUp(runId: string): Promise<RunRow> {
 }
 
 /**
- * A bought pack as a file the buyer can run themselves.
+ * Who may take a copy of a pack: anyone who bought it, the organisation that
+ * wrote it, and the curator. An author being unable to pull back their own work
+ * would make the folder a one-way trip.
+ */
+export async function assertMayExport(orgId: string, pack: PackRow, packVersionId: string): Promise<void> {
+  if (pack.author_org_id === orgId) return;
+  if ((await platformOrgId()) === orgId) return;
+  await assertEntitled(orgId, packVersionId);
+}
+
+/**
+ * A pack as a file its owner can run themselves.
  *
- * Gated on entitlement, because this is the one path that hands over the
- * author's instructions — which is exactly what authors are told plainly can
- * happen, rather than promised against.
+ * This is the one path that hands over the author's instructions — which is
+ * exactly what authors are told plainly can happen, rather than promised
+ * against.
  */
 /**
  * A bought pack as a folder.
@@ -641,14 +693,21 @@ export async function exportPackTree(orgId: string, slug: string): Promise<PackT
   if (!pack) throw new Error(`no such pack: ${slug}`);
   const version = await latestVersion(pack.id);
   if (!version) throw new Error(`${pack.name} has not been published yet`);
-  await assertEntitled(orgId, version.id);
+  await assertMayExport(orgId, pack, version.id);
 
   const snapshot = await versionTree(version.id);
-  const definition = await exportPack(orgId, slug);
-  if (snapshot.length === 0) return [{ path: "agent.md", content: definition }];
+  const isAuthor = pack.author_org_id === orgId || (await platformOrgId()) === orgId;
 
-  // The definition is regenerated rather than taken from the snapshot, so the
-  // exported agent.md carries the platform wrapper and the licence notice.
+  // The author gets their own agent.md back, byte for byte, so a pull then a
+  // sync is a no-op and `status` tells the truth. A buyer gets it regenerated,
+  // carrying the platform wrapper and the licence notice — that is the file
+  // they should actually run.
+  const definition = isAuthor
+    ? snapshot.find((f) => f.path.toLowerCase() === "agent.md" || f.path.toLowerCase() === "pack.md")?.content
+      ?? (await exportPack(orgId, slug))
+    : await exportPack(orgId, slug);
+
+  if (snapshot.length === 0) return [{ path: "agent.md", content: definition }];
   return [
     { path: "agent.md", content: definition },
     ...snapshot.filter((f) => f.path.toLowerCase() !== "agent.md" && f.path.toLowerCase() !== "pack.md"),
@@ -660,7 +719,7 @@ export async function exportPack(orgId: string, slug: string): Promise<string> {
   if (!pack) throw new Error(`no such pack: ${slug}`);
   const version = await latestVersion(pack.id);
   if (!version) throw new Error(`${pack.name} has not been published yet`);
-  await assertEntitled(orgId, version.id);
+  await assertMayExport(orgId, pack, version.id);
   return exportPackMarkdown({
     slug: pack.slug, name: pack.name, tagline: pack.tagline, author: pack.author,
     model: pack.model, effort: await effortFor(pack.model, pack.effort),

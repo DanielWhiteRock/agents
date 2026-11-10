@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS pack_version_files (
   PRIMARY KEY (pack_version_id, path)
 );
 
+-- Pack files uploaded once per version and mounted into every session, so the
+-- whole folder is on the machine rather than only its skills.
+CREATE TABLE IF NOT EXISTS pack_version_mounts (
+  pack_version_id TEXT NOT NULL REFERENCES pack_versions(id),
+  path TEXT NOT NULL,
+  file_id TEXT NOT NULL,
+  mount_path TEXT NOT NULL,
+  PRIMARY KEY (pack_version_id, path)
+);
+
 -- The platform skills uploaded for a version, so a republish does not orphan
 -- them and an export can say which skills a pack shipped.
 CREATE TABLE IF NOT EXISTS pack_version_skills (
@@ -273,7 +283,9 @@ const SUBSTITUTIONS = {
 
 /** Defaults for every adjustable limit. Change the row, not the code. */
 const DEFAULT_SETTINGS: Record<string, string> = {
-  default_run_budget_cents: "50",
+  // A pack that ships a folder reads its command file, its skills and their
+  // references before it answers. 50c capped a real audit mid-sentence.
+  default_run_budget_cents: "150",
   topup_headroom_cents: "50",
   // The author's share of what a run costs, in basis points. 2000 = 20%.
   author_share_bps: "2000",
@@ -302,7 +314,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // on a pack's NEXT publish, because it is baked into the agent config.
   destructive_tool_policy: "always_allow",
   trial_turns: "3",
-  trial_budget_cents: "15",
+  // 15c was too tight once a pack ships a folder: reading its command file, two
+  // SKILL.md files and a reference costs real tokens before the agent answers.
+  trial_budget_cents: "40",
 };
 
 /**

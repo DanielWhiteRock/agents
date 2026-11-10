@@ -528,6 +528,22 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
 
   // Upload: one file or a whole folder, as JSON so it works from the browser,
   // the CLI and an agent without a multipart parser in between.
+  if (method === "GET" && path === "/api/packs") {
+    const rows = await P.listPacks();
+    const mine = await Au.myPacks(ctx.orgId);
+    const packs = await Promise.all([...rows, ...mine.filter((m) => !rows.some((r) => r.id === m.id))]
+      .map(async (p) => {
+        const v = await P.latestVersion(p.id);
+        return {
+          slug: p.slug, name: p.name, status: p.status, price_cents: p.price_cents,
+          owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
+          version: v?.version ?? null,
+        };
+      }));
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ packs }));
+  }
+
   if (method === "POST" && path === "/api/packs") {
     ownerOnly();
     const payload = (await jsonBody(req)) as { files?: unknown; slug?: unknown } | undefined;
@@ -550,6 +566,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         slug: out.pack.slug, created: out.created, status: out.pack.status,
         name: out.pack.name, unknownKeys: out.parsed.unknownKeys,
         skills: out.skills, subagents: out.subagents, carriedNotRun: out.inert,
+        commands: out.commands, hooks: out.hooks, workflows: out.workflows,
         warnings: out.warnings.map((w) => `${w.skill}/${w.file}: ${w.message}`),
       }));
     } catch (e) {

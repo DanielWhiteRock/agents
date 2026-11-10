@@ -43,6 +43,12 @@ export type PackDefinition = {
    */
   destructivePolicy?: "always_ask" | "always_allow" | "auto";
   /**
+   * What the pack brought besides skills — commands, hooks, workflows, docs —
+   * and where it is mounted. Put in the system prompt so the agent knows the
+   * files are there and what they are for.
+   */
+  folder?: import("./wrapper.js").FolderBrief | undefined;
+  /**
    * Models this pack is allowed to run on. Empty means any.
    * Exists because every extraction refusal measured in the spikes came from
    * claude-opus-5; a weaker model may simply comply.

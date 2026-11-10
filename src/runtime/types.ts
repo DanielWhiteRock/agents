@@ -28,13 +28,26 @@ export type PublishedPack = {
   skills: PublishedSkill[];
   /** The subagents created for this version, attached as predefined agents. */
   subagents: PublishedSubagent[];
+  /** Pack files uploaded once and mounted into every session of this version. */
+  mounts: MountedFile[];
 };
 
 export type PublishedSkill = { name: string; skillId: string; skillVersion: string };
 
+/**
+ * A pack file uploaded once at publish and mounted into every session.
+ *
+ * This is how commands/, hooks/, workflows/ and docs/ reach the machine. The
+ * platform has no field for them, so we put them where the agent can read
+ * them and tell it they are there.
+ */
+export type MountedFile = { path: string; fileId: string; mountPath: string };
+
 export type CreateSessionOptions = {
   /** A session only needs to know which agent version to pin to. */
   pack: Pick<PublishedPack, "runtimePackId" | "version">;
+  /** Pack files to mount, so the whole folder is on the machine. */
+  mounts?: MountedFile[];
   environmentId: string;
   /** Required. A budget cannot be added to a session later — only changed or removed. */
   budget: Money;
@@ -73,7 +86,10 @@ export interface AgentRuntime {
    * so the model reads only the one a task calls for instead of carrying the
    * whole method in its system prompt.
    */
-  publishPack(pack: PackDefinition, skills?: SkillUpload[], subagents?: SubagentUpload[]): Promise<PublishedPack>;
+  publishPack(
+    pack: PackDefinition, skills?: SkillUpload[], subagents?: SubagentUpload[],
+    mount?: Array<{ path: string; content: string }>,
+  ): Promise<PublishedPack>;
   createSession(opts: CreateSessionOptions): Promise<RuntimeSession>;
   sendMessage(sessionId: string, text: string): Promise<void>;
   streamEvents(sessionId: string): Promise<AsyncIterable<RuntimeEvent>>;

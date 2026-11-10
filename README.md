@@ -7,6 +7,57 @@ every token and cent visible.
 Not a skill shop. The skills marketplaces sell files that run inside a buyer's
 own agent; this runs the agent for buyers who don't have one.
 
+## A pack is a folder
+
+```
+my-pack/
+  agent.md                      the definition; its body is the system prompt
+  skills/
+    checking-elasticity/
+      SKILL.md                  name + description frontmatter
+      references/worked.md      read only when the task calls for it
+  agents/devils-advocate.md     a subagent this pack can delegate to
+  commands/audit.md             a named procedure, callable as /audit
+  hooks/, workflows/, docs/, README.md, .claude-plugin/plugin.json
+```
+
+That is the layout Claude Code plugins already use — nothing here is invented.
+
+Move it like a repo:
+
+```bash
+agents sync ./my-pack        # push the folder and publish it
+agents status ./my-pack      # what is here versus what is published
+agents pull my-pack ./dir    # write it back out as a folder
+agents list                  # the catalog, and what you own
+```
+
+`sync` remembers where a folder belongs in `.agents.json`, so the second time
+takes no flags. A pull then a sync is a no-op: an author gets their own
+`agent.md` back byte for byte, while a *buyer*'s export is regenerated with the
+platform wrapper and the licence notice, because that is the file they run.
+
+### What happens to each directory
+
+| | |
+|---|---|
+| `skills/<name>/` | uploaded to the Skills API, attached to the agent, mounted at `/workspace/skills/<name>/`. The model reads the one a task calls for |
+| `agents/<name>.md` | created as its own agent and listed in `multiagent.subagents.predefined_agents`, with inline agents disabled |
+| `commands/<name>.md` | uploaded and mounted, and named in the system prompt so the agent runs it when asked for `/name` |
+| `hooks/`, `workflows/`, `docs/` | uploaded and mounted at `/mnt/session/uploads/pack/`, and described to the agent |
+| `.claude-plugin/`, README, LICENSE | carried and exported |
+
+The runtime has fields for the first two. The rest it has no fields for, so the
+files are put on the machine and the agent is told where they are and what they
+mean — which is why `/audit` works even though no platform feature implements
+slash commands.
+
+An uploaded pack is checked against Anthropic's published `SKILL.md` rules
+before it can be published: the name format, the 64- and 1024-character limits,
+reserved words and XML tags are errors; third-person phrasing, a description
+that says what but not when, a body over 500 lines, an unlinked bundled file and
+a reference two levels deep are warnings that do not block.
+
 ## Run it
 
 ```bash

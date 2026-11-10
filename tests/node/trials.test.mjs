@@ -49,8 +49,10 @@ test("a trial runs a pack the organisation does not own", async () => {
   assert.equal(await P.entitled(orgId, v.id), false);
   const run = await P.startRun({ orgId, userId, packVersionId: v.id, trial: true });
   assert.equal(run.is_trial, 1);
-  // Capped far below a real run's budget.
-  assert.equal(run.budget_cents, 15);
+  // Capped far below a real run's budget, whatever that cap is configured to be.
+  const cap = await db.settingInt("trial_budget_cents");
+  assert.equal(run.budget_cents, cap);
+  assert.ok(cap < (await db.settingInt("default_run_budget_cents")));
 });
 
 test("a trial is capped at its configured number of turns", async () => {

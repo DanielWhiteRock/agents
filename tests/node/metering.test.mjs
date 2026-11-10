@@ -108,3 +108,38 @@ test("refuses a run beyond the tier's concurrency limit", async () => {
   );
   assert.ok((await P.activeRunCount(orgId)) > before);
 });
+
+test("a budget_reached recorded from the stream is not wiped by the session's null", async () => {
+  const sql = (await import("../../dist/src/app/sql.js")).sql;
+  const s = await sql();
+  // A runtime whose stream reports the cap but whose session object does not —
+  // which is exactly what the live platform does.
+  P.setRuntime({
+    publishPack: async () => ({ runtimePackId: "agt_b", version: "1", skills: [], subagents: [], mounts: [] }),
+    ensureEnvironment: async () => "env_1",
+    createSession: async () => ({ id: "sesn_b", status: "running", stopReason: null,
+      usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
+    sendMessage: async () => {},
+    streamEvents: async () => (async function* () {
+      yield { type: "status", status: "idle", stopReason: "budget_reached" };
+    })(),
+    readSession: async () => ({ id: "sesn_b", status: "idle", stopReason: null,
+      usage: { inputTokens: 1, outputTokens: 9, activeSeconds: 1, listCost: { amount: "16", currency: "USD" } } }),
+    raiseBudgetTo: async () => ({}), confirmTool: async () => {}, deleteSession: async () => {},
+  });
+  // A fresh organisation: an earlier test in this file deliberately fills its
+  // concurrency limit, and reusing that one would fail for the wrong reason.
+  const A = await import("../../dist/src/app/auth.js");
+  const { orgId, userId } = await A.signUp({
+    email: `cap-${Date.now()}@example.com`, name: "Cap", password: "correct-horse", orgName: "Cap Co",
+  });
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  const run = await P.startRun({ orgId, userId, packVersionId: version.id });
+  await P.sendTurn(run.id, "go");
+
+  const after = await P.getRun(run.id);
+  assert.equal(after.stop_reason, "budget_reached",
+    "the UI needs this to offer a top-up; the session object would have said null");
+  void s;
+});

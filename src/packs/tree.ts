@@ -305,3 +305,29 @@ export function checkSkills(skills: SkillDir[]): SkillCheck {
   }
   return out;
 }
+
+/** The commands a pack declares, from commands/<name>.md. */
+export function findCommands(tree: PackTree): Array<{ name: string; description?: string; path: string }> {
+  return tree
+    .filter((f) => /^commands\/[^/]+\.(md|markdown)$/i.test(f.path))
+    .map((f) => {
+      const meta = readFrontMatterMeta(f.content);
+      const name = (meta.name ?? f.path.replace(/^commands\//, "").replace(/\.(md|markdown)$/i, "")).trim();
+      return { name, ...(meta.description ? { description: meta.description } : {}), path: f.path };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export const findHooks = (tree: PackTree): string[] =>
+  tree.filter((f) => f.path.startsWith("hooks/")).map((f) => f.path).sort();
+
+export const findWorkflows = (tree: PackTree): string[] =>
+  tree.filter((f) => f.path.startsWith("workflows/")).map((f) => f.path).sort();
+
+export const findDocs = (tree: PackTree): string[] =>
+  tree.filter((f) => f.path.startsWith("docs/") || /^(README|CLAUDE|AGENTS)\./i.test(f.path))
+    .map((f) => f.path).sort();
+
+/** Everything that is not a skill: skills travel by their own API. */
+export const mountableFiles = (tree: PackTree): PackTree =>
+  tree.filter((f) => !f.path.startsWith("skills/"));

@@ -12,6 +12,7 @@ function makeFake() {
       environments: { create: vi.fn().mockResolvedValue({ id: "env_1" }) },
       agents: { create: vi.fn().mockResolvedValue({ id: "agt_1", version: 1 }) },
       skills: { create: vi.fn().mockResolvedValue({ id: "skill_1", latest_version_id: "sv_1" }) },
+      files: { upload: vi.fn().mockResolvedValue({ id: "file_1" }) },
       sessions: {
         create: vi.fn().mockResolvedValue({ id: "s1", status: "running", stop_reason: null, usage: undefined }),
         retrieve: vi.fn().mockResolvedValue({
@@ -53,7 +54,7 @@ describe("publishPack", () => {
     for (const c of configs) expect(c.permission_policy).toEqual({ type: "always_ask" });
   });
   it("returns the agent version so sessions can pin to it", async () => {
-    await expect(runtime.publishPack(PACK_ZERO)).resolves.toEqual({ runtimePackId: "agt_1", version: "1", skills: [], subagents: [] });
+    await expect(runtime.publishPack(PACK_ZERO)).resolves.toEqual({ runtimePackId: "agt_1", version: "1", skills: [], subagents: [], mounts: [] });
   });
 });
 
@@ -279,5 +280,36 @@ describe("the destructive-tool posture", () => {
       [{ name: "reviewer", system: "You review." }]);
     expect(policyOf(fake.beta.agents.create.mock.calls[0]![0]))
       .toEqual(["always_allow", "always_allow", "always_allow"]);
+  });
+});
+
+describe("mounting the pack folder", () => {
+  it("asks for a relative path, because the platform rewrites it under the upload root", async () => {
+    await runtime.publishPack(PACK_ZERO, [], [], [{ path: "commands/audit.md", content: "# audit" }]);
+    expect(fake.beta.files.upload).toHaveBeenCalledTimes(1);
+    const out = await runtime.publishPack(PACK_ZERO, [], [], [{ path: "commands/audit.md", content: "# audit" }]);
+    // Not "/workspace/pack/..." — that is the path we used to claim and the
+    // files were never there, which an agent told us in as many words.
+    expect(out.mounts[0]!.mountPath).toBe("pack/commands/audit.md");
+  });
+
+  it("passes the mounts to the session as file resources", async () => {
+    await runtime.createSession({
+      pack: { runtimePackId: "agt_1", version: "1" },
+      environmentId: "env_1",
+      budget: parseMoney({ amount: "500", currency: "USD" }),
+      mounts: [{ path: "commands/audit.md", fileId: "file_1", mountPath: "pack/commands/audit.md" }],
+    });
+    expect(fake.beta.sessions.create.mock.calls[0]![0].resources)
+      .toEqual([{ type: "file", file_id: "file_1", mount_path: "pack/commands/audit.md" }]);
+  });
+
+  it("sends no resources when a pack has no folder", async () => {
+    await runtime.createSession({
+      pack: { runtimePackId: "agt_1", version: "1" },
+      environmentId: "env_1",
+      budget: parseMoney({ amount: "500", currency: "USD" }),
+    });
+    expect(fake.beta.sessions.create.mock.calls[0]![0].resources).toBeUndefined();
   });
 });
