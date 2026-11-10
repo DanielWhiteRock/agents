@@ -27,7 +27,8 @@ export type RunRow = {
   id: string; org_id: string; user_id: string; pack_version_id: string; session_id: string;
   model: string; status: string; stop_reason: string | null; budget_cents: number;
   input_tokens: number; output_tokens: number; active_seconds: number;
-  list_cost_cents: number; billed_cents: number; started_at: string; ended_at: string | null;
+  list_cost_cents: number; billed_up_to_cents: number; billed_cents: number;
+  started_at: string; ended_at: string | null;
 };
 
 let runtimeSingleton: AgentRuntime | null = null;
@@ -232,9 +233,13 @@ function observe(runId: string, e: RuntimeEvent): void {
   if (e.type === "tool.use" && e.permission === "ask") {
     recordAsk(runId, { eventId: e.eventId, name: e.name, input: e.input });
   }
-  if (e.type === "model.usage") {
-    getDb().prepare("UPDATE runs SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ? WHERE id = ?")
-      .run(e.inputTokens + e.cacheReadTokens + e.cacheCreationTokens, e.outputTokens, runId);
+  if (e.type === "usage.snapshot") {
+    // The platform's own cumulative figures, pushed mid-turn. Absolute, not
+    // additive, and authoritative — we never sum per-request usage ourselves.
+    getDb().prepare(`UPDATE runs SET input_tokens = ?, output_tokens = ?, active_seconds = ?,
+      list_cost_cents = ?, budget_cents = COALESCE(?, budget_cents) WHERE id = ?`)
+      .run(e.usage.inputTokens, e.usage.outputTokens, e.usage.activeSeconds,
+        Number(cents(e.usage.listCost)), e.budget ? Number(cents(e.budget)) : null, runId);
   }
   if (e.type === "status") {
     getDb().prepare("UPDATE runs SET status = ?, stop_reason = ? WHERE id = ?")
@@ -254,15 +259,17 @@ function meter(runId: string, result: TurnResult): { billedCents: number; author
   const version = getVersion(run.pack_version_id)!;
   const { session } = result;
 
-  const costCents = Number(cents(session.usage.listCost));
-  const delta = Math.max(0, costCents - run.list_cost_cents);
+  // Charge the gap between what the run has cost and what has been charged, so
+  // a turn interrupted by an approval or a top-up is never billed twice.
+  const costCents = Math.max(Number(cents(session.usage.listCost)), run.list_cost_cents);
+  const delta = Math.max(0, costCents - run.billed_up_to_cents);
   const billed = debit(run.org_id, delta, "agent run", runId);
   const authorMilli = creditAuthor(version.pack_id, runId, delta);
 
   db.prepare(`UPDATE runs SET status = ?, stop_reason = ?, input_tokens = ?, output_tokens = ?,
-    active_seconds = ?, list_cost_cents = ?, billed_cents = billed_cents + ? WHERE id = ?`)
+    active_seconds = ?, list_cost_cents = ?, billed_up_to_cents = ?, billed_cents = billed_cents + ? WHERE id = ?`)
     .run(session.status, session.stopReason, session.usage.inputTokens, session.usage.outputTokens,
-      session.usage.activeSeconds, costCents, billed, runId);
+      session.usage.activeSeconds, costCents, costCents, billed, runId);
 
   for (const a of result.pendingAsks) recordAsk(runId, a);
   recordEvent(runId, "run.metered", {

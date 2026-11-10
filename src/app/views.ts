@@ -176,8 +176,8 @@ ${exhausted ? `<div class="note" id="capnote">This run hit its budget. The platf
 <script>
 const trace = document.getElementById('trace');
 const live = document.getElementById('live');
-const KIND = {'user.message':'user','user.decision':'user','run.metered':'meter','run.error':'err',
-  'error':'err','run.budget_reached':'warnrow','tool.use':'warnrow'};
+const KIND = {'user.message':'user','user.decision':'user','run.metered':'meter',
+  'usage.snapshot':'meter','run.error':'err','error':'err','run.budget_reached':'warnrow','tool.use':'warnrow'};
 function render(e){
   const d = document.createElement('div');
   d.className = 'ev ' + (KIND[e.kind] || '');
@@ -193,6 +193,10 @@ function render(e){
     else if (e.kind === 'model.usage') body = 'request: in ' + p.inputTokens + ' · out ' + p.outputTokens + ' · cache read ' + p.cacheReadTokens + ' · cache write ' + p.cacheCreationTokens;
     else if (e.kind === 'status') body = p.status + (p.stopReason ? ' (' + p.stopReason + ')' : '');
     else if (e.kind === 'user.decision') body = p.result.toUpperCase() + ' ' + p.name + (p.deny_message ? ' — ' + p.deny_message : '');
+    else if (e.kind === 'usage.snapshot') body = 'platform total: $' + (p.usage.listCost.amount/100).toFixed(2) + ' · in ' + p.usage.inputTokens + ' · out ' + p.usage.outputTokens + ' · ' + p.usage.activeSeconds.toFixed(1) + 's' + (p.budget ? ' · budget $' + (p.budget.amount/100).toFixed(2) : '');
+    else if (e.kind === 'model.request_start') body = 'model request started';
+    else if (e.kind === 'thread.status') body = (p.agentName ? p.agentName + ': ' : '') + p.status + (p.stopReason ? ' (' + p.stopReason + ')' : '');
+    else if (e.kind === 'echo') body = 'echo ' + p.of + (p.text ? ' — ' + p.text.slice(0,120) : '');
     else if (e.kind === 'raw') body = (p.payload && p.payload.type) ? p.payload.type : JSON.stringify(p).slice(0,200);
     else body = JSON.stringify(p);
   } catch { body = e.payload; }

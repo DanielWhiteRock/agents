@@ -30,6 +30,12 @@ export type ToolDecision = "allow" | "ask" | "deny";
 export type RuntimeEvent =
   | { type: "agent.text"; text: string }
   | { type: "agent.thinking" }
+  /** The platform's own cumulative figures. Authoritative — prefer this over summing. */
+  | { type: "usage.snapshot"; usage: RuntimeUsage; budget: Money | null }
+  | { type: "model.request_start" }
+  | { type: "thread.status"; status: SessionStatus; agentName: string | null; stopReason: string | null }
+  /** The stream echoes back what we sent; useful in the transcript, not new information. */
+  | { type: "echo"; of: string; text: string | null }
   | { type: "tool.use"; eventId: string; name: string; input: unknown; permission: ToolDecision; source: "builtin" | "mcp" | "custom" }
   | { type: "tool.result"; name: string; isError: boolean; preview: string }
   | { type: "model.usage"; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }

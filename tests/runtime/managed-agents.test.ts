@@ -118,7 +118,7 @@ describe("budget lifecycle", () => {
 });
 
 describe("streamEvents", () => {
-  it("normalises text, tool use and status, and keeps unknown events as raw", async () => {
+  it("normalises text, tool use and status, and keeps genuinely unknown events as raw", async () => {
     fake.beta.sessions.events.stream.mockResolvedValue((async function* () {
       yield { type: "agent.message", content: [{ type: "text", text: "hello" }] };
       yield { type: "agent.custom_tool_use", name: "run_tests", input: { x: 1 } };
@@ -128,5 +128,42 @@ describe("streamEvents", () => {
     const out = [];
     for await (const e of await runtime.streamEvents("s1")) out.push(e);
     expect(out.map((e) => e.type)).toEqual(["agent.text", "tool.use", "raw", "status"]);
+  });
+
+  it("maps the platform's own usage snapshot, with its budget", async () => {
+    // Shape captured from a live session.
+    fake.beta.sessions.events.stream.mockResolvedValue((async function* () {
+      yield {
+        type: "session.usage",
+        budget: { type: "limit", max_list_cost: { amount: "50", currency: "USD" } },
+        usage: { active_seconds: 19.426, cache_read_input_tokens: 5119, input_tokens: 2,
+          list_cost: { amount: "4", currency: "USD" }, output_tokens: 1129 },
+      };
+      yield { type: "session.status_idle", stop_reason: { type: "end_turn" } };
+    })());
+    const out = [];
+    for await (const e of await runtime.streamEvents("s1")) out.push(e);
+    expect(out[0]).toEqual({
+      type: "usage.snapshot",
+      usage: { inputTokens: 2, outputTokens: 1129, activeSeconds: 19.426, listCost: { amount: "4", currency: "USD" } },
+      budget: { amount: "50", currency: "USD" },
+    });
+    expect(out[1]).toEqual({ type: "status", status: "idle", stopReason: "end_turn" });
+  });
+
+  it("labels the stream's echoes and spans instead of leaving them unmapped", async () => {
+    fake.beta.sessions.events.stream.mockResolvedValue((async function* () {
+      yield { type: "span.model_request_start" };
+      yield { type: "session.thread_status_idle", agent_name: "Guardrails Reviewer", stop_reason: { type: "end_turn" } };
+      yield { type: "user.message", content: [{ type: "text", text: "review this" }] };
+      yield { type: "user.tool_confirmation", result: "deny", deny_message: "no shell" };
+      yield { type: "session.status_idle", stop_reason: null };
+    })());
+    const out = [];
+    for await (const e of await runtime.streamEvents("s1")) out.push(e);
+    expect(out.map((e) => e.type)).toEqual(["model.request_start", "thread.status", "echo", "echo", "status"]);
+    expect(out[1]).toMatchObject({ agentName: "Guardrails Reviewer", status: "idle", stopReason: "end_turn" });
+    expect(out[2]).toEqual({ type: "echo", of: "user.message", text: "review this" });
+    expect(out[3]).toEqual({ type: "echo", of: "tool_confirmation:deny", text: "no shell" });
   });
 });

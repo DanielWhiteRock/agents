@@ -95,7 +95,12 @@ CREATE TABLE IF NOT EXISTS runs (
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
   active_seconds REAL NOT NULL DEFAULT 0,
+  -- Latest cumulative cost observed from the platform (live, updated mid-turn).
   list_cost_cents INTEGER NOT NULL DEFAULT 0,
+  -- How much of that cumulative cost has already been charged. Billing works on
+  -- the gap between the two: without this, live snapshots would overwrite the
+  -- figure billing compares against and every delta would come out as zero.
+  billed_up_to_cents INTEGER NOT NULL DEFAULT 0,
   billed_cents INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   ended_at TEXT
@@ -144,8 +149,20 @@ export function getDb(): Db {
   mkdirSync(dirname(DB_PATH), { recursive: true });
   db = new DatabaseSync(DB_PATH);
   db.exec(SCHEMA);
+  migrate(db);
   seedSettings(db);
   return db;
+}
+
+/** Additive column migrations. CREATE TABLE IF NOT EXISTS cannot add a column. */
+const MIGRATIONS = [
+  "ALTER TABLE runs ADD COLUMN billed_up_to_cents INTEGER NOT NULL DEFAULT 0",
+];
+
+function migrate(d: Db): void {
+  for (const sql of MIGRATIONS) {
+    try { d.exec(sql); } catch { /* already applied */ }
+  }
 }
 
 /** Defaults for every adjustable limit. Change the row, not the code. */

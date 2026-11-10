@@ -3,11 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "npm run test:unit --silent && npm run test:integration --silent",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/src/app/server.js",
-    "dev": "tsc -p tsconfig.build.json && node dist/src/app/server.js"
+    "dev": "tsc -p tsconfig.build.json && node dist/src/app/server.js",
+    "test:unit": "vitest run",
+    "test:integration": "tsc -p tsconfig.build.json && node --test tests/node/*.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.7.0"

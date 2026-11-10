@@ -58,6 +58,11 @@ function toSession(raw: any): RuntimeSession {
 
 const DECISIONS: Record<string, ToolDecision> = { allow: "allow", ask: "ask", deny: "deny" };
 const decision = (raw: unknown): ToolDecision => DECISIONS[String(raw)] ?? "allow";
+const textOf = (content: unknown): string | null => {
+  if (!Array.isArray(content)) return null;
+  const parts = content.filter((b) => b?.type === "text").map((b) => String(b.text));
+  return parts.length ? parts.join("") : null;
+};
 const preview = (v: unknown): string => {
   const s = typeof v === "string" ? v : JSON.stringify(v ?? null);
   return s.length > 600 ? `${s.slice(0, 600)}…` : s;
@@ -194,6 +199,33 @@ export class ManagedAgentsRuntime implements AgentRuntime {
             };
             break;
           }
+          case "session.usage":
+            yield {
+              type: "usage.snapshot",
+              usage: parseUsage(ev.usage),
+              budget: ev.budget?.max_list_cost ? parseMoney(ev.budget.max_list_cost) : null,
+            };
+            break;
+          case "span.model_request_start":
+            yield { type: "model.request_start" };
+            break;
+          case "session.thread_status_running":
+          case "session.thread_status_idle":
+          case "session.thread_status_terminated":
+          case "session.thread_status_rescheduled":
+            yield {
+              type: "thread.status",
+              status: toStatus(String(ev.type).replace("session.thread_status_", "")),
+              agentName: ev.agent_name ?? null,
+              stopReason: toStopReason(ev.stop_reason),
+            };
+            break;
+          case "user.message":
+            yield { type: "echo", of: "user.message", text: textOf(ev.content) };
+            break;
+          case "user.tool_confirmation":
+            yield { type: "echo", of: `tool_confirmation:${ev.result}`, text: ev.deny_message ?? null };
+            break;
           case "session.status_running":
             yield { type: "status", status: "running", stopReason: null };
             break;
