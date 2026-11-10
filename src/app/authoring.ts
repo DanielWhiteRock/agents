@@ -87,20 +87,17 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const s = await sql();
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
-       model, effort, pinned_models, extras, instructions, tags, image, status,
+       model, effort, pinned_models, extras, instructions, tags, image, role, status,
        author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,'draft',$14,$15,$19,$20,$21,$22,$23,$24)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24)`,
     [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, now(),
-      // `role` ($18) has never been referenced by the VALUES clause above —
-      // pre-existing and out of this task's scope to fix. New fields start at
-      // $19, right after it, so as not to collide with its array slot.
       input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? "",
       input.descriptionLong?.trim() ?? "", JSON.stringify(input.useCases ?? []),
       JSON.stringify(input.limitations ?? []), JSON.stringify(input.faq ?? []),
-      JSON.stringify(input.requirements ?? []), input.builtOn?.trim() || null]);
+      JSON.stringify(input.requirements ?? []), input.builtOn?.trim() ?? ""]);
   return (await P.getPack(slug))!;
 }
 
@@ -131,7 +128,7 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
       input.limitations ? JSON.stringify(input.limitations) : pack.limitations,
       input.faq ? JSON.stringify(input.faq) : pack.faq,
       input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
-      input.builtOn?.trim() || pack.built_on]);
+      input.builtOn?.trim() ?? pack.built_on]);
   return (await P.getPack(slug))!;
 }
 
@@ -266,7 +263,7 @@ export async function importPack(args: {
     requirements: parsed.requirements.length
       ? parsed.requirements
       : existing ? JSON.parse(existing.requirements || "[]") : [],
-    builtOn: parsed.builtOn ?? existing?.built_on ?? undefined,
+    builtOn: parsed.builtOn ?? existing?.built_on ?? "",
     extras: {
       ...(parsed.anthropicSkills.length ? { anthropicSkills: parsed.anthropicSkills } : {}),
       ...(parsed.advisorModel ? { advisorModel: parsed.advisorModel } : {}),

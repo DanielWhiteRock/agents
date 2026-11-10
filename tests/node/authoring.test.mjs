@@ -67,6 +67,12 @@ test("a new pack starts as a draft, not in the catalog", async () => {
   assert.equal((await Auth.myPacks(orgId)).some((p) => p.id === pack.id), true, "but the author sees it");
 });
 
+test("creating a pack persists the role it was given", async () => {
+  const { orgId } = await org();
+  const pack = await Auth.createPack(orgId, { ...INPUT, slug: `role-${++n}`, role: "qa" });
+  assert.equal(pack.role, "qa", "the VALUES clause must reference every column it lists");
+});
+
 test("a pack needs a name, instructions, a model and a sane price", async () => {
   const { orgId } = await org();
   const base = { ...INPUT, slug: `bad-${++n}` };

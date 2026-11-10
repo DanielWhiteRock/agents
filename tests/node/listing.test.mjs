@@ -59,6 +59,7 @@ test("a new pack carries empty listing fields and no draft", async () => {
   const { pack } = await makePack();
   assert.equal(pack.description, "");
   assert.deepEqual(JSON.parse(pack.use_cases || "[]"), []);
+  assert.equal(pack.built_on, "", "plain text defaults to '', not SQL NULL, like description does");
   assert.equal(pack.listing_approved_at, null);
   const s = await sql();
   assert.equal(await s.one("SELECT 1 AS ok FROM pack_listing_drafts WHERE pack_id = $1", [pack.id]), undefined);
