@@ -294,6 +294,23 @@ CREATE TABLE IF NOT EXISTS author_earnings (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS author_earnings_unpaid ON author_earnings(pack_id, payout_id);
+
+-- Listing content the author is drafting but has not yet put in front of
+-- buyers. A pack keeps selling on its last approved copy while this one is
+-- edited, the same separation versions give instructions.
+CREATE TABLE IF NOT EXISTS pack_listing_drafts (
+  pack_id TEXT PRIMARY KEY REFERENCES packs(id),
+  description TEXT NOT NULL DEFAULT '',
+  use_cases TEXT NOT NULL DEFAULT '',
+  limitations TEXT NOT NULL DEFAULT '',
+  faq TEXT NOT NULL DEFAULT '',
+  scenarios TEXT NOT NULL DEFAULT '',
+  requirements TEXT NOT NULL DEFAULT '',
+  generated_at TEXT NOT NULL,
+  -- The published version this draft was generated from, so a later publish
+  -- can tell a stale draft from one still describing what is actually live.
+  source_version INTEGER
+);
 `;
 
 const SUBSTITUTIONS = {
@@ -399,6 +416,29 @@ const MIGRATIONS = [
   // is 120 points a month, so a premium worker lands near half of one and
   // leaves something to run it with.
   "UPDATE packs SET price_points = price_cents / 400 WHERE price_points = 0 AND price_cents > 0",
+  // A tagline sells a click; it does not tell a buyer what the thing does,
+  // when it fails, or what it costs them to be wrong about it. That is a
+  // listing's job, and it starts empty rather than null — nothing to parse
+  // before an author has written anything.
+  "ALTER TABLE packs ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN use_cases TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN limitations TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN faq TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN scenarios TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN requirements TEXT NOT NULL DEFAULT ''",
+  // When a curator last signed off on the listing text above, so a later edit
+  // can be told apart from the copy that was actually reviewed.
+  "ALTER TABLE packs ADD COLUMN listing_approved_at TEXT",
+  // Set the moment the pack is next published after that approval, so an
+  // approved listing can be shown as describing a version that moved on
+  // without the text following it, rather than silently passing as current.
+  "ALTER TABLE packs ADD COLUMN listing_stale_at TEXT",
+  // When the pack first reached the catalog, kept apart from created_at (which
+  // is when the draft was started) so a shelf can sort by debut, not by paperwork.
+  "ALTER TABLE packs ADD COLUMN listed_at TEXT",
+  // The runtime/model generation this pack's prose was written against, so a
+  // claim like "built for Claude Opus 5" can be checked rather than asserted.
+  "ALTER TABLE packs ADD COLUMN built_on TEXT",
 ];
 
 /**

@@ -33,6 +33,8 @@ export type PackRow = {
   price_points: number; tags: string; image: string | null; role: string; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string;
   author_payout_email: string | null; extras: string; created_at: string;
+  description: string; use_cases: string; limitations: string; faq: string; scenarios: string; requirements: string;
+  listing_approved_at: string | null; listing_stale_at: string | null; listed_at: string | null; built_on: string | null;
 };
 export type PackVersionRow = {
   id: string; pack_id: string; version: number; runtime_pack_id: string;
