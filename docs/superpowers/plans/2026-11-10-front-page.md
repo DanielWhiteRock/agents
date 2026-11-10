@@ -206,48 +206,141 @@ git commit -m "feat: count what a worker's folder actually carries"
 
 ---
 
-## Task 3: A verified author is a claim we can stand behind
+## Task 3: A person behind every agent
 
-agensi shows "Verified creator" on every card. We can show it on none until
-somebody verifies something, so the flag is real and defaults to false.
+The sharpest difference from agensi, and the one the data model currently
+cannot express. `packs.author` is a single free-text field, so the Senior
+Engineer — which credits three people under MIT — is stored as the string
+`"Dietrich Gebert, Cursor, Poteto — MIT, see README.md"`. That is not a
+credit, it is a sentence where a credit should be.
+
+A pack credits one or more people. A person has a name, optionally a link and
+a line about themselves, and a verification flag somebody sets. What the shelf
+shows of them is what they made and how much it has been run.
+
+**What it does not show: their earnings.** A person's income is their
+business. §8.6 makes earned points cashable, which makes them money, and
+publishing somebody's income on a marketplace page because the number happens
+to sit in our database is not a thing to do. Earnings appear on their own
+dashboard and nowhere else.
+
+**Honesty rule.** Three packs are authored by `Placeholder — needs a real
+campaigner`. They stay exactly as they are and appear in this section as what
+they are: unclaimed. A shelf that admits three of its workers are waiting for
+an author is worth more than one that quietly hides them, and it doubles as
+the to-do list.
 
 **Files:**
-- Modify: `src/app/db.ts` (migration + fresh schema)
-- Modify: `src/app/platform.ts` (`OrgRow` gains `verified`)
-- Modify: `tests/node/auth.test.mjs`
+- Modify: `src/app/db.ts` (`people` table, `pack_authors` join, `people.verified`)
+- Modify: `src/app/platform.ts` (`authorsOf`, `person`)
+- Modify: `src/packs/import.ts` (`author:` accepts a list)
+- Create: `tests/node/authors.test.mjs`
 
 **Interfaces:**
-- Produces: `orgs.verified INTEGER NOT NULL DEFAULT 0`, surfaced on `PackRow`
-  as `author_verified: boolean` through the existing pack query.
+- Produces:
+
+      export type Person = {
+        id: string; name: string; handle: string; link: string | null;
+        bio: string | null; verified: boolean; orgId: string | null;
+      };
+      export async function authorsOf(packIds: string[]): Promise<Map<string, Person[]>>;
+      export async function person(handle: string): Promise<
+        (Person & { packs: PackRow[]; runs: number }) | undefined>;
 
 - [ ] **Step 1: Write the failing test**
 
-```js
-test("an author is unverified until somebody verifies them", async () => {
-  const { orgId } = await A.signUp({ /* … */ });
-  assert.equal((await P.orgById(orgId)).verified, 0,
-    "verification is a claim we make, not a default");
-});
-```
+      test("a pack credits every person who wrote it, not a sentence about them", async () => {
+        // The Senior Engineer is three people under MIT. One string cannot say that.
+        const people = (await P.authorsOf([packId])).get(packId);
+        assert.deepEqual(people.map((p) => p.name).sort(),
+          ["Cursor", "Dietrich Gebert", "Poteto"]);
+      });
+
+      test("an author is unverified until somebody verifies them", async () => {
+        assert.equal((await P.person("typeui-sh")).verified, false,
+          "verification is a claim we make, not a default");
+      });
+
+      test("a placeholder author is not a person and is not dressed as one", async () => {
+        const people = (await P.authorsOf([supportTriageId])).get(supportTriageId);
+        assert.equal(people.length, 0, "nobody wrote it yet, and the shelf says so");
+      });
+
+      test("a person's page shows what they made and how it ran, never what it earned", async () => {
+        const p = await P.person("typeui-sh");
+        assert.equal(p.packs.length, 67);
+        assert.equal(typeof p.runs, "number");
+        assert.ok(!("earnings" in p), "income is theirs, not the shelf's");
+      });
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `node --test tests/node/auth.test.mjs`
-Expected: FAIL, `verified` is undefined
+Run: `node --test tests/node/authors.test.mjs`
+Expected: FAIL, `authorsOf is not a function`
 
-- [ ] **Step 3: Add the migration and the column**
+- [ ] **Step 3: Add `people`, `pack_authors` and the migration**
 
-Appended to `MIGRATIONS` and added to the `CREATE TABLE` in `db.ts`. Migrations
-are recorded and run once; nothing destructive here.
+`people(id, handle, name, link, bio, verified, org_id, created_at)` with
+`handle` unique; `pack_authors(pack_id, person_id, position)`. Backfill splits
+the existing `author` string on commas and em dashes, discarding anything
+matching `/^placeholder/i`, so a placeholder becomes zero authors rather than
+a person called Placeholder. `packs.author` stays as the display fallback
+until every pack is migrated; the plan does not drop a column it has not
+finished replacing.
 
-- [ ] **Step 4: Run it and watch it pass, both drivers**
+- [ ] **Step 4: Teach `agent.md` a list**
+
+`author: "A, B"` and a YAML list both parse to several people. One name still
+parses to one. Existing folders keep working.
+
+- [ ] **Step 5: Run it and watch it pass, on both drivers**
+
+- [ ] **Step 6: Commit**
+
+      git add src/app/db.ts src/app/platform.ts src/packs/import.ts tests/node/authors.test.mjs
+      git commit -m "feat: a pack credits people, not a sentence about them"
+
+---
+
+## Task 3b: Their page, and their face
+
+A person gets a page at `/by/<handle>`: who they are, the workers they wrote,
+how much those have run. The card already carries an avatar drawn from the
+name — initials on a hue derived from it, so one person is one colour
+everywhere. A real photograph is theirs to upload and nobody else's to
+generate.
+
+**Files:**
+- Modify: `src/app/views.ts` (`personPage`, author line on `.gig`)
+- Modify: `src/app/server.ts` (`/by/:handle`)
+- Modify: `scripts/judge.mjs` (a person page is a screen)
+
+- [ ] **Step 1: Write the failing test**
+
+      test("/by/<handle> shows a person and their workers", async () => {
+        const html = await get("/by/typeui-sh");
+        assert.match(html, /typeui\.sh/);
+        assert.match(html, /67/);
+        assert.ok(!/earn/i.test(html), "their income is not on a public page");
+      });
+
+      test("an unknown handle is a 404, not an empty person", async () => {
+        assert.equal(await status("/by/nobody"), 404);
+      });
+
+- [ ] **Step 2: Run it and watch it fail**
+
+- [ ] **Step 3: Implement `personPage()` and the route**
+
+- [ ] **Step 4: Add `/by/typeui-sh` to the judge's `SCREENS` and run it**
+
+Run: `npm run judge:strict`
+Expected: 100.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add src/app/db.ts src/app/platform.ts tests/node/auth.test.mjs
-git commit -m "feat: verification is a flag somebody sets, not a default"
-```
+      git add src/app/views.ts src/app/server.ts scripts/judge.mjs
+      git commit -m "feat: a page for the person behind the worker"
 
 ---
 
@@ -274,6 +367,7 @@ code at 72 packs and 7,000, and simply shows less now.
 | 4 | What's in a worker | the anatomy strip — agensi's missing section | ≥ 1 part |
 | 5 | Most run | ranked by real runs, capped at 2 per role | ≥ 5 non-trial runs |
 | 6 | New this week | `created_at` within 7 days, newest first | ≥ 3 |
+| 6b | Somebody wrote this | the people behind the workers, and the three still unclaimed | ≥ 1 credited person |
 | 7 | It runs here | the wedge: hosted, budgeted, traced, billed in points | always |
 | 8 | Connect over MCP | the seven tools, the one endpoint | always |
 | 9 | For authors | earn on every run, cash out, keep your instructions | always |
@@ -391,11 +485,20 @@ Perspective's own brief, rendered.
 |---|---|---|
 | 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.webp` | one module lifted glowing out of a row of dormant ones, its slot still lit. Hiring. Left third left empty for the headline. |
 | 4 What's in a worker | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/anatomy.webp` | a solid block exploded into six stacked plates, the top one lit. A folder, not a file. |
+| 6b Somebody wrote this | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | a worn bench, chisels laid out, a lamp still on, an empty stool, one finished thing with a blank face. Made by somebody who has gone home. |
 | 7 It runs here | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/runs-here.webp` | a sealed enclosure with a glowing core, a measured ribbon unrolling out of it. Hosted, and metered. |
 | 8 Connect over MCP | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/mcp.webp` | five cables converging into one socket. |
 | 9 For authors | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/authors.webp` | one original on a plinth, many faint copies around it, coins returning along a curve. |
 
-All 16-33KB, immutable cache header. Seedream 4.5 at 2K, 90 credits.
+All 16-34KB, immutable cache header. Seedream 4.5 at 2K, 135 credits across
+six images and two reruns.
+
+**The author image took two passes.** The first gave the finished object a
+serene human face, in a prompt that said "no people, no faces" — the model
+read "human" and "made-by-someone" and anthropomorphised the product. That is
+exactly backwards for this section: the claim is that a person made the tool,
+not that the tool is a person. Naming the negative precisely ("no faces, no
+eyes, no mask, no figure") and describing the panel as blank fixed it.
 
 **One thing worth knowing for the next batch:** the first hero named the
 palette by hex code and the model rendered `#F7F8FF` and `118.30` into the
