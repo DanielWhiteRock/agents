@@ -76,7 +76,10 @@ CREATE TABLE IF NOT EXISTS packs (
   effort TEXT NOT NULL DEFAULT '',
   pinned_models TEXT NOT NULL DEFAULT '[]',
   instructions TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'listed',
+  -- draft: only the author sees it. review: submitted for curation.
+  -- listed: in the catalog. unlisted: withdrawn, existing buyers unaffected.
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft','review','listed','unlisted')),
   author_payout_email TEXT,
   created_at TEXT NOT NULL
 );
@@ -284,6 +287,23 @@ const MIGRATIONS = [
   "ALTER TABLE runs ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE runs ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0",
 ];
+
+/**
+ * The organisation that curates the catalog. The design says a thin curated
+ * shelf beats a full unreliable one and that the owner is the taste, so
+ * somebody has to be the owner — the first organisation to sign up.
+ */
+export async function platformOrgId(): Promise<string | null> {
+  const s = await sql();
+  const row = await s.one<{ value: string }>("SELECT value FROM settings WHERE key = 'platform_org_id'");
+  return row?.value || null;
+}
+
+export async function claimPlatformOrg(orgId: string): Promise<void> {
+  const s = await sql();
+  await s.query(
+    "INSERT INTO settings (key, value) VALUES ('platform_org_id', $1) ON CONFLICT (key) DO NOTHING", [orgId]);
+}
 
 let ready: Promise<void> | null = null;
 

@@ -21,7 +21,8 @@ import { exportPackMarkdown } from "../packs/export.js";
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
   price_cents: number; upgrade_points: number; model: string; effort: string;
-  pinned_models: string; instructions: string; status: string; created_at: string;
+  pinned_models: string; instructions: string; status: string;
+  author_payout_email: string | null; created_at: string;
 };
 export type PackVersionRow = {
   id: string; pack_id: string; version: number; runtime_pack_id: string;

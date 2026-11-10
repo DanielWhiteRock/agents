@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { id, now, settingInt } from "./db.js";
+import { claimPlatformOrg, id, now, settingInt } from "./db.js";
 import { sql } from "./sql.js";
 import { credit } from "../billing/points.js";
 import { DomainError } from "./errors.js";
@@ -126,6 +126,8 @@ export async function signUp(args: {
   // the ledger stayed empty.
   await credit(orgId, "grant", await settingInt(`tier.${tier}.points_cents`), `${tier} monthly grant`,
     new Date(Date.now() + 30 * 86400_000).toISOString());
+  // The first organisation to sign up curates the catalog; later ones do not.
+  await claimPlatformOrg(orgId);
   return { userId, orgId, token: await createSession(userId) };
 }
 

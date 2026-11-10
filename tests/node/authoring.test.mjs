@@ -1,0 +1,224 @@
+// The supply side: creating, editing, submitting, withdrawing, deleting, importing.
+import { test, before } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+if (!process.env.DATABASE_URL) {
+  process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "auth2-")), "t.db");
+}
+
+let A, P, Auth, Pay, db, sql, provider;
+let n = 0;
+const email = () => `a${++n}-${Date.now()}@example.com`;
+
+const stubRuntime = () => ({
+  publishPack: async () => ({ runtimePackId: `agt_${++n}`, version: "1" }),
+  ensureEnvironment: async () => "env_1",
+  createSession: async () => ({ id: `sesn_${++n}`, status: "running", stopReason: null,
+    usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
+  sendMessage: async () => {},
+  streamEvents: async () => (async function* () { yield { type: "status", status: "idle", stopReason: null }; })(),
+  readSession: async () => ({ id: "sesn_a", status: "idle", stopReason: null,
+    usage: { inputTokens: 1, outputTokens: 5, activeSeconds: 1, listCost: { amount: "1", currency: "USD" } } }),
+  deleteSession: async () => {},
+});
+
+const INPUT = {
+  slug: "", name: "Pricing Reviewer", tagline: "Checks a pricing change before you ship it",
+  author: "A Real Expert", model: "claude-opus-5", effort: "high",
+  priceCents: 4900, upgradePoints: 10, instructions: "Step 1: find the number that has to move.",
+};
+
+before(async () => {
+  db = await import("../../dist/src/app/db.js");
+  A = await import("../../dist/src/app/auth.js");
+  P = await import("../../dist/src/app/platform.js");
+  Auth = await import("../../dist/src/app/authoring.js");
+  Pay = await import("../../dist/src/billing/purchases.js");
+  provider = await import("../../dist/src/billing/provider.js");
+  sql = (await import("../../dist/src/app/sql.js")).sql;
+  await db.initDb();
+  provider.setPayments(new provider.StubProvider());
+  P.setRuntime(stubRuntime());
+});
+
+const org = async (name = "Author Co") =>
+  A.signUp({ email: email(), name: "Author", password: "correct-horse", orgName: name });
+
+test("normaliseSlug turns a title into an address, and refuses nonsense", () => {
+  assert.equal(Auth.normaliseSlug("Senior Campaign Strategist"), "senior-campaign-strategist");
+  assert.equal(Auth.normaliseSlug("  Mixed__Case  "), "mixed-case");
+  assert.throws(() => Auth.normaliseSlug("!!!"), /not make a usable address/);
+  assert.throws(() => Auth.normaliseSlug("x".repeat(80)), /too long/);
+});
+
+test("a new pack starts as a draft, not in the catalog", async () => {
+  const { orgId } = await org();
+  const pack = await Auth.createPack(orgId, { ...INPUT, slug: `draft-${++n}` });
+  assert.equal(pack.status, "draft");
+  const listed = await P.listPacks();
+  assert.equal(listed.some((p) => p.id === pack.id), false, "a draft is not on the shelf");
+  assert.equal((await Auth.myPacks(orgId)).some((p) => p.id === pack.id), true, "but the author sees it");
+});
+
+test("a pack needs a name, instructions, a model and a sane price", async () => {
+  const { orgId } = await org();
+  const base = { ...INPUT, slug: `bad-${++n}` };
+  await assert.rejects(Auth.createPack(orgId, { ...base, name: " " }), /needs a name/);
+  await assert.rejects(Auth.createPack(orgId, { ...base, instructions: " " }), /that is the product/);
+  await assert.rejects(Auth.createPack(orgId, { ...base, model: "" }), /needs a default model/);
+  await assert.rejects(Auth.createPack(orgId, { ...base, priceCents: -1 }), /whole number of cents/);
+  await assert.rejects(Auth.createPack(orgId, { ...base, priceCents: 10.5 }), /whole number of cents/);
+});
+
+test("two packs cannot share an address", async () => {
+  const { orgId } = await org();
+  const slug = `taken-${++n}`;
+  await Auth.createPack(orgId, { ...INPUT, slug });
+  await assert.rejects(Auth.createPack(orgId, { ...INPUT, slug }), /already a pack at/);
+});
+
+test("only the authoring organisation can edit", async () => {
+  const mine = await org();
+  const theirs = await org("Other Co");
+  const slug = `mine-${++n}`;
+  await Auth.createPack(mine.orgId, { ...INPUT, slug });
+  await assert.rejects(
+    Auth.updatePack(theirs.orgId, slug, { ...INPUT, slug, name: "Hijacked" }),
+    (e) => e.name === "NotTheAuthorError");
+  const edited = await Auth.updatePack(mine.orgId, slug, { ...INPUT, slug, name: "Renamed", priceCents: 9900 });
+  assert.equal(edited.name, "Renamed");
+  assert.equal(edited.price_cents, 9900);
+});
+
+test("editing a pack does not change what an existing buyer runs", async () => {
+  const { orgId, userId } = await org();
+  const slug = `pinned-${++n}`;
+  await Auth.createPack(orgId, { ...INPUT, slug, instructions: "ORIGINAL METHOD" });
+  const v1 = await P.publishPack(slug);
+  await Pay.beginPurchase({ orgId, userId, packVersionId: v1.id, amountCents: 0, description: "x",
+    baseUrl: "http://localhost:4317" });
+
+  await Auth.updatePack(orgId, slug, { ...INPUT, slug, instructions: "REWRITTEN METHOD" });
+
+  const stillV1 = await P.getVersion(v1.id);
+  assert.equal(stillV1.instructions, "ORIGINAL METHOD", "the bought version keeps its own copy");
+  const exported = await P.exportPack(orgId, slug);
+  assert.ok(exported.includes("ORIGINAL METHOD"), "and that is what the buyer exports");
+
+  const v2 = await P.publishPack(slug);
+  assert.equal(v2.version, 2);
+  assert.equal((await P.getVersion(v2.id)).instructions, "REWRITTEN METHOD");
+});
+
+test("submitting requires a published version, and listing requires the curator", async () => {
+  const curator = await org("Curator");           // first org in this database curates
+  const author = await org("Author Two");
+  const slug = `submit-${++n}`;
+  await Auth.createPack(author.orgId, { ...INPUT, slug });
+
+  await assert.rejects(Auth.setStatus(author.orgId, slug, "review"), /publish the pack to the runtime/);
+  await P.publishPack(slug);
+  await Auth.setStatus(author.orgId, slug, "review");
+  assert.equal((await P.getPack(slug)).status, "review");
+
+  await assert.rejects(Auth.setStatus(author.orgId, slug, "listed"), (e) => e.name === "NotTheCuratorError");
+  const platform = await db.platformOrgId();
+  await Auth.setStatus(platform, slug, "listed");
+  assert.equal((await P.getPack(slug)).status, "listed");
+  assert.ok((await Auth.submittedPacks()).every((p) => p.slug !== slug), "it has left the queue");
+});
+
+test("withdrawing takes a pack off the shelf and leaves its buyers alone", async () => {
+  const author = await org("Author Three");
+  const slug = `withdraw-${++n}`;
+  await Auth.createPack(author.orgId, { ...INPUT, slug, priceCents: 0 });
+  const v = await P.publishPack(slug);
+  await Pay.beginPurchase({ orgId: author.orgId, userId: author.userId, packVersionId: v.id,
+    amountCents: 0, description: "x", baseUrl: "http://localhost:4317" });
+  const platform = await db.platformOrgId();
+  await Auth.setStatus(platform, slug, "listed");
+  await Auth.setStatus(platform, slug, "unlisted");
+
+  assert.equal((await P.listPacks()).some((p) => p.slug === slug), false, "off the shelf");
+  assert.equal(await P.entitled(author.orgId, v.id), true, "but still owned");
+  const run = await P.startRun({ orgId: author.orgId, userId: author.userId, packVersionId: v.id });
+  assert.ok(run.id, "and still runnable");
+});
+
+test("a pack that has been bought or run is withdrawn, never deleted", async () => {
+  const author = await org("Author Four");
+  const slug = `keep-${++n}`;
+  await Auth.createPack(author.orgId, { ...INPUT, slug, priceCents: 0 });
+  const v = await P.publishPack(slug);
+  await Pay.beginPurchase({ orgId: author.orgId, userId: author.userId, packVersionId: v.id,
+    amountCents: 0, description: "x", baseUrl: "http://localhost:4317" });
+  await assert.rejects(Auth.deletePack(author.orgId, slug), /withdraw it instead of deleting/);
+});
+
+test("an untouched draft can be deleted outright", async () => {
+  const { orgId } = await org();
+  const slug = `scratch-${++n}`;
+  await Auth.createPack(orgId, { ...INPUT, slug });
+  await Auth.deletePack(orgId, slug);
+  assert.equal(await P.getPack(slug), undefined);
+});
+
+test("importing a single file creates a pack, and importing again updates it", async () => {
+  const { orgId } = await org();
+  const slug = `imported-${++n}`;
+  const file = `---\nname: Imported Pack\ndescription: From a file\nmodel: claude-sonnet-5\nslug: ${slug}\n---\nFirst version of the method.`;
+
+  const first = await Auth.importPack({ orgId, files: [{ path: "agent.md", text: file }] });
+  assert.equal(first.created, true);
+  assert.equal(first.pack.name, "Imported Pack");
+  assert.equal(first.pack.model, "claude-sonnet-5");
+  assert.equal(first.pack.status, "draft");
+
+  const second = await Auth.importPack({
+    orgId, files: [{ path: "agent.md", text: file.replace("First version", "Second version") }],
+  });
+  assert.equal(second.created, false);
+  assert.equal(second.pack.instructions, "Second version of the method.");
+});
+
+test("importing a folder assembles the definition and its skill files", async () => {
+  const { orgId } = await org();
+  const slug = `folder-${++n}`;
+  const out = await Auth.importPack({ orgId, files: [
+    { path: `${slug}/agent.md`, text: `---\nname: Folder Pack\nslug: ${slug}\nmodel: claude-opus-5\n---\nThe method.` },
+    { path: `${slug}/skills/01-first.md`, text: "Do this first." },
+    { path: `${slug}/skills/02-second.md`, text: "Then this." },
+  ] });
+  assert.equal(out.created, true);
+  assert.ok(out.pack.instructions.includes("The method."));
+  assert.ok(out.pack.instructions.indexOf("Do this first") < out.pack.instructions.indexOf("Then this"));
+});
+
+test("importing over someone else's pack is refused", async () => {
+  const mine = await org();
+  const theirs = await org("Interloper");
+  const slug = `owned-${++n}`;
+  await Auth.createPack(mine.orgId, { ...INPUT, slug });
+  await assert.rejects(Auth.importPack({
+    orgId: theirs.orgId, files: [{ path: "agent.md", text: `---\nslug: ${slug}\nname: Theirs\n---\nmine now` }],
+  }), (e) => e.name === "NotTheAuthorError");
+});
+
+test("an exported pack can be re-imported unchanged", async () => {
+  const { orgId, userId } = await org();
+  const slug = `roundtrip-${++n}`;
+  await Auth.createPack(orgId, { ...INPUT, slug, instructions: "A very specific method, stated once." });
+  const v = await P.publishPack(slug);
+  await Pay.beginPurchase({ orgId, userId, packVersionId: v.id, amountCents: 0, description: "x",
+    baseUrl: "http://localhost:4317" });
+  const md = await P.exportPack(orgId, slug);
+
+  const back = await Auth.importPack({ orgId, files: [{ path: `${slug}.md`, text: md }] });
+  assert.equal(back.created, false);
+  assert.equal(back.pack.instructions, "A very specific method, stated once.",
+    "no platform wrapper and no provenance comment smuggled into the author's text");
+  assert.equal(back.pack.name, INPUT.name);
+});

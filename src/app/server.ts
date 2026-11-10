@@ -1,6 +1,7 @@
 import http from "node:http";
 import { URL } from "node:url";
-import { allSettings, initDb, putSetting, setting, settingInt } from "./db.js";
+import { allSettings, initDb, platformOrgId, putSetting, setting, settingInt } from "./db.js";
+import * as Au from "./authoring.js";
 import * as A from "./auth.js";
 import * as Pay from "../billing/purchases.js";
 import { payments } from "../billing/provider.js";
@@ -377,7 +378,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   if (method === "GET" && path === "/authors") {
     const s2 = await sql();
     const mineRaw = await s2.query<Record<string, unknown>>(`
-      SELECT p.id, p.slug, p.name, p.author_payout_email AS payout_email,
+      SELECT p.id, p.slug, p.name, p.status, p.author_payout_email AS payout_email,
              (SELECT COUNT(*) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
                 WHERE v.pack_id = p.id) AS runs,
              (SELECT COUNT(*) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
@@ -403,7 +404,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const n = (v: unknown) => Number(v ?? 0);
     return html(res, V.authorsPage({
       mine: mineRaw.map((m) => ({
-        id: String(m["id"]), slug: String(m["slug"]), name: String(m["name"]),
+        id: String(m["id"]), slug: String(m["slug"]), name: String(m["name"]), status: String(m["status"]),
         payout_email: (m["payout_email"] as string | null) ?? null,
         runs: n(m["runs"]), trials: n(m["trials"]), failures: n(m["failures"]),
         cost_cents: n(m["cost_cents"]), millicents: n(m["millicents"]), paid_millicents: n(m["paid_millicents"]),
@@ -419,6 +420,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         mine: c["author_org_id"] === ctx.orgId,
       })),
       balance: await bal(), viewer, err: url.searchParams.get("err") ?? undefined,
+      isCurator: (await platformOrgId()) === ctx.orgId,
     }));
   }
   if (method === "POST" && path === "/authors/claim") {
@@ -433,6 +435,120 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     await s2.query("UPDATE packs SET author_org_id = $1, author_payout_email = $2 WHERE id = $3",
       [ctx.orgId, (f["payoutEmail"] ?? "").trim(), pack.id]);
     return redirect(res, "/authors");
+  }
+
+  // ------------------------------------------------------------- authoring
+  const packFields = (f: Record<string, string>): Au.PackInput => ({
+    slug: f["slug"] ?? "", name: f["name"] ?? "", tagline: f["tagline"] ?? "",
+    author: f["author"] ?? "", model: f["model"] ?? "claude-opus-5",
+    effort: (f["effort"] || undefined) as Au.PackInput["effort"],
+    priceCents: Math.floor(Number(f["priceCents"] ?? 0)),
+    upgradePoints: Math.floor(Number(f["upgradePoints"] ?? 0)),
+    instructions: f["instructions"] ?? "",
+    pinnedModels: (f["pinnedModels"] ?? "").split(",").map((x) => x.trim()).filter(Boolean),
+    payoutEmail: f["payoutEmail"] ?? "",
+  });
+
+  if (method === "GET" && path === "/authors/new") {
+    ownerOnly();
+    return html(res, V.packEditorPage({
+      pack: null, models: await models(), balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined, isCurator: (await platformOrgId()) === ctx.orgId,
+    }));
+  }
+  if (method === "POST" && path === "/authors/packs") {
+    ownerOnly();
+    const f = await body(req);
+    try {
+      const pack = await Au.createPack(ctx.orgId, packFields(f));
+      return redirect(res, `/packs/${pack.slug}/edit`);
+    } catch (e) { return redirect(res, `/authors/new?err=${encodeURIComponent(msg(e))}`); }
+  }
+
+  const editMatch = /^\/packs\/([a-z0-9-]+)\/edit$/.exec(path);
+  if (editMatch) {
+    const slug = editMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const curator = (await platformOrgId()) === ctx.orgId;
+    if (pack.author_org_id !== ctx.orgId && !curator) throw new Au.NotTheAuthorError();
+    if (method === "POST") {
+      ownerOnly();
+      try { await Au.updatePack(pack.author_org_id!, slug, { ...packFields(await body(req)), slug }); }
+      catch (e) { return redirect(res, `/packs/${slug}/edit?err=${encodeURIComponent(msg(e))}`); }
+      return redirect(res, `/packs/${slug}/edit`);
+    }
+    const v = await P.latestVersion(pack.id);
+    return html(res, V.packEditorPage({
+      pack: { ...pack, ...(v ? { version: v.version } : {}) },
+      models: await models(), balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined, isCurator: curator,
+    }));
+  }
+
+  const subMatch = /^\/packs\/([a-z0-9-]+)\/submit$/.exec(path);
+  if (method === "POST" && subMatch) {
+    ownerOnly();
+    try { await Au.setStatus(ctx.orgId, subMatch[1]!, "review"); return redirect(res, `/packs/${subMatch[1]}/edit`); }
+    catch (e) { return redirect(res, `/packs/${subMatch[1]}/edit?err=${encodeURIComponent(msg(e))}`); }
+  }
+  const statMatch = /^\/packs\/([a-z0-9-]+)\/status$/.exec(path);
+  if (method === "POST" && statMatch) {
+    ownerOnly();
+    const f = await body(req);
+    try {
+      await Au.setStatus(ctx.orgId, statMatch[1]!, (f["status"] ?? "draft") as Au.PackStatus);
+      return redirect(res, url.searchParams.get("from") === "curate" ? "/curate" : `/packs/${statMatch[1]}/edit`);
+    } catch (e) { return redirect(res, `/packs/${statMatch[1]}/edit?err=${encodeURIComponent(msg(e))}`); }
+  }
+  const delMatch = /^\/packs\/([a-z0-9-]+)\/delete$/.exec(path);
+  if (method === "POST" && delMatch) {
+    ownerOnly();
+    try { await Au.deletePack(ctx.orgId, delMatch[1]!); return redirect(res, "/authors"); }
+    catch (e) { return redirect(res, `/packs/${delMatch[1]}/edit?err=${encodeURIComponent(msg(e))}`); }
+  }
+
+  // Upload: one file or a whole folder, as JSON so it works from the browser,
+  // the CLI and an agent without a multipart parser in between.
+  if (method === "POST" && path === "/api/packs") {
+    ownerOnly();
+    const payload = (await jsonBody(req)) as { files?: unknown; slug?: unknown } | undefined;
+    const files = Array.isArray(payload?.files) ? payload.files : [];
+    const clean = files
+      .filter((f): f is { path: string; text: string } =>
+        typeof (f as { path?: unknown }).path === "string" && typeof (f as { text?: unknown }).text === "string")
+      .slice(0, 200);
+    res.writeHead(200, { "content-type": "application/json" });
+    if (clean.length === 0) {
+      res.writeHead(400, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({ error: "send { files: [{ path, text }] }" }));
+    }
+    try {
+      const out = await Au.importPack({
+        orgId: ctx.orgId, files: clean,
+        ...(typeof payload?.slug === "string" ? { slugOverride: payload.slug } : {}),
+      });
+      return void res.end(JSON.stringify({
+        slug: out.pack.slug, created: out.created, status: out.pack.status,
+        name: out.pack.name, unknownKeys: out.parsed.unknownKeys,
+      }));
+    } catch (e) {
+      res.writeHead(statusOf(e) ?? 400, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({ error: msg(e) }));
+    }
+  }
+
+  if (method === "GET" && path === "/curate") {
+    if ((await platformOrgId()) !== ctx.orgId) throw new Au.NotTheCuratorError();
+    const s2 = await sql();
+    const listed = await s2.query<{ slug: string; name: string; author: string }>(
+      "SELECT slug, name, author FROM packs WHERE status = 'listed' ORDER BY name");
+    return html(res, V.curatePage({
+      queue: (await Au.submittedPacks()).map((q) => ({
+        slug: q.slug, name: q.name, author: q.author, tagline: q.tagline, price_cents: Number(q.price_cents),
+      })),
+      listed, balance: await bal(), viewer,
+    }));
   }
 
   // ------------------------------------------------------------- schedules

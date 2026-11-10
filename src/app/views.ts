@@ -74,7 +74,7 @@ export function layout(
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
 <nav>
   ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  <a href="/schedules">Schedules</a><a href="/purchases">Purchases</a><a href="/authors">Authors</a><a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
+  <a href="/authors">Authoring</a><a href="/schedules">Schedules</a><a href="/purchases">Purchases</a><a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
   ${opts.balance !== undefined ? `<span class="tag">${esc(fmt(opts.balance))}</span>` : ""}
   <span class="tag" title="${esc(v.email)}">${esc(v.orgName)} · ${esc(v.name)}${v.role === "owner" ? " (owner)" : ""}</span>
   <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
@@ -286,12 +286,12 @@ ${rows.map((r) => `<tr><td>${esc(r.created_at.slice(5, 16).replace("T", " "))}</
 
 export function authorsPage(args: {
   mine: Array<{
-    id: string; slug: string; name: string; runs: number; trials: number; failures: number;
+    id: string; slug: string; name: string; status: string; runs: number; trials: number; failures: number;
     cost_cents: number; millicents: number; paid_millicents: number; payout_email: string | null;
   }>;
   catalog: Array<{ name: string; author: string; runs: number; millicents: number; mine: boolean }>;
   recent: Array<{ run_id: string; pack: string; stop_reason: string | null; cost_cents: number; started_at: string }>;
-  balance: number; viewer: Viewer; err?: string;
+  balance: number; viewer: Viewer; err?: string; isCurator: boolean;
 }): string {
   return layout("Authors", `
 <h1>Authoring</h1>
@@ -299,12 +299,13 @@ export function authorsPage(args: {
 why the ledger is an accounting system rather than a counter — and why a share is held until the buyer's refund window closes.</p>
 ${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
 
+<p><a class="btn" href="/authors/new">Write a new pack</a>${args.isCurator ? ` <a class="btn ghost" href="/curate">Curate the catalog</a>` : ""}</p>
 <h2>Packs you wrote</h2>
 ${args.mine.length === 0
-  ? `<p class="lede">None yet. Claim a pack you wrote below and its runs, failures and earnings appear here — and you get to see those runs' transcripts raw, which is the point of keeping them.</p>`
+  ? `<p class="lede">None yet — <a href="/authors/new">write one</a> or upload a folder. You can also claim a seeded pack below.</p>`
   : `<table><tr><th>Pack</th><th class="num">Runs</th><th class="num">Trials</th><th class="num">Failed</th><th class="num">Compute</th><th class="num">Earned</th><th class="num">Paid</th><th>Payout to</th></tr>
 ${args.mine.map((m) => `<tr>
-  <td><a href="/packs/${esc(m.slug)}">${esc(m.name)}</a></td>
+  <td><a href="/packs/${esc(m.slug)}/edit">${esc(m.name)}</a> <span class="tag">${esc(m.status)}</span></td>
   <td class="num">${m.runs}</td><td class="num">${m.trials}</td>
   <td class="num"${m.failures > 0 ? ` style="color:var(--bad)"` : ""}>${m.failures}</td>
   <td class="num">${esc(fmt(m.cost_cents))}</td>
@@ -608,4 +609,140 @@ offered on packs this organisation owns.</p>`
   </div>
   <p class="lede" style="margin-top:10px;font-size:13.5px">Times are UTC so a schedule does not drift. Hourly ignores the hour and weekday.</p>
 </form>`}`, { balance: args.balance, viewer: args.viewer });
+}
+
+// ----------------------------------------------------------------- authoring
+
+const STATUS_NOTE: Record<string, string> = {
+  draft: "Only you can see this. Publish it to the runtime, then submit it for the catalog.",
+  review: "Submitted. The curating organisation decides whether it goes on the shelf.",
+  listed: "On the shelf and buyable.",
+  unlisted: "Withdrawn from the catalog. Anyone who already bought it keeps it and can still run it.",
+};
+
+export function packEditorPage(args: {
+  pack: (PackRow & { version?: number }) | null;
+  models: string[]; balance: number; viewer: Viewer; err?: string; isCurator: boolean;
+}): string {
+  const p = args.pack;
+  const pinned: string[] = p ? JSON.parse(p.pinned_models) : [];
+  const action = p ? `/packs/${esc(p.slug)}/edit` : "/authors/packs";
+  return layout(p ? `Edit ${p.name}` : "New pack", `
+<h1>${p ? `Edit ${esc(p.name)}` : "Write a pack"}</h1>
+<p class="lede">A pack is one expert's method, packaged as a worker. The instructions are the product — everything else
+is how it is sold.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+${p ? `<div class="note"><strong>${esc(p.status)}</strong> — ${esc(STATUS_NOTE[p.status] ?? "")}
+  ${p.version ? `Published version ${p.version}.` : "Not published to the runtime yet."}</div>` : ""}
+
+${p ? "" : `<h2>Start from a file or a folder</h2>
+<p class="lede" style="font-size:14px">Already written it? Drop in an <code>agent.md</code> — the same format this site
+exports and <code>ant apply</code> reads — or a whole folder, where <code>agent.md</code> is the definition and the
+other markdown files are appended in filename order.</p>
+<div class="card">
+  <div class="row">
+    <label class="btn ghost">Choose files<input id="files" type="file" multiple accept=".md,.markdown,.txt" hidden></label>
+    <label class="btn ghost">Choose a folder<input id="folder" type="file" multiple webkitdirectory hidden></label>
+    <span class="tag" id="uploadState">nothing selected</span>
+  </div>
+  <p class="lede" style="margin:10px 0 0;font-size:13.5px">It arrives as a draft you can finish below. Nothing is listed until it is submitted and approved.</p>
+</div>
+<script>
+const state = document.getElementById('uploadState');
+async function send(files) {
+  const picked = [...files].filter((f) => /\.(md|markdown|txt)$/i.test(f.name));
+  if (picked.length === 0) { state.textContent = 'no markdown or text files in that selection'; return; }
+  state.textContent = 'reading ' + picked.length + ' file(s)…';
+  const payload = { files: await Promise.all(picked.map(async (f) => ({
+    path: f.webkitRelativePath || f.name, text: await f.text(),
+  }))) };
+  state.textContent = 'uploading…';
+  const res = await fetch('/api/packs', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) { state.textContent = out.error || ('upload failed: ' + res.status); return; }
+  location.href = '/packs/' + out.slug + '/edit';
+}
+document.getElementById('files').addEventListener('change', (e) => send(e.target.files));
+document.getElementById('folder').addEventListener('change', (e) => send(e.target.files));
+</script>`}
+
+<h2>${p ? "Details" : "Or write it here"}</h2>
+<form method="post" action="${action}" class="card">
+  <p><label>Name<br><input type="text" name="name" value="${esc(p?.name ?? "")}" style="width:100%" required></label></p>
+  <p><label>One line a buyer would recognise<br>
+    <input type="text" name="tagline" value="${esc(p?.tagline ?? "")}" style="width:100%"></label></p>
+  <p><label>Shown as the author<br>
+    <input type="text" name="author" value="${esc(p?.author ?? "")}" style="width:100%"></label></p>
+  ${p ? `<p><label>Address<br><input type="text" value="/packs/${esc(p.slug)}" style="width:100%" disabled></label>
+    <span class="tag">an address never changes — buyers and traces point at it</span></p>`
+    : `<p><label>Address <span style="color:var(--muted);font-size:13px">(blank to take it from the name)</span><br>
+    <input type="text" name="slug" placeholder="pricing-reviewer" style="width:100%"></label></p>`}
+  <div class="row">
+    <label>Price <input type="text" name="priceCents" value="${p?.price_cents ?? 0}" size="7"> <span class="tag">cents, 0 = free</span></label>
+    <label>Update cost <input type="text" name="upgradePoints" value="${p?.upgrade_points ?? 0}" size="5"> <span class="tag">points</span></label>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <label>Default model <select name="model">
+      ${args.models.map((m) => `<option value="${esc(m)}"${m === (p?.model ?? "claude-opus-5") ? " selected" : ""}>${esc(m)}</option>`).join("")}
+    </select></label>
+    <label>Effort <select name="effort">
+      ${["", "low", "medium", "high", "xhigh", "max"].map((e) => `<option value="${esc(e)}"${e === (p?.effort ?? "high") ? " selected" : ""}>${e || "(none)"}</option>`).join("")}
+    </select></label>
+    <label>Payout address <input type="text" name="payoutEmail" value="${esc(p?.author_payout_email ?? "")}" size="22"></label>
+  </div>
+  <p style="margin-top:12px"><label>Restrict to these models <span style="color:var(--muted);font-size:13px">(comma separated, blank for any)</span><br>
+    <input type="text" name="pinnedModels" value="${esc(pinned.join(", "))}" style="width:100%"></label>
+    <span class="tag">every extraction refusal measured came from Opus; a weaker model may simply comply</span></p>
+  <p><label>The method — this is the product, and buyers never see it<br>
+    <textarea name="instructions" style="min-height:300px" required>${esc(p?.instructions ?? "")}</textarea></label></p>
+  <button class="btn" type="submit">${p ? "Save" : "Create as a draft"}</button>
+</form>
+
+${p ? `<h2>Lifecycle</h2>
+<div class="row">
+  <form method="post" action="/packs/${esc(p.slug)}/publish" class="inline">
+    <button class="btn ghost">${p.version ? `Publish version ${p.version + 1}` : "Publish to the runtime"}</button></form>
+  ${p.status === "draft" || p.status === "unlisted" ? `<form method="post" action="/packs/${esc(p.slug)}/submit" class="inline">
+    <button class="btn">Submit for the catalog</button></form>` : ""}
+  ${args.isCurator ? `<form method="post" action="/packs/${esc(p.slug)}/status" class="inline">
+    <input type="hidden" name="status" value="${p.status === "listed" ? "unlisted" : "listed"}">
+    <button class="btn ghost">${p.status === "listed" ? "Withdraw from the catalog" : "List it"}</button></form>` : ""}
+  <form method="post" action="/packs/${esc(p.slug)}/delete" class="inline">
+    <button class="btn ghost">Delete</button></form>
+  <a class="btn ghost" href="/packs/${esc(p.slug)}">View as a buyer</a>
+</div>
+<p class="lede" style="margin-top:12px;font-size:14px">Saving changes the <em>next</em> version. Anyone who already
+bought this keeps running the version they bought, because a version carries its own copy of the method — which is
+what lets you fix a mistake without quietly rewriting work somebody paid for.</p>` : ""}`,
+  { balance: args.balance, viewer: args.viewer });
+}
+
+export function curatePage(args: {
+  queue: Array<{ slug: string; name: string; author: string; tagline: string; price_cents: number }>;
+  listed: Array<{ slug: string; name: string; author: string }>;
+  balance: number; viewer: Viewer;
+}): string {
+  return layout("Curate", `
+<h1>Curating the catalog</h1>
+<p class="lede">A thin curated shelf beats a full unreliable one — marketplaces die of bad inventory faster than of
+empty inventory. You are the taste.</p>
+<h2>Waiting for a decision</h2>
+${args.queue.length === 0 ? `<p class="lede">Nothing submitted.</p>` : `<table><tr><th>Pack</th><th>Author</th><th class="num">Price</th><th></th></tr>
+${args.queue.map((q) => `<tr>
+  <td><a href="/packs/${esc(q.slug)}/edit">${esc(q.name)}</a><div style="color:var(--muted);font-size:13px">${esc(q.tagline)}</div></td>
+  <td>${esc(q.author)}</td><td class="num">${esc(fmt(q.price_cents))}</td>
+  <td><form method="post" action="/packs/${esc(q.slug)}/status" class="row">
+    <button class="btn" name="status" value="listed">List it</button>
+    <button class="btn ghost" name="status" value="draft">Send back</button></form></td>
+</tr>`).join("")}</table>`}
+<h2>On the shelf</h2>
+<table><tr><th>Pack</th><th>Author</th><th></th></tr>
+${args.listed.map((l) => `<tr><td><a href="/packs/${esc(l.slug)}">${esc(l.name)}</a></td><td>${esc(l.author)}</td>
+<td><form method="post" action="/packs/${esc(l.slug)}/status" class="inline">
+  <input type="hidden" name="status" value="unlisted">
+  <button class="btn ghost" style="padding:5px 10px">Withdraw</button></form></td></tr>`).join("")
+  || `<tr><td colspan="3">Nothing listed.</td></tr>`}
+</table>`, { balance: args.balance, viewer: args.viewer });
 }
