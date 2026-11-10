@@ -12,6 +12,7 @@ import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceMillipoints, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
+import * as Cr from "./creators.js";
 import * as L from "./listing.js";
 import { permissionSummary } from "../packs/permissions.js";
 import * as V from "./views.js";
@@ -112,6 +113,14 @@ async function packNameOf(packVersionId: string): Promise<string> {
   return (await P.packById(v.pack_id))?.name ?? "?";
 }
 
+/** The handle behind a pack's `creator_id`, or null for a pack nobody has claimed. */
+async function creatorHandleOf(creatorId: string | null): Promise<string | null> {
+  if (!creatorId) return null;
+  const s = await sql();
+  const row = await s.one<{ handle: string }>("SELECT handle FROM creators WHERE id = $1", [creatorId]);
+  return row?.handle ?? null;
+}
+
 // ------------------------------------------------------------------ routes
 
 async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: Ctx): Promise<void> {
@@ -132,6 +141,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
         pricePoints: Pay.pricePoints(p),
         stats: await P.packStats(p.id),
+        creatorHandle: await creatorHandleOf(p.creator_id),
       };
     }));
     return html(res, V.catalogPage(packs, await bal(), viewer, q, P.tagsOf(packs), await P.roles()));
@@ -156,6 +166,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       web: P.packExtras(p).web ?? {},
       defaultPolicy: await P.destructivePolicy(),
     }).lines;
+    const creatorHandle = await creatorHandleOf(p.creator_id);
     const extras: V.PackPageExtras = {
       listing: L.hasListing(p) ? L.listingOf(p) : null,
       stats: await P.packStats(p.id),
@@ -164,6 +175,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       updatedAt: v?.created_at ?? null,
       builtOn: p.built_on,
       refundDays: await settingInt("refund_window_days"),
+      creator: creatorHandle ? { handle: creatorHandle } : null,
     };
     return html(res, V.packPage(p, v, owned, await models(), await bal(),
       url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));
@@ -538,6 +550,69 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     await s2.query("UPDATE packs SET author_org_id = $1, author_payout_email = $2 WHERE id = $3",
       [ctx.orgId, (f["payoutEmail"] ?? "").trim(), pack.id]);
     return redirect(res, "/authors");
+  }
+
+  // ------------------------------------------------------------- creators
+  // `/creators/me` is checked ahead of the `/creators/:handle` pattern below,
+  // since "me" would otherwise parse as a handle.
+  if (method === "GET" && path === "/creators/me") {
+    const mine = await Cr.creatorForOrg(ctx.orgId);
+    let linksText = "";
+    if (mine) {
+      try {
+        const parsed = JSON.parse(mine.links);
+        if (Array.isArray(parsed)) {
+          linksText = parsed.map((l: { label?: string; url?: string }) => `${l.label ?? ""} | ${l.url ?? ""}`).join("\n");
+        }
+      } catch { /* malformed stored JSON: start the field blank rather than throw */ }
+    }
+    const err = url.searchParams.get("err") ?? undefined;
+    return html(res, V.layout(mine ? `Edit ${mine.display_name}` : "Set up your creator profile", `
+<h1>${mine ? "Edit your creator profile" : "Set up your creator profile"}</h1>
+<p class="lede">This is the page your packs' byline links to.</p>
+${err ? `<div class="note bad">${V.esc(err)}</div>` : ""}
+<form method="post" action="/creators/me" class="card">
+  <p><label>Handle<br><input type="text" name="handle" value="${V.esc(mine?.handle ?? "")}" style="width:100%" required></label>
+    <span class="tag">/creators/${V.esc(mine?.handle ?? "your-handle")}</span></p>
+  <p><label>Display name<br><input type="text" name="displayName" value="${V.esc(mine?.display_name ?? "")}" style="width:100%" required></label></p>
+  <p><label>Avatar URL<br><input type="url" name="avatar" value="${V.esc(mine?.avatar ?? "")}" style="width:100%" placeholder="https://…"></label></p>
+  <p><label>Bio<br><textarea name="bio" style="min-height:160px">${V.esc(mine?.bio ?? "")}</textarea></label></p>
+  <p><label>Links <span style="color:var(--muted);font-size:13px">(one per line: label | https://url)</span><br>
+    <textarea name="links" style="min-height:100px">${V.esc(linksText)}</textarea></label></p>
+  <button class="btn" type="submit">Save</button>
+</form>
+${mine ? `<p class="lede" style="margin-top:var(--s4)"><a href="/creators/${V.esc(mine.handle)}">View your public page</a></p>` : ""}`,
+    { balance: await bal(), viewer }));
+  }
+  if (method === "POST" && path === "/creators/me") {
+    ownerOnly();
+    const f = await body(req);
+    const links = (f["links"] ?? "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+      const i = line.indexOf("|");
+      return i === -1 ? { label: line, url: "" } : { label: line.slice(0, i).trim(), url: line.slice(i + 1).trim() };
+    }).filter((l) => l.url);
+    try {
+      const created = await Cr.upsertCreator({
+        orgId: ctx.orgId, userId: ctx.userId,
+        handle: f["handle"] ?? "", displayName: f["displayName"] ?? "",
+        bio: f["bio"], avatar: f["avatar"], links,
+      });
+      return redirect(res, `/creators/${created.handle}`);
+    } catch (e) { return redirect(res, `/creators/me?err=${encodeURIComponent(msg(e))}`); }
+  }
+  const creatorMatch = /^\/creators\/([a-zA-Z0-9_-]+)$/.exec(path);
+  if (method === "GET" && creatorMatch) {
+    const creator = await Cr.creatorByHandle(creatorMatch[1]!);
+    if (!creator) return html(res, V.layout("Not found", "<h1>No such creator</h1>", { viewer }), 404);
+    const s2 = await sql();
+    const rows = await s2.query<P.PackRow>(
+      "SELECT * FROM packs WHERE creator_id = $1 AND status = 'listed' ORDER BY name", [creator.id]);
+    const packs = await Promise.all(rows.map(async (p) => ({
+      ...p,
+      pricePoints: Pay.pricePoints(p),
+      stats: await P.packStats(p.id),
+    })));
+    return html(res, V.creatorPage(creator, packs, await Cr.creatorStats(creator.id), viewer, await bal()));
   }
 
   // ------------------------------------------------------------- authoring

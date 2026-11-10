@@ -2,6 +2,7 @@ import { fmt, fmtMilli, pts } from "../billing/points.js";
 import { ROLES } from "./platform.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import type { Listing } from "./listing.js";
+import type { CreatorRow } from "./creators.js";
 
 export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -555,18 +556,35 @@ export function thumb(slug: string): string {
 
 export function catalogPage(
   packs: Array<PackRow & { published: boolean; owned: boolean; pricePoints: number;
-    stats: { runs: number; buyers: number; version: number } }>,
+    stats: { runs: number; buyers: number; version: number };
+    /** The pack's creator, when `author` is backed by a real creator record. */
+    creatorHandle: string | null }>,
   balance: number, viewer: Viewer = null, query = "",
   cats: Array<{ tag: string; count: number }> = [],
   roles: Array<{ id: string; name: string; blurb: string; icon: string; count: number }> = [],
 ): string {
   // Name, face, one line, price. Everything else is on the pack's own page.
-  const cards = packs.map((p) => `<a class="card gig" href="/packs/${esc(p.slug)}">
+  //
+  // The card used to be one big <a> around everything — simplest markup, and
+  // right as long as every click on it meant the same thing. A byline that
+  // goes to a different page breaks that: an anchor cannot nest inside
+  // another anchor, so the card is a <div> instead, with an invisible anchor
+  // laid over the whole thing as the default click target. The byline link,
+  // when there is one, sits on top of that overlay (`who-link` carries the
+  // stacking) so a click there reaches the creator and nowhere else; every
+  // other pixel still falls through to the pack.
+  const cards = packs.map((p) => {
+    const name = esc(p.author.split(" — ")[0] ?? p.author);
+    const who = p.creatorHandle
+      ? `<a class="who-link" href="/creators/${esc(p.creatorHandle)}" style="position:relative;z-index:1">${name}</a>`
+      : name;
+    return `<div class="card gig">
+  <a href="/packs/${esc(p.slug)}" aria-label="${esc(p.name)}" style="position:absolute;inset:0;z-index:0"></a>
   ${p.image
     ? `<img class="thumb" src="${esc(heroSrc(p.image))}" alt="" loading="lazy" decoding="async" width="640" height="480">`
     : thumb(p.slug)}
   <div class="meta">
-    <p class="who">${avatar(p.author)}<span>${esc(p.author.split(" — ")[0] ?? p.author)}</span></p>
+    <p class="who">${avatar(p.author)}<span>${who}</span></p>
     <h3>${esc(p.name)}</h3>
     <p class="line">${esc(p.tagline)}</p>
     <p class="foot">
@@ -575,7 +593,8 @@ export function catalogPage(
         : `<span class="proof new">new</span>`}
       <span class="price">${p.pricePoints === 0 ? "free" : `${p.pricePoints.toLocaleString("en-US")}<small> pts</small>`}</span>
     </p>
-  </div></a>`).join("");
+  </div></div>`;
+  }).join("");
   const found = packs.length;
   return layout("Catalog", `<h1>Hire a worker</h1>
 <p class="lede">Buy once. It runs here. You see what every run cost.</p>
@@ -640,6 +659,12 @@ export type PackPageExtras = {
   builtOn: string | null;
   /** The purchase refund window, in days, so the buy card can state it. */
   refundDays: number;
+  /**
+   * Who `p.author` is, when that string is backed by a real creator record.
+   * `null` for a pack nobody has claimed yet — the byline still shows
+   * `p.author`, it just does not go anywhere.
+   */
+  creator: { handle: string } | null;
 };
 
 /** A stored timestamp as a date. The hour a curator clicked is not news. */
@@ -686,7 +711,7 @@ export function packPage(
 ): string {
   const pinned: string[] = JSON.parse(p.pinned_models);
   const choices = (pinned.length ? pinned : models);
-  const { listing, stats, permissions, files, updatedAt, builtOn, refundDays } = extras;
+  const { listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator } = extras;
   const free = p.price_points === 0;
   return layout(p.name, `
 ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
@@ -694,7 +719,7 @@ ${breadcrumb(p)}
 <h1>${esc(p.name)}</h1>
 <p class="lede">${esc(p.tagline)}</p>
 <div class="row" style="margin-bottom:var(--s2)">
-  <span class="tag">by ${esc(p.author)}</span>
+  <span class="tag">by ${creator ? `<a href="/creators/${esc(creator.handle)}">${esc(p.author)}</a>` : esc(p.author)}</span>
   <span class="tag">${free ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
@@ -1475,6 +1500,72 @@ ${p ? `<h2>Lifecycle</h2>
 bought this keeps running the version they bought, because a version carries its own copy of the method — which is
 what lets you fix a mistake without quietly rewriting work somebody paid for.</p>` : ""}`,
   { balance: args.balance, viewer: args.viewer });
+}
+
+/** A stored `href` a creator typed into a free-text field, or nothing. */
+const safeHref = (url: string): string => /^https?:\/\//i.test(url.trim()) ? url.trim() : "";
+
+/**
+ * A creator's own page: the record every byline on the site can now point
+ * at, instead of a name nobody could click through on.
+ *
+ * `packPage` taught the rule this is built on — a heading over nothing to
+ * say is worse than no heading — and it applies here just as much: a creator
+ * who has written no bio, added no links and been attributed no packs yet
+ * gets a page with no empty sections on it, not three headings over blanks.
+ *
+ * No rating renders here. That is Task 9's column, in a module that does not
+ * exist yet; what this page can say honestly today is how many runs its
+ * packs have had, so that is what stands in where a star rating will later
+ * go — proof instead of a promise.
+ */
+export function creatorPage(
+  creator: Pick<CreatorRow, "handle" | "display_name" | "bio" | "avatar" | "links" | "verified">,
+  packs: Array<PackRow & { pricePoints: number; stats: { runs: number; buyers: number; version: number } }>,
+  stats: { packs: number; runs: number; orgs: number },
+  viewer: Viewer,
+  balance: number,
+): string {
+  const bio = creator.bio.trim();
+  let links: Array<{ label: string; url: string }> = [];
+  try {
+    const parsed = JSON.parse(creator.links);
+    if (Array.isArray(parsed)) links = parsed;
+  } catch { /* malformed stored JSON: show no links rather than throw */ }
+  const image = creator.avatar ? heroSrc(creator.avatar) : "";
+
+  return layout(creator.display_name, `
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a> <span aria-hidden="true">›</span>
+  <span aria-current="page">${esc(creator.display_name)}</span></nav>
+<div class="row" style="align-items:center;margin-top:var(--s4)">
+  ${image ? `<img src="${esc(image)}" alt="" width="56" height="56" loading="lazy" decoding="async"
+    style="width:3.5rem;height:3.5rem;border-radius:999px;object-fit:cover;flex:none">` : avatar(creator.display_name)}
+  <h1 style="margin:0">${esc(creator.display_name)}${creator.verified ? ` ${icon("check", "Verified", true)}` : ""}</h1>
+</div>
+<p class="lede" style="margin:var(--s1) 0 var(--s4)">@${esc(creator.handle)}</p>
+<p class="row">
+  ${stats.runs > 0
+    ? `<span class="proof" title="${stats.runs} runs">${icon("runs", `${stats.runs.toLocaleString("en-US")} runs`)}</span>`
+    : `<span class="proof new">new</span>`}
+  ${stats.orgs > 0 ? `<span class="tag">${stats.orgs.toLocaleString("en-US")} owning ${stats.orgs === 1 ? "organisation" : "organisations"}</span>` : ""}
+</p>
+${bio ? paragraphs(bio) : ""}
+${links.length ? `<h2>Links</h2>
+<ul>${links.map((l) => {
+    const href = safeHref(l.url ?? "");
+    const label = esc(l.label || l.url || "");
+    return `<li>${href ? `<a href="${esc(href)}">${label}</a>` : label}</li>`;
+  }).join("")}</ul>` : ""}
+${packs.length ? `<h2>Packs</h2>
+<table><tr><th>Pack</th><th class="num">Runs</th><th class="num">Owning orgs</th><th class="num">Price</th></tr>
+${packs.map((p) => `<tr>
+  <td><a href="/packs/${esc(p.slug)}">${esc(p.name)}</a>${p.tagline ? `<div style="color:var(--muted);font-size:var(--t1)">${esc(p.tagline)}</div>` : ""}</td>
+  <td class="num">${p.stats.runs.toLocaleString("en-US")}</td>
+  <td class="num">${p.stats.buyers.toLocaleString("en-US")}</td>
+  <td class="num">${p.pricePoints === 0 ? "free" : `${p.pricePoints.toLocaleString("en-US")} pts`}</td>
+</tr>`).join("")}
+</table>` : ""}`,
+  { balance, viewer });
 }
 
 export function curatePage(args: {

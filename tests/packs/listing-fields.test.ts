@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { parsePackMarkdown } from "../../src/packs/import.js";
-import { packPage, type PackPageExtras } from "../../src/app/views.js";
+import { packPage, catalogPage, creatorPage, type PackPageExtras } from "../../src/app/views.js";
 import { hasListing, type Listing } from "../../src/app/listing.js";
 import type { PackRow, PackVersionRow } from "../../src/app/platform.js";
+import type { CreatorRow } from "../../src/app/creators.js";
 
 /**
  * A folder's own copy of its listing: the long description, the list fields
@@ -89,6 +90,7 @@ function packRow(over: Partial<PackRow> = {}): PackRow {
     author_payout_email: null, extras: "{}", created_at: "2026-01-02T03:04:05.000Z",
     ...EMPTY_COLUMNS,
     listing_approved_at: null, listing_stale_at: null, listed_at: null, built_on: null,
+    creator_id: null,
     ...over,
   };
 }
@@ -106,6 +108,7 @@ const NOTHING_KNOWN: PackPageExtras = {
   updatedAt: null,
   builtOn: null,
   refundDays: 14,
+  creator: null,
 };
 
 const FULL: Listing = {
@@ -311,6 +314,132 @@ describe("the pack page", () => {
     const h = render({ trial: { turns: 6, budgetCents: 40, used: false } });
     expect(h).toContain("6 turns, $0.40");
     expect(h).not.toContain("0.04 points");
+  });
+
+  it("links the byline to the creator's page when the pack has one", () => {
+    const h = render({ extras: { creator: { handle: "typeui" } } });
+    expect(h).toContain(`<a href="/creators/typeui">typeui.sh</a>`);
+  });
+
+  it("leaves the byline as plain text for a pack with no creator", () => {
+    const h = render();
+    expect(h).toContain("by typeui.sh");
+    expect(h).not.toContain("/creators/");
+  });
+});
+
+// ------------------------------------------------------------- the catalog
+
+function catalogPack(creatorHandle: string | null = null, over: Partial<PackRow> = {}): PackRow & {
+  published: boolean; owned: boolean; pricePoints: number;
+  stats: { runs: number; buyers: number; version: number };
+  creatorHandle: string | null;
+} {
+  return {
+    ...packRow(over),
+    published: true, owned: false, pricePoints: 49,
+    stats: { runs: 0, buyers: 0, version: 1 },
+    creatorHandle,
+  };
+}
+
+describe("the catalog", () => {
+  it("links a card's byline to the creator's page when there is one", () => {
+    const h = catalogPage([catalogPack("typeui")], 1000);
+    expect(h).toMatch(/<a class="who-link" href="\/creators\/typeui"[^>]*>typeui\.sh<\/a>/);
+  });
+
+  it("leaves a card's byline as plain text when there is no creator", () => {
+    const h = catalogPage([catalogPack()], 1000);
+    expect(h).not.toContain("/creators/");
+    expect(h).toContain("typeui.sh");
+  });
+
+  it("still links the card itself to the pack even once the byline links elsewhere", () => {
+    const h = catalogPage([catalogPack("typeui")], 1000);
+    expect(h).toContain(`href="/packs/senior-engineer"`);
+  });
+});
+
+// -------------------------------------------------------------- the creator
+
+function creatorRow(over: Partial<CreatorRow> = {}): CreatorRow {
+  return {
+    id: "cr_1", user_id: "u_1", org_id: "org_1", handle: "typeui",
+    display_name: "typeui.sh", bio: "", avatar: null, links: "[]",
+    verified: 0, created_at: "2026-01-02T03:04:05.000Z",
+    ...over,
+  };
+}
+
+const CREATOR_PACK = {
+  ...packRow(), pricePoints: 49,
+  stats: { runs: 0, buyers: 0, version: 1 },
+};
+
+describe("the creator page", () => {
+  it("renders no empty headings for a creator with no bio, no links and no packs", () => {
+    const h = creatorPage(creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, null, 0);
+    expect(h).not.toContain("<h2>");
+  });
+
+  it("lists the creator's packs and their totals", () => {
+    const h = creatorPage(
+      creatorRow(),
+      [{ ...CREATOR_PACK, stats: { runs: 42, buyers: 3, version: 1 } }],
+      { packs: 1, runs: 42, orgs: 3 },
+      null, 0,
+    );
+    expect(h).toContain("Senior Engineer");
+    expect(h).toContain(`href="/packs/senior-engineer"`);
+    expect(h).toMatch(/42/);
+  });
+
+  it("shows runs rather than stars for a creator with no rating", () => {
+    const h = creatorPage(creatorRow(), [], { packs: 0, runs: 128, orgs: 9 }, null, 0);
+    expect(h).toMatch(/128/);
+    expect(h).toContain("runs");
+    expect(h).not.toContain("★");
+    expect(h).not.toContain("rating");
+    expect(h).not.toContain("stars");
+  });
+
+  it("shows the verified mark only when the creator is verified", () => {
+    const plain = creatorPage(creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, null, 0);
+    const verified = creatorPage(creatorRow({ verified: 1 }), [], { packs: 0, runs: 0, orgs: 0 }, null, 0);
+    expect(plain).not.toContain("Verified");
+    expect(verified).toContain("Verified");
+  });
+
+  it("renders the bio and the links once the creator has written them", () => {
+    const h = creatorPage(
+      creatorRow({ bio: "Reads the diff before the commit.", links: JSON.stringify([
+        { label: "Site", url: "https://typeui.sh" },
+      ]) }),
+      [], { packs: 0, runs: 0, orgs: 0 }, null, 0,
+    );
+    expect(h).toContain("Reads the diff before the commit.");
+    expect(h).toContain(`<a href="https://typeui.sh">Site</a>`);
+  });
+
+  it("escapes a creator's free-text bio and link label", () => {
+    const h = creatorPage(
+      creatorRow({ bio: "<script>alert(1)</script>", links: JSON.stringify([
+        { label: "<b>evil</b>", url: "https://example.com" },
+      ]) }),
+      [], { packs: 0, runs: 0, orgs: 0 }, null, 0,
+    );
+    expect(h).not.toContain("<script>alert(1)</script>");
+    expect(h).toContain("&lt;script&gt;");
+    expect(h).not.toContain("<b>evil</b>");
+  });
+
+  it("refuses a javascript: link rather than rendering it as an href", () => {
+    const h = creatorPage(
+      creatorRow({ links: JSON.stringify([{ label: "Click me", url: "javascript:alert(1)" }]) }),
+      [], { packs: 0, runs: 0, orgs: 0 }, null, 0,
+    );
+    expect(h).not.toContain("javascript:alert(1)");
   });
 });
 
