@@ -14,6 +14,7 @@ import { cents, fromCents } from "../runtime/money.js";
 import { BudgetExhaustedError, type AgentRuntime, type PendingAsk, type RuntimeEvent } from "../runtime/types.js";
 import type { PackDefinition } from "../packs/types.js";
 import { SEED_PACKS } from "../packs/seed-packs.js";
+import { redactStoredPayload } from "../transcripts/redact.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string;
@@ -251,6 +252,24 @@ export async function runEvents(runId: string, afterId = 0): Promise<Array<{
   const rows = await s.query<{ id: unknown; kind: string; payload: string; created_at: string }>(
     "SELECT id, kind, payload, created_at FROM run_events WHERE run_id = $1 AND id > $2 ORDER BY id", [runId, afterId]);
   return rows.map((r) => ({ ...r, id: Number(r.id) }));
+}
+
+/**
+ * The transcript as a buyer may see it.
+ *
+ * Everything buyer-facing goes through here. The raw rows stay in the database
+ * for the author and the platform; what leaves the server is redacted against
+ * the exact instructions of the pack version this run is pinned to.
+ */
+export async function buyerEvents(runId: string, afterId = 0): Promise<Array<{
+  id: number; kind: string; payload: string; created_at: string;
+}>> {
+  const rows = await runEvents(runId, afterId);
+  if (rows.length === 0) return rows;
+  const run = await getRun(runId);
+  const version = run ? await getVersion(run.pack_version_id) : undefined;
+  const instructions = version?.instructions ?? "";
+  return rows.map((r) => ({ ...r, payload: redactStoredPayload(r.kind, r.payload, instructions) }));
 }
 
 export async function openAsks(runId: string): Promise<AskRow[]> {

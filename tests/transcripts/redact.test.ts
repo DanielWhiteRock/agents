@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { redactForBuyer, containsPackInstructions, REDACTION_NOTICE } from "../../src/transcripts/redact.js";
+import { redactForBuyer, containsPackInstructions, redactStoredPayload, REDACTION_NOTICE } from "../../src/transcripts/redact.js";
 import type { RuntimeEvent } from "../../src/runtime/types.js";
 
 const instructions = `Step 1: Establish the single commercial outcome before any creative work.
@@ -44,5 +44,44 @@ describe("redactForBuyer", () => {
   it("passes status events through untouched", () => {
     const out = redactForBuyer([{ type: "status", status: "idle", stopReason: null }], pack);
     expect(out[0]).toEqual({ type: "status", status: "idle", stopReason: null });
+  });
+});
+
+describe("redactStoredPayload", () => {
+  const stored = (kind: string, obj: unknown) => redactStoredPayload(kind, JSON.stringify(obj), instructions);
+
+  it("redacts agent text that quotes the instructions", () => {
+    const out = stored("agent.text", { type: "agent.text", text: "Channel is never the starting point and should be chosen last." });
+    expect(JSON.parse(out).text).toBe(REDACTION_NOTICE);
+  });
+  it("leaves ordinary agent text untouched", () => {
+    const text = "Here is your campaign plan.";
+    expect(JSON.parse(stored("agent.text", { text })).text).toBe(text);
+  });
+  it("keeps a buyer's own message exactly as typed, even if it quotes the pack", () => {
+    const text = "Channel is never the starting point and should be chosen last.";
+    expect(JSON.parse(stored("user.message", { text })).text).toBe(text);
+  });
+  it("scrubs instruction text out of a tool input", () => {
+    const out = stored("tool.use", { name: "write", input: { body: instructions } });
+    expect(JSON.parse(out).input).toBe(REDACTION_NOTICE);
+  });
+  it("scrubs a tool result that echoes the instructions", () => {
+    const out = stored("tool.result", { name: "read", preview: instructions });
+    expect(JSON.parse(out).preview).toBe(REDACTION_NOTICE);
+  });
+  it("replaces raw payloads wholesale", () => {
+    expect(JSON.parse(stored("raw", { type: "raw", payload: { system: instructions } })).payload).toBe(REDACTION_NOTICE);
+  });
+  it("passes metering rows through so the buyer still sees what it cost", () => {
+    const row = { list_cost_cents: 6, delta_cents: 6 };
+    expect(JSON.parse(stored("run.metered", row))).toEqual(row);
+  });
+  it("returns the payload unchanged when there are no instructions to protect", () => {
+    const p = JSON.stringify({ text: "anything" });
+    expect(redactStoredPayload("agent.text", p, "")).toBe(p);
+  });
+  it("survives a payload that is not valid JSON", () => {
+    expect(redactStoredPayload("agent.text", "not json", instructions)).toBe("not json");
   });
 });

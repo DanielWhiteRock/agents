@@ -421,14 +421,20 @@ Managed Agents proves unsuitable or impermissible. The pack format is the same
 either way — see §9.6, which makes that swap an architectural requirement rather
 than a hope.
 
-### 9.2 OPEN — owner to confirm with Anthropic
+### 9.2 RESOLVED — Anthropic approved reselling (2026-11-10)
 
-Beta access is **enabled by default for all API accounts**, so entitlement is not
-in question. There is **no multi-tenant or reseller documentation**, and one thing
-only Anthropic can answer: **do the usage terms permit one org running sessions on
-behalf of many paying third parties and reselling that inference?** Managed Agents
-also publishes **branding guidelines** that need reading before this ships under
-our own name. If the answer is no, hosted-first — the central
+**Anthropic confirmed that one org may run sessions on behalf of many paying
+third parties and resell that inference.** Hosted-first — the central decision of
+this document — is therefore permanent rather than provisional, and
+bring-your-own-key drops from "the fallback if they say no" to an option for
+developers and heavy users.
+
+Beta access is enabled by default for all API accounts, so entitlement was never
+in question either. §9.6's runtime interface stays, but as insurance against a
+platform change rather than against a policy answer.
+
+Still to read before launch: Managed Agents' **branding guidelines**, since this
+ships under the alphaCEO name. If the answer is no, hosted-first — the central
 decision of this document — is dead and only bring-your-own-key survives.
 **Confirm before building.**
 
@@ -645,10 +651,7 @@ collected from day one; workspace-per-organisation for credential isolation;
 scheduled runs deferred.
 
 **Open, and the owner's to settle:**
-- **§9.2 Managed Agents reseller permission** — ask Anthropic before building.
-  A no no longer invalidates hosted-first: per §9.6 it switches the runtime to
-  the self-hosted Agent SDK over OpenRouter, at the cost of building the
-  sandbox, vault, spend governor and scheduler ourselves.
+- ~~§9.2 Managed Agents reseller permission~~ — **approved 2026-11-10.**
 - The price of a pack.
 - The author's per-use points rate, and the points-to-cash conversion rate.
 - Whether Managed Agents' branding guidelines permit this product's framing (§9.2).

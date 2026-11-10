@@ -128,7 +128,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       busy = true;
       void (async () => {
         try {
-          for (const e of await P.runEvents(runId, after)) {
+          // Buyer-facing: redacted against the pack's own instructions.
+          for (const e of await P.buyerEvents(runId, after)) {
             after = e.id;
             res.write(`event: event\ndata: ${JSON.stringify(e)}\n\n`);
           }
