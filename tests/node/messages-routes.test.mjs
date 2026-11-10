@@ -161,6 +161,56 @@ test("a third organisation gets a flat 404 from reply and publish, not a redirec
   assert.equal(okReply.status, 303);
 });
 
+test("a rival creator with its own profile cannot publish into a thread that is not theirs, even though the route's own if(!mine) check passes", async () => {
+  // Distinct from the test above: there, the nosy organisation has no
+  // creator profile at all, so the route's `if (!mine)` 404s before
+  // `publishToFaq` is ever reached. Here the rival organisation *is* a
+  // creator — just not this thread's — so the route calls `publishToFaq`
+  // with a real, resolvable creator ID, and the privacy boundary has to be
+  // the domain function's own `thread.creator_id !== creatorId` check, not
+  // the route.
+  const { creator, pack, cookie: creatorCookie } = await creatorWithPack();
+  const buyer = await org("Rival Scenario Buyer Co");
+  const buyerCookie = await cookieFor(buyer.userId);
+
+  await fetch(`${server.baseUrl}/threads`, {
+    method: "POST",
+    headers: { cookie: buyerCookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      creatorId: creator.id, packId: pack.id, subject: "Rival scenario", body: "Not the rival's business.",
+    }),
+  });
+  const s = await sql();
+  const thread = await s.one("SELECT id FROM threads WHERE org_id = $1", [buyer.orgId]);
+
+  const { cookie: rivalCookie } = await creatorWithPack();
+
+  const publishRes = await fetch(`${server.baseUrl}/threads/${thread.id}/publish`, {
+    method: "POST", redirect: "manual",
+    headers: { cookie: rivalCookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ questionId: thread.id, answerId: thread.id }),
+  });
+  assert.equal(publishRes.status, 404);
+
+  const pack2 = await s.one("SELECT faq FROM packs WHERE id = $1", [pack.id]);
+  assert.deepEqual(JSON.parse(pack2.faq), [], "the rival's attempt left the real creator's FAQ untouched");
+
+  // The real creator can still publish normally afterward.
+  await fetch(`${server.baseUrl}/threads/${thread.id}/reply`, {
+    method: "POST",
+    headers: { cookie: creatorCookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ body: "Correct, not their business." }),
+  });
+  const [question, answer] = await s.query(
+    "SELECT * FROM thread_messages WHERE thread_id = $1 ORDER BY created_at ASC", [thread.id]);
+  const okPublish = await fetch(`${server.baseUrl}/threads/${thread.id}/publish`, {
+    method: "POST", redirect: "manual",
+    headers: { cookie: creatorCookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ questionId: question.id, answerId: answer.id }),
+  });
+  assert.equal(okPublish.status, 303);
+});
+
 test("POST /threads/:id/publish appends to the pack's FAQ and the asker's organisation name appears nowhere on the pack page", async () => {
   const { creator, pack, cookie: creatorCookie } = await creatorWithPack();
   const buyer = await org("Faq Route Buyer Organisation");

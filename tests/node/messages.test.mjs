@@ -123,10 +123,19 @@ test("a third organisation sees neither the thread nor its existence", async () 
     "a nonexistent thread and a real thread this org has no part in must fail identically",
   );
 
-  // Nor can it publish an answer to the creator's FAQ on the creator's behalf.
+  // Nor can it publish an answer to the creator's FAQ by passing its *own*
+  // creator ID against a thread that belongs to someone else's. This is the
+  // half of the boundary `publishToFaq` itself is responsible for — the
+  // route's own `if (!mine)` 404 cannot be the only thing guarding it, since
+  // a third organisation that happens to run its own creator profile (for an
+  // unrelated pack) would sail straight past that check.
+  const thirdCreator = await Cr.upsertCreator({
+    orgId: third.orgId, userId: third.userId, handle: `nosy-${++n}`, displayName: "Nosy Third",
+  });
   await assert.rejects(
-    M.publishToFaq(creator.id, thread.id, thread.id, thread.id),
-    (e) => e.name !== undefined, // any rejection is correct here; the specific assertion is reply() above
+    M.publishToFaq(thirdCreator.id, thread.id, thread.id, thread.id),
+    (e) => e.name === "ThreadNotFoundError" && e.status === 404,
+    "a creator ID that is real, but is not this thread's creator, must be refused identically to a bogus thread",
   );
 });
 

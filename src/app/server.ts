@@ -724,11 +724,18 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
 
   if (method === "POST" && path === "/threads") {
     const f = await body(req);
-    // Only an internal, absolute path is honoured — "//evil.example" parses as
-    // "/" followed by a protocol-relative host, not a path, so it is refused
-    // along with anything else that does not start with a single slash.
+    // An allowlist, not a blacklist: the form only ever sets this to one of
+    // the two pages a thread can be opened from. A blacklist of "looks like
+    // an external host" prefixes is the wrong shape for this — "//evil" is
+    // one such prefix, but so is "/\evil" (a backslash is an equivalent
+    // path separator to a browser's URL parser in the relative-slash state,
+    // so "/\evil.example/x" resolves to "http://evil.example/x" exactly
+    // like "//evil.example/x" does) and there is no reason to assume those
+    // are the only two. Anything that is not exactly one of the pages this
+    // form is rendered on falls back to /inbox.
     const backField = f["back"] ?? "";
-    const back = backField.startsWith("/") && !backField.startsWith("//") ? backField : "/inbox";
+    const back = /^\/packs\/[a-z0-9-]+$/.test(backField) || /^\/creators\/[a-zA-Z0-9_-]+$/.test(backField)
+      ? backField : "/inbox";
     try {
       await M.openThread({
         orgId: ctx.orgId, userId: ctx.userId, creatorId: f["creatorId"] ?? "",
