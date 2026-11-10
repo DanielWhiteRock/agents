@@ -800,10 +800,33 @@ async function teamRoutes(
 
 // --------------------------------------------------------------- bootstrap
 
+/**
+ * A hosted filesystem does not survive a deploy.
+ *
+ * Without DATABASE_URL the app falls back to SQLite on local disk, which is
+ * exactly right on a laptop and silently destructive on a host that replaces
+ * the container on every push: the organisations, purchases and points ledger
+ * would be there until the next deploy and then gone, with nothing in the logs
+ * to say so. Refusing to start is the only honest failure here.
+ */
+function assertDurableStore(): void {
+  if (process.env["NODE_ENV"] !== "production") return;
+  if (process.env["DATABASE_URL"]) return;
+  console.error(
+    "DATABASE_URL is not set. In production the store must be Postgres — the\n" +
+    "local-disk fallback is lost on every deploy, and it holds the ledger.\n" +
+    "Set DATABASE_URL, or set NODE_ENV to something other than production if\n" +
+    "a disposable store is genuinely what you want.");
+  process.exit(1);
+}
+
 async function main(): Promise<void> {
+  assertDurableStore();
   await initDb();
   const seeded = await P.seedCatalog();
   const store = (await sql()).dialect;
+  // Before accepting traffic: close out anything the last process left open.
+  const reconciled = await P.reconcileOpenRuns();
 
   const server = http.createServer((req, res) => {
     void handle(req, res).catch((e) => {
@@ -824,6 +847,23 @@ async function main(): Promise<void> {
 
   Sch.startScheduler();
 
+  // A host restarts this process on every deploy and gives it a few seconds'
+  // notice. Spending them is worth it: the scheduler stops before it can fire a
+  // run nobody will drive, open SSE connections are closed rather than left to
+  // time out, and the next process reconciles whatever was still in flight.
+  let stopping = false;
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      if (stopping) return process.exit(0); // A second signal means "now".
+      stopping = true;
+      console.log(`[${signal}] draining`);
+      Sch.stopScheduler();
+      server.close(() => process.exit(0));
+      // Nothing may hang the shutdown past the host's own patience.
+      setTimeout(() => process.exit(0), 8000).unref();
+    });
+  }
+
   server.listen(PORT, async () => {
     const s = await sql();
     const anyone = await s.one("SELECT 1 AS ok FROM users LIMIT 1");
@@ -831,6 +871,7 @@ async function main(): Promise<void> {
     console.log(`  store: ${store} · ${seeded} pack(s) seeded`);
     console.log(anyone ? "  sign in at /login" : "  no accounts yet — create one at /signup");
     console.log("  scheduler running, checking every minute");
+    if (reconciled) console.log(`  closed ${reconciled} run(s) left open by the last process`);
     if (store === "sqlite") console.log(`  (set DATABASE_URL to use Postgres: docker compose up -d)`);
   });
 }

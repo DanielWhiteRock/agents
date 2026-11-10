@@ -100,6 +100,9 @@ export async function deleteSchedule(orgId: string, scheduleId: string): Promise
  * `last_run_at` is stamped before the work starts and whatever the outcome, so
  * a schedule that fails — no points, entitlement revoked, platform down —
  * records why and waits for its next window instead of retrying in a loop.
+ *
+ * The stamp doubles as the claim: it is conditional on the value this instance
+ * read, so the ticker is safe to run on more than one instance.
  */
 export async function runDueSchedules(at = new Date()): Promise<{ fired: number; failed: number }> {
   const s = await sql();
@@ -107,7 +110,17 @@ export async function runDueSchedules(at = new Date()): Promise<{ fired: number;
   let fired = 0, failed = 0;
   for (const row of rows) {
     if (!isDue(row, at)) continue;
-    await s.query("UPDATE schedules SET last_run_at = $1 WHERE id = $2", [at.toISOString(), row.id]);
+    // Claim the row before spending anything. The stamp only lands if
+    // `last_run_at` still holds what this instance read, so when two instances
+    // tick at the same second exactly one of them fires. Without this the
+    // schedule runs twice and the organisation is billed twice — invisible on
+    // one instance, which is precisely why it has to be written down now.
+    const claimed = await s.query<{ id: string }>(
+      `UPDATE schedules SET last_run_at = $1
+         WHERE id = $2 AND COALESCE(last_run_at, '') = COALESCE($3, '')
+       RETURNING id`,
+      [at.toISOString(), row.id, row.last_run_at]);
+    if (claimed.length === 0) continue;
     try {
       const run = await P.startRun({
         orgId: row.org_id, userId: row.user_id, packVersionId: row.pack_version_id,

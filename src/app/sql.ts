@@ -29,7 +29,7 @@ class PostgresSql implements Sql {
 
   static async connect(url: string): Promise<PostgresSql> {
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: url, max: 8 });
+    const pool = new Pool({ connectionString: url, max: 8, ...sslFor(url) });
     await pool.query("SELECT 1");
     return new PostgresSql(pool as never);
   }
@@ -43,6 +43,44 @@ class PostgresSql implements Sql {
   }
   async exec(text: string): Promise<void> { await this.pool.query(text); }
   async close(): Promise<void> { await this.pool.end(); }
+}
+
+/**
+ * Whether to reach Postgres over TLS, and how strictly.
+ *
+ * A local container speaks plain TCP and a managed one requires TLS, so this
+ * cannot be a constant. `DATABASE_SSL` decides it outright; otherwise the
+ * connection string does, through the `sslmode` libpq already defines. The
+ * default is off, which is the local container and is what every provider's
+ * in-network URL also wants.
+ *
+ * `require` encrypts without checking who is on the other end — which is what
+ * every managed provider's own instructions tell you to do, because they hand
+ * out certificates signed by their private CA. It stops passive capture, not an
+ * active impersonator. `verify-full` is the honest setting and needs the
+ * provider's CA in the trust store; say so rather than pretending `require`
+ * means verified.
+ */
+export function sslFor(
+  url: string,
+  env: Record<string, string | undefined> = process.env,
+): { ssl?: { rejectUnauthorized: boolean } } {
+  const mode = (env["DATABASE_SSL"] ?? sslModeFromUrl(url)).toLowerCase();
+  if (mode === "off" || mode === "disable" || mode === "" || mode === "0") return {};
+  return { ssl: { rejectUnauthorized: mode === "verify" || mode.startsWith("verify-") } };
+}
+
+function sslModeFromUrl(url: string): string {
+  let params: URLSearchParams;
+  try {
+    params = new URL(url).searchParams;
+  } catch {
+    return "off"; // Not a URL we can read; leave the behaviour unchanged.
+  }
+  const mode = params.get("sslmode");
+  if (mode) return mode;
+  // `?ssl=true` is the non-libpq spelling several providers hand out.
+  return params.get("ssl") === "true" ? "require" : "off";
 }
 
 // ------------------------------------------------------------------- sqlite

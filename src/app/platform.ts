@@ -887,6 +887,42 @@ export async function hasTriedPack(orgId: string, packId: string): Promise<boole
   return Boolean(row);
 }
 
+/**
+ * Runs that were in flight when the process stopped.
+ *
+ * A turn is driven by a loop inside this process, so a restart — a deploy, a
+ * crash, the host moving the container — leaves the run row open with nobody
+ * reading its stream. That is not cosmetic. `ended_at IS NULL` is exactly what
+ * the concurrency limit counts, so each restart mid-turn costs the organisation
+ * one of its slots permanently, and after five deploys a personal tier cannot
+ * start anything at all. Meanwhile the session is still live at the provider,
+ * spending against a budget whose events are going nowhere.
+ *
+ * So each open run is metered once more — the provider still knows what it
+ * cost, even though we stopped listening — and then closed and its session
+ * terminated. The buyer sees a run that says it was interrupted, which is true,
+ * instead of one that looks like it is still working.
+ */
+export async function reconcileOpenRuns(): Promise<number> {
+  const s = await sql();
+  const rows = await s.query<{ id: string }>("SELECT id FROM runs WHERE ended_at IS NULL");
+  for (const r of rows) {
+    // One unreachable session must not stop the rest being freed.
+    try {
+      const run = await getRun(r.id);
+      if (run) {
+        const session = await runtime().readSession(run.session_id);
+        await meter(r.id, { events: [], session, pendingAsks: [] });
+      }
+    } catch { /* session gone, or the provider is unreachable: close it anyway */ }
+    await recordEvent(r.id, "run.interrupted", {
+      message: "the server restarted while this run was in flight",
+    }).catch(() => {});
+    await endRun(r.id).catch(() => {});
+  }
+  return rows.length;
+}
+
 /** Every run on a pack version that is still open. Used when a refund lands. */
 export async function endRunsFor(orgId: string, packVersionId: string): Promise<number> {
   const s = await sql();

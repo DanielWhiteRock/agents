@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toSqlitePlaceholders } from "../../src/app/sql.js";
+import { sslFor, toSqlitePlaceholders } from "../../src/app/sql.js";
 
 describe("toSqlitePlaceholders", () => {
   it("rewrites numbered placeholders in order", () => {
@@ -21,5 +21,44 @@ describe("toSqlitePlaceholders", () => {
   });
   it("leaves SQL without placeholders alone", () => {
     expect(toSqlitePlaceholders("SELECT 1", [])).toEqual({ text: "SELECT 1", params: [] });
+  });
+});
+
+describe("sslFor", () => {
+  it("leaves a local container on plain TCP", () => {
+    expect(sslFor("postgres://agents:agents@localhost:5433/agents", {})).toEqual({});
+  });
+
+  it("encrypts without verifying when the URL says sslmode=require", () => {
+    // What every managed provider's own connection string says, because they
+    // sign with a private CA. Encrypted, not authenticated.
+    expect(sslFor("postgres://u:p@db.example.com/d?sslmode=require", {}))
+      .toEqual({ ssl: { rejectUnauthorized: false } });
+  });
+
+  it("verifies the certificate when the URL asks for verify-full", () => {
+    expect(sslFor("postgres://u:p@db.example.com/d?sslmode=verify-full", {}))
+      .toEqual({ ssl: { rejectUnauthorized: true } });
+  });
+
+  it("accepts ssl=true, which some providers hand out instead", () => {
+    expect(sslFor("postgres://u:p@db.example.com/d?ssl=true", {}))
+      .toEqual({ ssl: { rejectUnauthorized: false } });
+  });
+
+  it("lets DATABASE_SSL override a URL that says nothing", () => {
+    expect(sslFor("postgres://u:p@db.example.com/d", { DATABASE_SSL: "require" }))
+      .toEqual({ ssl: { rejectUnauthorized: false } });
+  });
+
+  it("lets DATABASE_SSL turn off a URL that asks for TLS", () => {
+    expect(sslFor("postgres://u:p@db.example.com/d?sslmode=require", { DATABASE_SSL: "off" }))
+      .toEqual({});
+  });
+
+  it("does not throw on a connection string it cannot parse", () => {
+    // A libpq keyword/value DSN is legal and is not a URL. Misreading it as
+    // "no TLS" is survivable; crashing at startup is not.
+    expect(sslFor("host=localhost port=5433 dbname=agents", {})).toEqual({});
   });
 });

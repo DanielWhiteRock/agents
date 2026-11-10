@@ -137,7 +137,7 @@ First time through: open a pack, press **Publish to the runtime** (this creates
 the agent on Managed Agents), then **Acquire** and send it a brief.
 
 ```bash
-npm test          # 101 unit (vitest) + 45 integration (node --test, real schema)
+npm test          # 248 unit (vitest) + 71 integration (node --test, real schema)
 npm run typecheck
 node scripts/probe.mjs            # what the latest run did and cost
 node scripts/probe.mjs --answer   # what the agent actually said
@@ -153,6 +153,21 @@ node scripts/pg-probe.mjs <run-id> --answer
 Integration tests run on Node's own test runner against the build, because
 Vite's builtin list does not yet include `node:sqlite`. They pass on both
 drivers — run them with `DATABASE_URL` set to exercise Postgres.
+
+## Deploying it
+
+Render, as a container with a managed Postgres: `render.yaml` is a working
+blueprint and the whole thing has been run that way — published a pack to the
+live API, ran an agent, streamed the trace, metered the spend. **Not Vercel**:
+an agent turn keeps working long after the response that started it returns
+(measured here at 81 seconds of active time in one turn), and serverless
+functions are killed once they respond. [docs/DEPLOY.md](docs/DEPLOY.md) has
+what was verified, and the three bugs the deploy exposed.
+
+```bash
+docker build -t agents . && docker run -p 4317:4317 \
+  -e DATABASE_URL=... -e ANTHROPIC_API_KEY=... agents
+```
 
 ## How it fits together
 

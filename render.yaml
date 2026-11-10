@@ -1,0 +1,45 @@
+# Render blueprint. `render blueprint launch`, or point a new Blueprint at the
+# repository in the dashboard.
+#
+# One web service and one Postgres. The service is a container because the app
+# holds SSE connections open, runs a 60-second scheduler tick, and lets agent
+# turns outlive the request that started them — see Dockerfile.
+services:
+  - type: web
+    name: agents-alphaceo
+    runtime: docker
+    plan: starter
+    region: oregon
+    healthCheckPath: /healthz
+    # The scheduler is safe to run on more than one instance: firing a schedule
+    # claims its row first. Start at one anyway — nothing here needs two yet.
+    numInstances: 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agents-db
+          property: connectionString
+      # Render's in-network connection string, so TLS is not required on the
+      # hop. Set DATABASE_SSL=require if you ever point this at an external
+      # database instead.
+      - key: SECURE_COOKIES
+        value: "1"
+      - key: NODE_ENV
+        value: production
+      # Set in the dashboard, never committed. Without it no agent can run.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Live payments. Leave unset to keep the built-in test provider, which
+      # settles purchases without charging anyone.
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_BASE
+        sync: false
+
+databases:
+  - name: agents-db
+    plan: basic-256mb
+    # No postgresMajorVersion pin: the schema uses nothing version-specific, so
+    # Render's current default is correct and cannot go stale here.

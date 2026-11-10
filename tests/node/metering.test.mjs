@@ -194,3 +194,38 @@ test("only what the platform marks downloadable is reported as a deliverable", a
   assert.equal(Number(outputs[0].size_bytes), 2048);
   void s;
 });
+
+test("a restart closes the runs it left open, and frees the slots they held", async () => {
+  // The loop that drives a turn lives in this process, so a deploy mid-turn
+  // orphans the run row. Since the concurrency limit counts open runs, an
+  // orphan costs the organisation a slot for good — five deploys and a personal
+  // tier can no longer start anything. Startup has to clean up after the last
+  // process, and bill for what that process actually spent.
+  P.setRuntime(fakeRuntime([{ finalCost: 0, out: 0 }]));
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  // An earlier test deliberately filled this org's slots with open runs; that
+  // those are reclaimable at all is the behaviour under test.
+  await P.reconcileOpenRuns();
+  assert.equal(await P.activeRunCount(orgId), 0);
+
+  // Fresh script: the fake advances through it on every readSession, and
+  // clearing the board above consumed the old one.
+  P.setRuntime(fakeRuntime([{ finalCost: 7, out: 3 }]));
+  const run = await P.startRun({ orgId, userId, packVersionId: version.id });
+  const held = await P.activeRunCount(orgId);
+  assert.ok(held >= 1, "the run holds a slot while it is open");
+
+  const closed = await P.reconcileOpenRuns();
+  assert.ok(closed >= 1, "it closed at least the run we started");
+  assert.equal(await P.activeRunCount(orgId), 0, "and every slot is free again");
+
+  const after = await P.getRun(run.id);
+  assert.ok(after.ended_at, "the run is ended");
+  assert.equal(after.list_cost_cents, 7, "metered one last time from the provider");
+
+  const events = await P.runEvents(run.id);
+  assert.ok(events.some((e) => e.kind === "run.interrupted"),
+    "and the transcript says why it stopped, rather than going silent");
+});

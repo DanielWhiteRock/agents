@@ -115,6 +115,23 @@ test("it does not fire the same schedule twice in one window", async () => {
   assert.equal((await P.listRuns(orgId)).length, mid, "a minute later it is still not due");
 });
 
+test("two instances ticking at the same moment fire a schedule once", async () => {
+  // The deployment can run more than one copy of the server, and both tick on
+  // the same minute. A schedule firing twice spends the organisation's points
+  // twice, so the claim has to hold under an interleaved tick, not just a
+  // sequential one.
+  const { orgId, userId, versionId } = await ownedOrg();
+  await Sch.createSchedule({
+    orgId, userId, packVersionId: versionId, name: "contested",
+    prompt: "exactly once", cadence: "hourly", hour: 9, weekday: 1,
+  });
+  const before = (await P.listRuns(orgId)).length;
+  const t = new Date();
+  const [a, b] = await Promise.all([Sch.runDueSchedules(t), Sch.runDueSchedules(t)]);
+  assert.equal(a.fired + b.fired, 1, "one tick fires it, the other finds it claimed");
+  assert.equal((await P.listRuns(orgId)).length, before + 1, "and only one run was started");
+});
+
 test("a paused schedule is skipped", async () => {
   const { orgId, userId, versionId } = await ownedOrg();
   const sch = await Sch.createSchedule({
