@@ -28,6 +28,10 @@ export type PackDefinition = {
   author: string;
   /** Price in minor units (cents), one-off. */
   pricePoints: number;
+  /** What it is for, comma separated. The shelf's categories are these, counted. */
+  tags?: string;
+  /** A hero image, served from /assets. Generated, never stock. */
+  image?: string;
   /** Points charged to take a newer version. */
   upgradePoints: number;
   tools?: PackTool[];

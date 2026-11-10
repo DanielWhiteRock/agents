@@ -6,342 +6,342 @@ export const esc = (s: unknown): string =>
 
 const CSS = `
 /* ---------------------------------------------------------------- tokens
-   Springs, not durations. Both critically-damped curves are the same shape
-   sampled over different settle times, which is what a spring actually is:
-   damping decides the shape, response decides how long it takes to get there.
-   Generated from Apple's two parameters — damping ratio and response — not
-   hand-tuned, so every number here is one we can defend.                   */
+   Perspective, by its own numbers: type 12/14/16/20/24/32, spacing
+   4/8/12/16/24/32, primary #00BD7D, text #111827 on #FFFFFF. Named, never
+   inlined — the system says semantic tokens over raw values and that is the
+   rule that keeps the other rules enforceable.
+
+   Motion stays as it was: springs sampled from a damping ratio and a response
+   time. Perspective says how this looks; it says nothing about how it behaves
+   under a thumb, and the two have no quarrel.                               */
 :root{
---bg:#fbfaf8;--panel:#fff;--ink:#17161a;--muted:#6b6975;--line:#e6e3dd;
---accent:#2f5d50;--accent-ink:#fff;--warn:#8a5a1a;--bad:#8c2f2f;--good:#2f6b4f;
---mono:ui-monospace,SFMono-Regular,Menlo,monospace;
---chrome:rgba(255,255,255,.72);--chrome-edge:rgba(255,255,255,.5);
---lift:0 1px 2px rgba(20,18,24,.05),0 8px 24px -12px rgba(20,18,24,.18);
---lift-hi:0 2px 4px rgba(20,18,24,.06),0 18px 40px -16px rgba(20,18,24,.28);
+--primary:#00BD7D;--success:#16A34A;--warning:#D97706;--danger:#DC2626;
+--surface:#FFFFFF;--text:#111827;
+--bg:#F7F8F8;--panel:var(--surface);--ink:var(--text);--muted:#5B6472;--line:#E3E6EA;
+--accent:#009166;--accent-ink:#04231A;
+--mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+--sans:"Poppins",system-ui,-apple-system,"Segoe UI",sans-serif;
+--display:"Oswald","Poppins",system-ui,sans-serif;
+
+/* spacing: 4 8 12 16 24 32, and the two larger steps the scale implies */
+--s1:.25rem;--s2:.5rem;--s3:.75rem;--s4:1rem;--s5:1.5rem;--s6:2rem;--s7:3rem;--s8:4rem;
+
+/* type: 12 14 16 20 24 32 */
+--t1:.75rem;--t2:.875rem;--t3:1rem;--t4:1.25rem;--t5:1.5rem;--t6:2rem;
+
+/* three planes and no more: page, lifted, floating. A shadow says which
+   plane a thing is on; it is not a texture. */
+--plane1:0 1px 2px rgba(17,24,39,.04),0 1px 3px rgba(17,24,39,.06);
+--plane2:0 2px 4px rgba(17,24,39,.04),0 12px 24px -8px rgba(17,24,39,.12);
+--plane3:0 4px 8px rgba(17,24,39,.06),0 24px 48px -12px rgba(17,24,39,.18);
+--chrome:rgba(255,255,255,.78);--chrome-edge:rgba(17,24,39,.08);
 --spring:linear(0,.0438,.1419,.2604,.3801,.4909,.5883,.6712,.74,.7961,.8412,.8771,.9053,.9274,.9445,.9578,.968,.9758,.9817,.9862,.9896,.9922,.9942,.9956,.9967,.9976,.9982,.9987,.999);
 --spring-bounce:linear(0,.039,.1324,.2525,.3805,.504,.6158,.7125,.7927,.8571,.9071,.9446,.9717,.9904,1.0026,1.01,1.0138,1.0151,1.0148,1.0136,1.0119,1.0099,1.008,1.0063,1.0048,1.0035,1.0024,1.0016,1.001);
---dur:588ms;      /* damping 1.0, response 0.4s — move, reposition */
---dur-snappy:441ms;/* damping 1.0, response 0.3s — chrome, small things */
---dur-bounce:540ms;/* damping 0.8, response 0.4s — after momentum only */
---press:100ms;     /* response is instant; this is just the travel */
+--dur:588ms;--dur-snappy:441ms;--dur-bounce:540ms;--press:100ms;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
---bg:#121214;--panel:#1a1a1e;--ink:#edecea;--muted:#9a98a2;--line:#2b2b32;
---accent:#7fb8a4;--accent-ink:#10231d;--warn:#d9a95c;--bad:#e0847c;--good:#86c9a4;
---chrome:rgba(22,22,26,.72);--chrome-edge:rgba(255,255,255,.08);
---lift:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
---lift-hi:0 2px 4px rgba(0,0,0,.45),0 18px 40px -16px rgba(0,0,0,.7)}}
+--surface:#13171C;--text:#ECEFF3;
+--bg:#0C0F12;--panel:var(--surface);--ink:var(--text);--muted:#9BA5B3;--line:#242B33;
+--accent:#00BD7D;--accent-ink:#04231A;
+--plane1:0 1px 2px rgba(0,0,0,.5);
+--plane2:0 2px 4px rgba(0,0,0,.45),0 12px 24px -8px rgba(0,0,0,.6);
+--plane3:0 4px 8px rgba(0,0,0,.5),0 24px 48px -12px rgba(0,0,0,.7);
+--chrome:rgba(19,23,28,.78);--chrome-edge:rgba(255,255,255,.08)}}
 :root[data-theme=dark]{
---bg:#121214;--panel:#1a1a1e;--ink:#edecea;--muted:#9a98a2;--line:#2b2b32;
---accent:#7fb8a4;--accent-ink:#10231d;--warn:#d9a95c;--bad:#e0847c;--good:#86c9a4;
---chrome:rgba(22,22,26,.72);--chrome-edge:rgba(255,255,255,.08);
---lift:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
---lift-hi:0 2px 4px rgba(0,0,0,.45),0 18px 40px -16px rgba(0,0,0,.7)}
+--surface:#13171C;--text:#ECEFF3;--bg:#0C0F12;--panel:var(--surface);--ink:var(--text);
+--muted:#9BA5B3;--line:#242B33;--accent:#00BD7D;--accent-ink:#04231A;
+--plane1:0 1px 2px rgba(0,0,0,.5);
+--plane2:0 2px 4px rgba(0,0,0,.45),0 12px 24px -8px rgba(0,0,0,.6);
+--plane3:0 4px 8px rgba(0,0,0,.5),0 24px 48px -12px rgba(0,0,0,.7);
+--chrome:rgba(19,23,28,.78);--chrome-edge:rgba(255,255,255,.08)}
 *{box-sizing:border-box}
 
 /* ------------------------------------------------------------ typography
-   The system font already ships optical sizing and tracking tables, so it is
-   the default rather than a fallback. Tracking is size-specific: large text
-   tightens as it grows, small uppercase labels open up. Everything is in rem
-   so a reader who raises their text size moves the layout with it.          */
+   Poppins for reading, Oswald for the one thing on the screen that should
+   feel like a headline. Tracking is still size-specific: the display face
+   tightens as it grows, body sits near zero, small caps open up.            */
 html{font-size:100%}
 body{margin:0;background:var(--bg);color:var(--ink);
-font:1rem/1.55 system-ui,-apple-system,"Segoe UI",ui-sans-serif,sans-serif;
--webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-a{color:var(--accent);text-decoration:none}
+font:var(--t3)/1.55 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:var(--ink);text-decoration:none}
 a:hover{text-decoration:underline;text-underline-offset:.15em}
-h1{font-size:clamp(1.75rem,1.35rem+1.7vw,2.25rem);line-height:1.08;letter-spacing:-.021em;
-font-weight:640;margin:2rem 0 .375rem}
-h2{font-size:1.1875rem;line-height:1.3;letter-spacing:-.012em;font-weight:620;margin:2rem 0 .625rem}
-h3{font-size:1.0625rem;line-height:1.3;letter-spacing:-.01em;font-weight:600;margin:0 0 .25rem}
-p.lede{color:var(--muted);margin:0 0 1.25rem;max-width:62ch;line-height:1.55}
+h1{font-family:var(--display);font-size:var(--t6);line-height:1.04;letter-spacing:-.01em;
+font-weight:600;margin:var(--s6) 0 var(--s2);text-transform:none}
+h2{font-family:var(--display);font-size:var(--t5);line-height:1.15;letter-spacing:-.005em;
+font-weight:500;margin:var(--s6) 0 var(--s3)}
+h3{font-size:var(--t4);line-height:1.3;letter-spacing:-.01em;font-weight:600;margin:0 0 var(--s1)}
+h4{font-size:var(--t1);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+font-weight:600;margin:var(--s4) 0 var(--s1)}
+p.lede{color:var(--muted);margin:0 0 var(--s5);max-width:62ch;font-size:var(--t3)}
 code,.price{font-family:var(--mono);font-size:.9375em}
 
-/* ---------------------------------------------------------------- layout */
-.wrap{max-width:62.5rem;margin:0 auto;padding:0 1rem 4rem}
+/* --------------------------------------------------------------- layout
+   Mobile is the base case, not a breakpoint. Everything below is what a
+   390px screen gets; wider screens get more room through min-width, never
+   less through max-width.                                                   */
+.wrap{max-width:72rem;margin:0 auto;padding:0 var(--s4) var(--s8)}
+@media (min-width:48rem){.wrap{padding:0 var(--s5) var(--s8)}}
 
-/* ----------------------------------------------------------- the material
-   Chrome is a translucent layer the page scrolls underneath, not an opaque
-   strip that eats the top of the window. The bottom edge is a short gradient
-   rather than a hairline, so content meets the chrome by fading into blur —
-   the edge belongs to the material, not to a border.                        */
-header.top{position:sticky;top:0;z-index:5;background:var(--chrome);
+/* ----------------------------------------------------------- the chrome */
+header.top{position:sticky;top:0;z-index:20;background:var(--chrome);
 -webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);
-border-bottom:1px solid var(--chrome-edge)}
-header.top::after{content:"";position:absolute;left:0;right:0;top:100%;height:1.5rem;
+border-bottom:1px solid var(--chrome-edge);box-shadow:var(--plane1)}
+header.top::after{content:"";position:absolute;left:0;right:0;top:100%;height:var(--s5);
 background:linear-gradient(var(--bg),transparent);pointer-events:none}
-header.top .wrap{display:flex;gap:1.25rem;align-items:center;padding:.875rem 1rem;flex-wrap:wrap}
-.brand{font-weight:650;letter-spacing:-.02em}
-.brand small{color:var(--muted);font-weight:400;margin-left:.5rem;letter-spacing:0}
-nav{display:flex;gap:.25rem;margin-left:auto;flex-wrap:wrap;align-items:center}
-nav a{color:var(--muted);font-size:.875rem;padding:.3rem .5rem;border-radius:.5rem;
+header.top .wrap{display:flex;gap:var(--s2);align-items:center;padding:var(--s2) var(--s4);
+flex-wrap:nowrap;min-width:0}
+.brand{flex:none}
+@media (min-width:48rem){header.top .wrap{gap:var(--s3)}}
+.brand{display:inline-flex;align-items:center;gap:var(--s2);color:var(--ink);text-decoration:none;
+min-height:2.75rem;padding:0 var(--s1);margin-left:calc(var(--s1) * -1);border-radius:var(--s2)}
+.brand .logo{width:1.75rem;height:1.75rem;flex:none}
+.brand b{font-family:var(--display);font-weight:600;letter-spacing:.01em;font-size:var(--t4)}
+nav{display:flex;gap:var(--s1);margin-left:auto;align-items:center;flex-wrap:nowrap;min-width:0}
+.menu{min-width:0}
+nav a{display:inline-flex;align-items:center;justify-content:center;color:var(--muted);
+min-width:2.75rem;min-height:2.75rem;border-radius:var(--s3);
 transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) var(--spring)}
-nav a:hover{color:var(--ink);background:color-mix(in oklab,var(--ink) 7%,transparent);text-decoration:none}
+nav a:hover{color:var(--ink);background:color-mix(in oklab,var(--ink) 6%,transparent);text-decoration:none}
 nav a:active{background:color-mix(in oklab,var(--ink) 12%,transparent)}
-/* Where am I: the current section is stated, not left to be inferred. */
-nav a[aria-current=page]{color:var(--ink);background:color-mix(in oklab,var(--ink) 9%,transparent);font-weight:560}
+nav a[aria-current=page]{color:var(--accent-ink);background:var(--primary)}
+/* On a phone the balance sits next to the Points icon that already goes to
+   the same page, and together they are the 22px that pushed the bar off the
+   screen. The number comes back as soon as there is room for it. */
+.bal{display:none}
+@media (min-width:26rem){.bal{display:inline-flex;align-items:center}}
+.bal{font-family:var(--mono);font-size:var(--t2);color:var(--ink);
+border:1px solid var(--line);border-radius:999px;padding:var(--s1) var(--s3);
+font-variant-numeric:tabular-nums;min-width:auto;min-height:2rem}
+.bal:hover{background:color-mix(in oklab,var(--primary) 16%,transparent);text-decoration:none}
 
-/* ----------------------------------------------------------------- icons
-   One stroke weight, sized in em so an icon grows with the text beside it.
-   A label marked "only" is hidden visually and left for a screen reader — the
-   label is never deleted, only unshown. */
-/* Relative, so a hidden label is positioned against its own icon. Without it
-   the label escapes any scroll box it sits in — overflow does not make an
-   ancestor a containing block — and stretches the page to the width of the
-   table it was supposed to be inside. */
-.ic{display:inline-flex;align-items:center;gap:.4375rem;position:relative}
+/* ----------------------------------------------------------------- menu */
+.menu{position:relative}
+/* The label becomes the current section's name, which on a phone is the
+   difference between a bar that fits and one that pushes the page sideways.
+   It truncates; the full name is still the accessible one. */
+.menu>summary{list-style:none;cursor:pointer;font-size:var(--t2);color:var(--muted);
+min-height:2.75rem;display:inline-flex;align-items:center;padding:0 var(--s3);
+border:1px solid var(--line);border-radius:999px;
+max-width:7.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) var(--spring)}
+.menu>summary::-webkit-details-marker{display:none}
+.menu>summary:hover,.menu[open]>summary{color:var(--ink);background:color-mix(in oklab,var(--ink) 6%,transparent)}
+.menu>div{position:absolute;right:0;top:calc(100% + var(--s2));z-index:30;min-width:13rem;
+background:var(--panel);border:1px solid var(--line);border-radius:var(--s4);
+box-shadow:var(--plane3);padding:var(--s1);display:flex;flex-direction:column;gap:2px;
+transform-origin:top right;animation:menu var(--dur-snappy) var(--spring) both}
+@keyframes menu{from{opacity:0;transform:scale(.96) translateY(-.25rem)}to{opacity:1;transform:none}}
+.menu .who{margin:var(--s1) var(--s2) var(--s2);font-size:var(--t1);color:var(--muted);
+border-bottom:1px solid var(--line);padding-bottom:var(--s2)}
+.menu>div a{color:var(--ink);font-size:var(--t2);padding:var(--s2) var(--s2);border-radius:var(--s2);
+min-height:2.5rem;display:flex;align-items:center}
+.menu>div a:hover{background:color-mix(in oklab,var(--ink) 6%,transparent);text-decoration:none}
+.menu>div a[aria-current=page]{background:color-mix(in oklab,var(--primary) 18%,transparent);font-weight:600}
+.menu>div form{margin-top:var(--s1);border-top:1px solid var(--line);padding-top:var(--s1)}
+.menu>div .btn{width:100%;justify-content:flex-start}
+
+/* ---------------------------------------------------------------- icons */
+.ic{display:inline-flex;align-items:center;gap:var(--s2);position:relative}
 .ic svg{width:1.25em;height:1.25em;flex:none;fill:none;stroke:currentColor;
 stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .ic.only .lbl{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
 overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
-.brand{display:inline-flex;align-items:center;gap:.5rem;color:var(--ink);text-decoration:none;
-min-height:2.25rem;padding:0 .25rem;margin-left:-.25rem;border-radius:.5rem}
-.brand .logo{width:1.75rem;height:1.75rem;flex:none}
-.brand b{font-weight:640;letter-spacing:-.02em;font-size:1.0625rem}
-.brand:hover{text-decoration:none}
-nav a{display:inline-flex;align-items:center;justify-content:center;min-width:2.25rem;min-height:2.25rem}
-/* The balance is a number, not a sentence: the unit lives in the tooltip. */
-.bal{font-family:var(--mono);font-size:.875rem;color:var(--ink);
-border:1px solid var(--line);border-radius:999px;padding:.25rem .625rem;
-font-variant-numeric:tabular-nums;min-width:auto}
-.bal:hover{background:color-mix(in oklab,var(--accent) 12%,transparent);text-decoration:none}
-footer details summary{list-style:none;cursor:pointer;color:var(--muted);
-display:inline-flex;min-height:2rem;align-items:center}
-footer details summary::-webkit-details-marker{display:none}
-footer details p{margin:.5rem 0 0}
 
-/* ---------------------------------------------------------------- search
-   The first thing on the shelf, because finding the right worker is the whole
-   job and a curated catalog still has to be searchable to be a catalog.      */
-.search{display:flex;gap:.5rem;margin:0 0 1.25rem;max-width:34rem}
-.search input{flex:1;background:var(--panel);color:var(--ink);border:1px solid var(--line);
-border-radius:.625rem;padding:.625rem .75rem;font:inherit;
+/* --------------------------------------------------------------- search */
+.search{display:flex;gap:var(--s2);margin:0 0 var(--s5)}
+@media (min-width:48rem){.search{max-width:36rem}}
+.search input{flex:1;min-width:0;background:var(--panel);color:var(--ink);
+border:1px solid var(--line);border-radius:var(--s3);padding:var(--s3) var(--s4);
+font:inherit;min-height:3rem;box-shadow:var(--plane1);
 transition:border-color var(--dur-snappy) var(--spring),box-shadow var(--dur-snappy) var(--spring)}
-.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in oklab,var(--accent) 18%,transparent)}
-.search input::-webkit-search-cancel-button{filter:grayscale(1) opacity(.6)}
+.search input:focus{border-color:var(--primary);box-shadow:0 0 0 3px color-mix(in oklab,var(--primary) 28%,transparent)}
 
-/* Three places people go daily stay in the bar; everything occasional lives
-   behind their own name. Ten links of equal weight is not a menu, it is a
-   list of everything the program can do. */
-.menu{position:relative}
-.menu>summary{list-style:none;cursor:pointer;font-size:.875rem;color:var(--muted);
-padding:.3rem .625rem;border:1px solid var(--line);border-radius:999px;
-transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) var(--spring)}
-.menu>summary::-webkit-details-marker{display:none}
-.menu>summary:hover{color:var(--ink);background:color-mix(in oklab,var(--ink) 7%,transparent)}
-.menu[open]>summary{color:var(--ink);background:color-mix(in oklab,var(--ink) 9%,transparent)}
-.menu>div{position:absolute;right:0;top:calc(100% + .5rem);z-index:10;min-width:12rem;
-background:var(--chrome);-webkit-backdrop-filter:blur(20px) saturate(180%);
-backdrop-filter:blur(20px) saturate(180%);
-border:1px solid var(--line);border-radius:.75rem;box-shadow:var(--lift-hi);
-padding:.375rem;display:flex;flex-direction:column;gap:.125rem;
-transform-origin:top right;animation:menu var(--dur-snappy) var(--spring) both}
-@keyframes menu{from{opacity:0;transform:scale(.96) translateY(-.25rem)}to{opacity:1;transform:none}}
-.menu .who{margin:.25rem .5rem .375rem;font-size:.75rem;color:var(--muted);
-border-bottom:1px solid var(--line);padding-bottom:.4375rem}
-.menu>div a{color:var(--ink);font-size:.875rem;padding:.4375rem .5rem;border-radius:.4375rem}
-.menu>div a:hover{background:color-mix(in oklab,var(--ink) 8%,transparent);text-decoration:none}
-.menu>div a[aria-current=page]{background:color-mix(in oklab,var(--accent) 14%,transparent);font-weight:560}
-.menu>div form{margin-top:.25rem;border-top:1px solid var(--line);padding-top:.375rem}
-.menu>div .btn{width:100%;text-align:left}
+/* ----------------------------------------------------------- categories
+   A horizontal rail on a phone, a grid once there is room. Scrolling
+   sideways through categories is a choice; the page doing it is not.        */
+.cats{display:flex;gap:var(--s2);margin:0 0 var(--s5);overflow-x:auto;
+scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;
+padding-bottom:var(--s1);scrollbar-width:none}
+.cats::-webkit-scrollbar{display:none}
+@media (min-width:48rem){.cats{display:grid;overflow:visible;
+grid-template-columns:repeat(auto-fit,minmax(7rem,1fr))}}
+.cats a{flex:0 0 auto;scroll-snap-align:start;min-width:6rem;
+display:flex;flex-direction:column;align-items:center;gap:var(--s2);
+padding:var(--s4) var(--s3);border:1px solid var(--line);border-radius:var(--s4);
+background:var(--panel);color:var(--ink);text-align:center;box-shadow:var(--plane1);
+transition:transform var(--dur) var(--spring),box-shadow var(--dur) var(--spring),
+border-color var(--dur-snappy) var(--spring)}
+.cats a:hover{transform:translateY(-2px);box-shadow:var(--plane2);
+border-color:color-mix(in oklab,var(--primary) 50%,var(--line));text-decoration:none}
+.cats a:active{transform:scale(.98);transition:transform var(--press) ease-out}
+.cats .ic svg{width:1.5rem;height:1.5rem;stroke-width:1.5;color:var(--primary)}
+.cats b{font-size:var(--t1);font-weight:600;text-transform:capitalize;letter-spacing:.01em}
+.cats small{font-family:var(--mono);font-size:var(--t1);color:var(--muted)}
 
 /* ------------------------------------------------------------- the shelf
-   A listing is a face, a name, one line and a price — the shape a marketplace
-   card has had since marketplaces had cards. The band of colour is generated
-   from the slug: a card should be recognisable before it is read, and a stock
-   photograph of somebody who did not write the pack would be worse than
-   nothing. */
-.gig{padding:0;overflow:hidden;text-decoration:none;color:inherit}
-.gig:hover{text-decoration:none}
-.thumb{height:5.5rem;background:
-linear-gradient(135deg,hsl(var(--h) 46% 62%),hsl(calc(var(--h) + 42) 52% 46%));
-position:relative;flex:none}
-.thumb::after{content:"";position:absolute;inset:0;
-background:radial-gradient(120% 90% at 18% 0%,rgba(255,255,255,.34),transparent 62%)}
-.gig .meta{padding:.875rem 1rem 1rem;display:flex;flex-direction:column;flex:1;gap:.375rem}
-.gig .who{display:flex;align-items:center;gap:.4375rem;margin:0;font-size:.8125rem;color:var(--muted)}
-.av{width:1.375rem;height:1.375rem;border-radius:999px;flex:none;
-background:hsl(var(--h) 44% 52%);color:#fff;font-size:.625rem;font-weight:620;
-display:inline-flex;align-items:center;justify-content:center;letter-spacing:.01em}
-.gig h3{margin:0;font-size:1rem;line-height:1.3}
-.gig .line{margin:0;color:var(--ink);font-size:.875rem;line-height:1.45}
-.gig .foot{margin:auto 0 0;padding-top:.5rem;display:flex;align-items:center;
-justify-content:space-between;gap:.75rem}
-.gig .proof{font-size:.8125rem;color:var(--muted)}
-.gig .proof .ic svg{width:.9375rem;height:.9375rem}
-.gig .proof.new{font-family:var(--mono);font-size:.6875rem;border:1px solid var(--line);
-border-radius:999px;padding:.0625rem .4375rem}
-.gig .price{font-family:var(--mono);font-size:1rem;font-weight:600;color:var(--ink);
-font-variant-numeric:tabular-nums}
-.gig .price small{font-size:.6875rem;color:var(--muted);font-weight:400}
-
-/* ------------------------------------------------------------- surfaces */
-.grid{display:grid;gap:.875rem;grid-template-columns:repeat(auto-fill,minmax(18.125rem,1fr))}
-/* Column, so the action sits on the baseline across cards of different
-   heights. Ragged buttons are the kind of thing that reads as carelessness. */
-.card{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;padding:1.125rem;
-box-shadow:var(--lift);display:flex;flex-direction:column;
+   One column on a phone. The card is a plane lifting off the page, and it
+   lifts further under a pointer — the depth is the hierarchy, not a
+   decoration applied afterwards.                                            */
+.grid{display:grid;gap:var(--s4);grid-template-columns:1fr}
+@media (min-width:36rem){.grid{grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--s5);
+padding:var(--s5);box-shadow:var(--plane1);display:flex;flex-direction:column;
 transition:transform var(--dur) var(--spring),box-shadow var(--dur) var(--spring)}
-.card>.row:last-child{margin-top:auto;padding-top:.25rem}
-.card:hover{transform:translateY(-2px);box-shadow:var(--lift-hi)}
-.card .by{color:var(--muted);font-size:.8125rem;margin:0 0 .625rem;letter-spacing:.005em}
-.card p{margin:0 0 .875rem;color:var(--ink);font-size:.9375rem;line-height:1.5}
-.row{display:flex;gap:.625rem;align-items:center;flex-wrap:wrap}
-.spread{display:flex;justify-content:space-between;align-items:baseline;gap:.75rem}
-.price{font-size:.9375rem}
+.card>.row:last-child{margin-top:auto;padding-top:var(--s1)}
+.gig{padding:0;overflow:hidden;text-decoration:none;color:inherit;position:relative}
+.gig:hover{text-decoration:none;transform:translateY(-3px);box-shadow:var(--plane3)}
+.gig:active{transform:translateY(-1px) scale(.995);transition:transform var(--press) ease-out}
+.thumb{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;flex:none;
+background:linear-gradient(135deg,hsl(var(--h,160) 46% 62%),hsl(calc(var(--h,160) + 42) 52% 46%))}
+.gig .meta{padding:var(--s4);display:flex;flex-direction:column;flex:1;gap:var(--s2)}
+.gig .who{display:flex;align-items:center;gap:var(--s2);margin:0;font-size:var(--t1);color:var(--muted)}
+.av{width:1.5rem;height:1.5rem;border-radius:999px;flex:none;
+background:hsl(var(--h) 44% 42%);color:#fff;font-size:var(--t1);font-weight:600;
+display:inline-flex;align-items:center;justify-content:center}
+.gig h3{margin:0;font-size:var(--t4);line-height:1.25}
+.gig .line{margin:0;color:var(--muted);font-size:var(--t2);line-height:1.5}
+.gig .foot{margin:auto 0 0;padding-top:var(--s3);display:flex;align-items:center;
+justify-content:space-between;gap:var(--s3)}
+.gig .proof{font-size:var(--t1);color:var(--muted)}
+.gig .proof .ic svg{width:1rem;height:1rem}
+.gig .proof.new{font-family:var(--mono);font-size:var(--t1);border:1px solid var(--line);
+border-radius:999px;padding:2px var(--s2)}
+.gig .price{font-family:var(--mono);font-size:var(--t4);font-weight:600;color:var(--ink);
+font-variant-numeric:tabular-nums}
+.gig .price small{font-size:var(--t1);color:var(--muted);font-weight:400}
 
-/* --------------------------------------------------------------- controls
-   Feedback belongs on the press, not the release: :active fires on
-   pointer-down, and 100ms is travel time, not a wait. The spring is only for
-   the way back, where there is no finger to keep up with.                   */
-.btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:0;
-border-radius:.625rem;padding:.5625rem .875rem;font:inherit;font-size:.875rem;font-weight:560;
-letter-spacing:-.003em;cursor:pointer;
-transition:transform var(--dur-snappy) var(--spring),filter var(--dur-snappy) var(--spring)}
-.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
-.btn:hover{filter:brightness(1.07);text-decoration:none}
-.btn:active{transform:scale(.97);transition:transform var(--press) ease-out}
+/* -------------------------------------------------------------- controls */
+.row{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap}
+.spread{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);
+background:var(--primary);color:var(--accent-ink);border:0;border-radius:var(--s3);
+padding:var(--s3) var(--s4);font:inherit;font-size:var(--t2);font-weight:600;
+min-height:2.75rem;cursor:pointer;box-shadow:var(--plane1);
+transition:transform var(--dur-snappy) var(--spring),box-shadow var(--dur-snappy) var(--spring),
+filter var(--dur-snappy) var(--spring)}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);box-shadow:none}
+.btn:hover{filter:brightness(1.05);box-shadow:var(--plane2);text-decoration:none}
+.btn:active{transform:translateY(1px) scale(.97);box-shadow:var(--plane1);
+transition:transform var(--press) ease-out}
 .btn.ghost:active{background:color-mix(in oklab,var(--ink) 8%,transparent)}
 :where(a,button,input,select,textarea,summary):focus-visible{
-outline:2px solid var(--accent);outline-offset:2px;border-radius:.375rem}
-.tag{display:inline-block;font-size:.71875rem;font-family:var(--mono);color:var(--muted);
-border:1px solid var(--line);border-radius:999px;padding:.125rem .5rem;letter-spacing:.01em}
+outline:2px solid var(--primary);outline-offset:2px;border-radius:var(--s1)}
+.tag{display:inline-block;font-size:var(--t1);font-family:var(--mono);color:var(--muted);
+border:1px solid var(--line);border-radius:999px;padding:2px var(--s2)}
 textarea{width:100%;background:var(--panel);color:var(--ink);border:1px solid var(--line);
-border-radius:.625rem;padding:.6875rem;font:inherit;min-height:5.25rem;resize:vertical;
-transition:border-color var(--dur-snappy) var(--spring)}
-textarea:focus{border-color:var(--accent)}
+border-radius:var(--s3);padding:var(--s3);font:inherit;min-height:6rem;resize:vertical;
+box-shadow:var(--plane1);transition:border-color var(--dur-snappy) var(--spring)}
+textarea:focus{border-color:var(--primary)}
 select,input[type=text],input[type=email],input[type=password],input[type=search],
 input[type=number],input[type=url],input[type=tel]{
 background:var(--panel);color:var(--ink);border:1px solid var(--line);
-border-radius:.5rem;padding:.5rem .625rem;font:inherit;min-height:2.25rem;
+border-radius:var(--s3);padding:var(--s3);font:inherit;min-height:2.75rem;max-width:100%;
 transition:border-color var(--dur-snappy) var(--spring)}
-select:focus,input:focus{border-color:var(--accent)}
-/* A checkbox is hit by its label, so the label is the target that has to be
-   big enough — the box itself only has to be visible. */
+select:focus,input:focus{border-color:var(--primary)}
 label:has(input[type=checkbox]),label:has(input[type=radio]){
-min-height:2rem;display:inline-flex;align-items:center;gap:.4375rem}
-input[type=checkbox],input[type=radio]{width:1.0625rem;height:1.0625rem;accent-color:var(--accent)}
+min-height:2.5rem;display:inline-flex;align-items:center;gap:var(--s2)}
+input[type=checkbox],input[type=radio]{width:1.125rem;height:1.125rem;accent-color:var(--primary)}
 form.inline{display:inline}
-
-/* A link inside prose or a table row is still something a thumb has to find.
-   Padding gives it the target; the matching negative margin means nothing
-   moves. */
-td a,p a,.lede a,.fine a,li a{display:inline-block;padding:.4375rem .375rem;
-margin:-.4375rem -.375rem;border-radius:.375rem}
-td a:hover,p a:hover,.lede a:hover,li a:hover{background:color-mix(in oklab,var(--accent) 10%,transparent);
+td a,p a,.lede a,.fine a,li a{display:inline-block;padding:var(--s2) var(--s1);
+margin:calc(var(--s2) * -1) calc(var(--s1) * -1);border-radius:var(--s1);
+color:var(--ink);text-decoration:underline;text-decoration-color:color-mix(in oklab,var(--primary) 60%,transparent);
+text-underline-offset:.2em}
+td a:hover,p a:hover,.lede a:hover,li a:hover{background:color-mix(in oklab,var(--primary) 12%,transparent);
 text-decoration:none}
-td a:active,p a:active,.lede a:active,li a:active{transform:scale(.97);transition:transform var(--press) ease-out}
+td a:active,p a:active,li a:active{transform:scale(.97);transition:transform var(--press) ease-out}
 
 /* ----------------------------------------------------------------- data */
-/* The table scrolls, not the page. A page that slides sideways under a thumb
-   feels broken in a way a scrollable table does not. */
-.scroller{overflow-x:auto;overscroll-behavior-x:contain;margin:0 0 .5rem;
+.scroller{overflow-x:auto;overscroll-behavior-x:contain;margin:0 0 var(--s3);
 -webkit-overflow-scrolling:touch}
-.scroller table{min-width:30rem}
-table{width:100%;border-collapse:collapse;font-size:.875rem}
-th,td{text-align:left;padding:.5rem .625rem;border-bottom:1px solid var(--line)}
-/* Small text takes positive tracking; this is the one place it opens up. */
-th{color:var(--muted);font-weight:560;font-size:.78125rem;text-transform:uppercase;letter-spacing:.055em}
+.scroller table{min-width:32rem}
+table{width:100%;border-collapse:collapse;font-size:var(--t2)}
+th,td{text-align:left;padding:var(--s3);border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:var(--t1);text-transform:uppercase;letter-spacing:.08em}
 td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
-tbody tr,table tr{transition:background var(--dur-snappy) var(--spring)}
-.meters{display:grid;gap:.625rem;grid-template-columns:repeat(auto-fit,minmax(8.125rem,1fr));margin:0 0 1rem}
-.meter{background:var(--panel);border:1px solid var(--line);border-radius:.75rem;padding:.6875rem .8125rem;
-box-shadow:var(--lift)}
-.meter .k{font-size:.71875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.055em}
-.meter .v{font-family:var(--mono);font-size:1.1875rem;font-variant-numeric:tabular-nums;margin-top:.1875rem;
-letter-spacing:-.01em}
-/* scaleX, not width: the compositor can run it, and it springs to each new
-   reading instead of jumping as the numbers arrive. */
-.bar{height:.375rem;background:var(--line);border-radius:99px;overflow:hidden;margin-top:.5625rem}
-.bar>i{display:block;height:100%;background:var(--accent);width:100%;transform-origin:left center;
+.meters{display:grid;gap:var(--s3);grid-template-columns:repeat(2,1fr);margin:0 0 var(--s4)}
+@media (min-width:48rem){.meters{grid-template-columns:repeat(auto-fit,minmax(9rem,1fr))}}
+.meter{background:var(--panel);border:1px solid var(--line);border-radius:var(--s4);
+padding:var(--s3) var(--s4);box-shadow:var(--plane1)}
+.meter .k{font-size:var(--t1);color:var(--muted);display:flex;align-items:center}
+.meter .k .ic svg{width:1rem;height:1rem;opacity:.75}
+.meter .v{font-family:var(--mono);font-size:var(--t4);font-variant-numeric:tabular-nums;
+margin-top:var(--s1);letter-spacing:-.01em}
+.bar{height:6px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:var(--s2)}
+.bar>i{display:block;height:100%;background:var(--primary);width:100%;transform-origin:left center;
 transform:scaleX(0);transition:transform var(--dur) var(--spring)}
 
-/* ---------------------------------------------------------------- usage
-   One bar, three segments, no legend to decode: each segment names itself in
-   the list below with its own colour swatch.                                 */
-.ctx{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;
-padding:1rem 1.125rem;box-shadow:var(--lift);margin:0 0 1rem}
-.ctx .top{display:flex;justify-content:space-between;align-items:baseline;gap:.75rem;flex-wrap:wrap}
-.ctx .top b{font-weight:620;letter-spacing:-.01em}
-.ctx .pct{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted);font-size:.875rem}
-.ctxbar{display:flex;height:.5rem;border-radius:99px;overflow:hidden;background:var(--line);margin:.625rem 0 .5rem}
-.ctxbar span{display:block;height:100%;transform-origin:left center;
-transition:flex-basis var(--dur) var(--spring)}
-.s-sys{background:var(--accent)}
-.s-talk{background:color-mix(in oklab,var(--accent) 45%,var(--muted))}
-.ctxlist{list-style:none;margin:.75rem 0 0;padding:0;display:grid;gap:.3125rem}
-.ctxlist li{display:flex;align-items:center;gap:.5rem;font-size:.875rem}
-.ctxlist .sw{width:.5rem;height:.5rem;border-radius:2px;flex:none}
+/* ---------------------------------------------------------------- usage */
+.ctx{background:var(--panel);border:1px solid var(--line);border-radius:var(--s5);
+padding:var(--s4);box-shadow:var(--plane1);margin:0 0 var(--s4)}
+.ctx .top{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);flex-wrap:wrap}
+.ctx .pct{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted);font-size:var(--t2)}
+.ctxbar{display:flex;height:8px;border-radius:99px;overflow:hidden;background:var(--line);margin:var(--s3) 0 var(--s2)}
+.ctxbar span{display:block;height:100%;transition:flex-basis var(--dur) var(--spring)}
+.s-sys{background:var(--primary)}
+.s-talk{background:color-mix(in oklab,var(--primary) 42%,var(--muted))}
+.ctxlist{list-style:none;margin:var(--s3) 0 0;padding:0;display:grid;gap:var(--s2)}
+.ctxlist li{display:flex;align-items:center;gap:var(--s2);font-size:var(--t2)}
+.ctxlist .sw{width:8px;height:8px;border-radius:2px;flex:none}
 .ctxlist .nm{flex:1;min-width:0}
 .ctxlist .amt{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .ctxlist .pc{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted);
 min-width:3.5rem;text-align:right}
-.chips{display:flex;flex-wrap:wrap;gap:.375rem;margin:.5rem 0 0}
+.chips{display:flex;flex-wrap:wrap;gap:var(--s2);margin:var(--s2) 0 0}
 .chips .tag b{font-weight:600;color:var(--ink)}
-.ctx h4{margin:1rem 0 .25rem;font-size:.71875rem;text-transform:uppercase;letter-spacing:.055em;
-color:var(--muted);font-weight:560}
-.ctx .fine{font-size:.8125rem;color:var(--muted);margin:.625rem 0 0;line-height:1.45}
+.ctx .fine{font-size:var(--t1);color:var(--muted);margin:var(--s3) 0 0;line-height:1.5}
 
 /* ---------------------------------------------------------------- trace */
-#trace{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;padding:.25rem 0;
-max-height:60vh;overflow:auto;box-shadow:var(--lift);overscroll-behavior:contain}
-.ev{padding:.5625rem .875rem;border-bottom:1px solid var(--line);font-size:.875rem;
+#trace{background:var(--panel);border:1px solid var(--line);border-radius:var(--s5);
+padding:var(--s1) 0;max-height:60vh;overflow:auto;box-shadow:var(--plane1);
+overscroll-behavior:contain}
+.ev{padding:var(--s2) var(--s4);border-bottom:1px solid var(--line);font-size:var(--t2);
 animation:arrive var(--dur-snappy) var(--spring) both}
-/* What was said is what the buyer paid for; everything else is instrumentation
-   and should read like it. Same transcript, two weights. */
-.ev.say{padding:.875rem 1rem;font-size:1rem;line-height:1.55}
-.ev.say .k{font-size:.8125rem;font-family:inherit;text-transform:none;letter-spacing:0;
-font-weight:600;color:var(--ink)}
-.ev.say.from-agent .k{color:var(--accent)}
-.ev.say pre{margin-top:.375rem}
-.ev.sys{padding:.375rem .875rem;font-size:.8125rem;color:var(--muted)}
-.ev.sys .k{font-size:.65625rem;opacity:.75}
-.ev.sys pre{color:var(--muted)}
-/* Hidden, not deleted: the full record is one checkbox away and the costs
-   stay visible either way, because that is the promise the product makes. */
-#trace.conversation .ev.sys{display:none}
-.tracebar{display:flex;gap:.75rem;align-items:center;justify-content:space-between;
-margin:0 0 .5rem;flex-wrap:wrap}
-.tracebar label{font-size:.8125rem;color:var(--muted);display:flex;gap:.375rem;align-items:center;cursor:pointer}
 .ev:last-child{border-bottom:0}
-.ev .k{font-family:var(--mono);font-size:.6875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.055em}
-.ev pre{margin:.25rem 0 0;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.5}
-.ev.user{background:color-mix(in oklab,var(--accent) 7%,transparent)}
-.ev.meter .k{color:var(--good)}
-.ev.err .k{color:var(--bad)}
-.ev.warnrow .k{color:var(--warn)}
-/* An event arrives from the direction the transcript grows, so the motion
-   points where the next one is coming from. */
-@keyframes arrive{from{opacity:0;transform:translateY(.5rem)}to{opacity:1;transform:none}}
+.ev .k{font-family:var(--mono);font-size:var(--t1);color:var(--muted);letter-spacing:.06em}
+.ev pre{margin:var(--s1) 0 0;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.5}
+.ev.say{padding:var(--s4);font-size:var(--t3);line-height:1.55}
+.ev.say .k{font-family:var(--sans);font-size:var(--t2);letter-spacing:0;font-weight:600;color:var(--ink)}
+.ev.say.from-agent .k{color:var(--primary)}
+.ev.say pre{margin-top:var(--s2)}
+.ev.sys{padding:var(--s1) var(--s4);font-size:var(--t1);color:var(--muted)}
+.ev.sys pre{color:var(--muted)}
+#trace.conversation .ev.sys{display:none}
+.tracebar{display:flex;gap:var(--s3);align-items:center;justify-content:space-between;
+margin:0 0 var(--s2);flex-wrap:wrap}
+.tracebar label{font-size:var(--t2);color:var(--muted);display:flex;gap:var(--s2);
+align-items:center;cursor:pointer}
+.ev.user{background:color-mix(in oklab,var(--primary) 7%,transparent)}
+.ev.meter .k{color:var(--success)}
+.ev.err .k{color:var(--danger)}
+.ev.warnrow .k{color:var(--warning)}
+@keyframes arrive{from{opacity:0;transform:translateY(var(--s2))}to{opacity:1;transform:none}}
 
 /* ---------------------------------------------------------------- notes */
-.note{border-left:3px solid var(--warn);background:color-mix(in oklab,var(--warn) 9%,transparent);
-padding:.625rem .875rem;border-radius:0 .5rem .5rem 0;font-size:.875rem;margin:0 0 1.125rem;line-height:1.5}
-/* A meter's label is a mark; the number is the thing being read. */
-.meter .k .ic svg{width:1rem;height:1rem;opacity:.75}
-.meter .k{display:flex;align-items:center}
-/* An icon-only button stays square rather than collapsing to its glyph. */
-.btn .ic.only{min-width:1.25em;justify-content:center}
-.note.bad{border-color:var(--bad);background:color-mix(in oklab,var(--bad) 9%,transparent)}
-footer{color:var(--muted);font-size:.8125rem;margin-top:2.5rem;border-top:1px solid var(--line);
-padding-top:1rem;line-height:1.5}
+.note{border-left:3px solid var(--warning);background:color-mix(in oklab,var(--warning) 10%,transparent);
+padding:var(--s3) var(--s4);border-radius:0 var(--s3) var(--s3) 0;font-size:var(--t2);
+margin:0 0 var(--s4);line-height:1.5}
+.note.bad{border-color:var(--danger);background:color-mix(in oklab,var(--danger) 10%,transparent)}
+footer{color:var(--muted);font-size:var(--t1);margin-top:var(--s7);
+border-top:1px solid var(--line);padding-top:var(--s4)}
+footer details summary{list-style:none;cursor:pointer;color:var(--muted);
+display:inline-flex;min-height:2.5rem;align-items:center}
+footer details summary::-webkit-details-marker{display:none}
+footer details p{margin:var(--s2) 0 0}
 
-/* -------------------------------------------------------- accommodations
-   Three independent signals, each answered on its own terms. Reduced motion
-   keeps the feedback and drops the travel; it does not mean no feedback.    */
+/* -------------------------------------------------------- accommodations */
 @media (prefers-reduced-motion:reduce){
 *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
 transition-duration:.01ms!important;scroll-behavior:auto!important}
 .ev{animation:fade 160ms ease both}
 @keyframes fade{from{opacity:0}to{opacity:1}}
-.card:hover{transform:none}
+.card:hover,.gig:hover,.cats a:hover{transform:none}
 .btn:active{transform:none;filter:brightness(.92)}}
 @media (prefers-reduced-transparency:reduce){
 header.top{background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:none}}
 @media (prefers-contrast:more){
-:root{--muted:#403e48;--line:#8d8a94}
+:root{--muted:#2B3340;--line:#6B7280}
 header.top{background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:none}
-.card,.meter,#trace{border-width:2px;box-shadow:none}
+.card,.meter,#trace,.ctx,.cats a{border-width:2px;box-shadow:none}
 .tag,.btn.ghost{border-width:2px}}
 `;
 
@@ -408,6 +408,9 @@ export function layout(
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Oswald:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <title>${esc(title)} · agents.alphaceo.ai</title><style>${CSS}</style></head><body>
 <header class="top"><div class="wrap">
 <a class="brand" href="/" aria-label="agents.alphaceo.ai, home">${LOGO}<b>agents</b></a>
@@ -462,6 +465,21 @@ export function avatar(name: string): string {
   return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(initials)}</span>`;
 }
 
+/**
+ * A mark per category, with a shrug for tags we have not drawn yet.
+ *
+ * Categories come from what authors tag, so the list is open-ended and this
+ * table will always be behind it. Falling back to a generic mark keeps a new
+ * category usable the day it appears instead of waiting on an icon.
+ */
+const CATEGORY_ICON: Record<string, string> = {
+  marketing: "runs", strategy: "trace", growth: "runs",
+  video: "file", media: "file", production: "clock",
+  support: "info", operations: "catalog", triage: "warn",
+  research: "search", quality: "check", engineering: "tokens",
+  sales: "cost", design: "file", writing: "trace", data: "tokens",
+};
+
 /** A band of colour per pack, so a card is recognisable before it is read. */
 export function thumb(slug: string): string {
   let h = 0;
@@ -473,10 +491,13 @@ export function catalogPage(
   packs: Array<PackRow & { published: boolean; owned: boolean; pricePoints: number;
     stats: { runs: number; buyers: number; version: number } }>,
   balance: number, viewer: Viewer = null, query = "",
+  cats: Array<{ tag: string; count: number }> = [],
 ): string {
   // Name, face, one line, price. Everything else is on the pack's own page.
   const cards = packs.map((p) => `<a class="card gig" href="/packs/${esc(p.slug)}">
-  ${thumb(p.slug)}
+  ${p.image
+    ? `<img class="thumb" src="/assets/${esc(p.image)}" alt="" loading="lazy" decoding="async" width="640" height="480">`
+    : thumb(p.slug)}
   <div class="meta">
     <p class="who">${avatar(p.author)}<span>${esc(p.author.split(" — ")[0] ?? p.author)}</span></p>
     <h3>${esc(p.name)}</h3>
@@ -497,6 +518,17 @@ export function catalogPage(
   <button class="btn" type="submit" title="Search">${icon("search", "Search", true)}</button>
   ${query ? `<a class="btn ghost" href="/" title="Clear the search">${icon("stop", "Clear", true)}</a>` : ""}
 </form>
+${(() => {
+  if (query || cats.length === 0) return "";
+  const shown = cats.slice(0, 8);
+  // A count of 1 against every category is noise, not information.
+  const counts = shown.some((c) => c.count > 1);
+  return `<nav class="cats" aria-label="Categories">
+  ${shown.map((c) => `<a href="/?q=${encodeURIComponent(c.tag)}">
+    ${icon(CATEGORY_ICON[c.tag] ?? "catalog", c.tag, true)}
+    <b>${esc(c.tag)}</b>${counts ? `<small>${c.count}</small>` : ""}</a>`).join("")}
+</nav>`;
+})()}
 ${query
   ? `<p class="lede" style="font-size:.875rem">${found === 0
       ? `Nothing matches <strong>${esc(query)}</strong>. The shelf is curated, so it is short on purpose — try a broader word.`

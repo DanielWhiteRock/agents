@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS packs (
   author_org_id TEXT,
   price_cents INTEGER NOT NULL DEFAULT 0,
   price_points INTEGER NOT NULL DEFAULT 0,
+  tags TEXT NOT NULL DEFAULT '',
+  image TEXT,
   upgrade_points INTEGER NOT NULL,
   model TEXT NOT NULL,
   effort TEXT NOT NULL DEFAULT '',
@@ -383,6 +385,10 @@ const MIGRATIONS = [
   "UPDATE points_ledger SET delta_millipoints = delta_millipoints * 1000",
   "ALTER TABLE runs ADD COLUMN points_millipoints INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE packs ADD COLUMN price_points INTEGER NOT NULL DEFAULT 0",
+  // What a pack is for, in a buyer's words. Categories are not a second table
+  // to keep in step — they are whatever authors have actually tagged, counted.
+  "ALTER TABLE packs ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN image TEXT",
   // A pack has to be affordable from the allowance it will be run on: Personal
   // is 120 points a month, so a premium worker lands near half of one and
   // leaves something to run it with.

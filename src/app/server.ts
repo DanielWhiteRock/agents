@@ -116,7 +116,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         stats: await P.packStats(p.id),
       };
     }));
-    return html(res, V.catalogPage(packs, await bal(), viewer, q));
+    return html(res, V.catalogPage(packs, await bal(), viewer, q, await P.categories()));
   }
 
   const packMatch = /^\/packs\/([a-z0-9-]+)$/.exec(path);
@@ -899,6 +899,32 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method ?? "GET";
+
+  // Generated hero art, served from disk. Read per request rather than held in
+  // memory: there are a handful of files and the OS cache is better at this
+  // than we would be.
+  const assetMatch = /^\/assets\/([a-zA-Z0-9._-]+)$/.exec(path);
+  if (method === "GET" && assetMatch) {
+    const { readFile } = await import("node:fs/promises");
+    const { join, extname } = await import("node:path");
+    const name = assetMatch[1]!;
+    // A literal dot-dot cannot survive the pattern above, but the check costs
+    // nothing and the next person to widen that pattern will be glad of it.
+    if (name.includes("..")) return html(res, V.layout("Not found", "<h1>Not found</h1>"), 404);
+    const types: Record<string, string> = {
+      ".webp": "image/webp", ".png": "image/png", ".jpg": "image/jpeg",
+      ".svg": "image/svg+xml", ".avif": "image/avif",
+    };
+    try {
+      const bytes = await readFile(join(process.cwd(), "public", "assets", name));
+      res.writeHead(200, {
+        "content-type": types[extname(name).toLowerCase()] ?? "application/octet-stream",
+        "cache-control": "public, max-age=604800, immutable",
+        "content-length": String(bytes.length),
+      });
+      return void res.end(bytes);
+    } catch { return html(res, V.layout("Not found", "<h1>Not found</h1>"), 404); }
+  }
 
   // Inline, so there is no static file to serve and no 404 on every page load.
   if (method === "GET" && path === "/favicon.ico") {

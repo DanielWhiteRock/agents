@@ -30,7 +30,7 @@ import type { MountedFile } from "../runtime/types.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
-  price_points: number; upgrade_points: number; model: string; effort: string;
+  price_points: number; tags: string; image: string | null; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string;
   author_payout_email: string | null; extras: string; created_at: string;
 };
@@ -135,7 +135,8 @@ export async function listPacks(query = ""): Promise<PackRow[]> {
   const like = `%${q.toLowerCase()}%`;
   return s.query<PackRow>(
     `SELECT * FROM packs WHERE status = 'listed'
-       AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1)
+       AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1
+            OR LOWER(tags) LIKE $1)
      ORDER BY price_points DESC`, [like]);
 }
 /**
@@ -162,6 +163,29 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
     buyers: Number(row?.buyers ?? 0),
     version: Number(row?.version ?? 0),
   };
+}
+
+/**
+ * The shelf's categories, counted from what authors actually tagged.
+ *
+ * Not a fixed list in a settings row: a category exists because packs are in
+ * it, and stops existing when they are not. A taxonomy maintained separately
+ * from the things it classifies drifts out of step within a month, and the
+ * first symptom is an empty category that still appears in the navigation.
+ */
+export async function categories(): Promise<Array<{ tag: string; count: number }>> {
+  const s = await sql();
+  const rows = await s.query<{ tags: string }>(
+    "SELECT tags FROM packs WHERE status = 'listed' AND tags <> ''");
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    for (const raw of r.tags.split(",")) {
+      const tag = raw.trim().toLowerCase();
+      if (tag) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...counts].map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 }
 
 export async function getPack(slug: string): Promise<PackRow | undefined> {
@@ -216,11 +240,12 @@ export async function seedCatalog(): Promise<number> {
   for (const p of SEED_PACKS) {
     const rows = await s.query(
       `INSERT INTO packs (id, slug, name, tagline, author, price_points, upgrade_points, model, effort,
-         pinned_models, instructions, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'listed',$12)
+         pinned_models, instructions, tags, image, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
        ON CONFLICT (slug) DO NOTHING RETURNING id`,
       [id("pk"), p.slug, p.name, p.tagline, p.author, p.pricePoints, p.upgradePoints, p.model,
-        p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now()]);
+        p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now(),
+        p.tags ?? "", p.image ?? null]);
     n += rows.length;
   }
   return n;
