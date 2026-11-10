@@ -10,7 +10,7 @@ import { tarGz } from "../packs/tar.js";
 import { statusOf } from "./errors.js";
 import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
-import { balanceByBucket, balanceCents, credit, fmt } from "../billing/points.js";
+import { balanceByBucket, balanceMillipoints, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
 import * as V from "./views.js";
 
@@ -100,7 +100,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method ?? "GET";
-  const bal = () => balanceCents(ctx.orgId);
+  const bal = () => balanceMillipoints(ctx.orgId);
   const viewer = ctx.viewer;
   const ownerOnly = (): void => { if (ctx.role !== "owner") throw new A.ForbiddenError(); };
 
@@ -112,7 +112,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         ...p,
         published: Boolean(v),
         owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
-        pricePoints: await Pay.pricePoints(p.price_cents),
+        pricePoints: Pay.pricePoints(p),
         stats: await P.packStats(p.id),
       };
     }));
@@ -199,7 +199,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       if (!(await P.entitled(ctx.orgId, versionId))) {
         await Pay.buyWithPoints({
           orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId,
-          packId: pack.id, priceCents: pack.price_cents, description: pack.name,
+          packId: pack.id, pricePoints: Pay.pricePoints(pack), description: pack.name,
         });
       }
       const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"] });
@@ -278,11 +278,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     // A run belongs to an organisation; another org's run is simply not found.
     if (!run || run.org_id !== ctx.orgId) return html(res, V.layout("Not found", "<h1>No such run</h1>", { viewer }), 404);
     const asks = (await P.openAsks(run.id)).map((a) => ({ event_id: a.event_id, name: a.name, input: a.input }));
-    let trial: { turns: number; slug: string; priceCents: number } | null = null;
+    let trial: { turns: number; slug: string; pricePoints: number } | null = null;
     if (run.is_trial) {
       const v = await P.getVersion(run.pack_version_id);
       const pack = v ? await P.packById(v.pack_id) : undefined;
-      if (pack) trial = { turns: await settingInt("trial_turns"), slug: pack.slug, priceCents: pack.price_cents };
+      if (pack) trial = { turns: await settingInt("trial_turns"), slug: pack.slug, pricePoints: pack.price_points };
     }
     return html(res, V.runPage(run, await packNameOf(run.pack_version_id), await bal(),
       run.stop_reason === "budget_reached", asks, viewer, trial,
@@ -357,8 +357,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
 
   if (method === "GET" && path === "/ledger") {
     const s = await sql();
-    const rows = await s.query<{ bucket: string; delta_cents: number; reason: string; run_id: string | null; created_at: string }>(
-      `SELECT bucket, delta_cents, reason, run_id, created_at FROM points_ledger
+    const rows = await s.query<{ bucket: string; delta_millipoints: number; reason: string; run_id: string | null; created_at: string }>(
+      `SELECT bucket, delta_millipoints, reason, run_id, created_at FROM points_ledger
        WHERE org_id = $1 ORDER BY created_at DESC LIMIT 100`, [ctx.orgId]);
     return html(res, V.ledgerPage(rows, await balanceByBucket(ctx.orgId), await bal(), viewer));
   }
@@ -503,7 +503,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     slug: f["slug"] ?? "", name: f["name"] ?? "", tagline: f["tagline"] ?? "",
     author: f["author"] ?? "", model: f["model"] ?? "claude-opus-5",
     effort: (f["effort"] || undefined) as Au.PackInput["effort"],
-    priceCents: Math.floor(Number(f["priceCents"] ?? 0)),
+    pricePoints: Math.floor(Number(f["pricePoints"] ?? 0)),
     upgradePoints: Math.floor(Number(f["upgradePoints"] ?? 0)),
     instructions: f["instructions"] ?? "",
     pinnedModels: (f["pinnedModels"] ?? "").split(",").map((x) => x.trim()).filter(Boolean),
@@ -578,7 +578,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       .map(async (p) => {
         const v = await P.latestVersion(p.id);
         return {
-          slug: p.slug, name: p.name, status: p.status, price_cents: p.price_cents,
+          slug: p.slug, name: p.name, status: p.status, price_points: p.price_points,
           owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
           version: v?.version ?? null,
         };
@@ -626,7 +626,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       "SELECT slug, name, author FROM packs WHERE status = 'listed' ORDER BY name");
     return html(res, V.curatePage({
       queue: (await Au.submittedPacks()).map((q) => ({
-        slug: q.slug, name: q.name, author: q.author, tagline: q.tagline, price_cents: Number(q.price_cents),
+        slug: q.slug, name: q.name, author: q.author, tagline: q.tagline, price_points: Number(q.price_points),
       })),
       listed, balance: await bal(), viewer,
     }));
@@ -777,7 +777,7 @@ async function teamRoutes(
       seatsUsed: await A.seatsUsed(ctx.orgId),
       seatLimit: await A.seatLimit(ctx.orgId),
       tier: org?.tier ?? "personal",
-      viewer: ctx.viewer, youId: ctx.userId, balance: await balanceCents(ctx.orgId),
+      viewer: ctx.viewer, youId: ctx.userId, balance: await balanceMillipoints(ctx.orgId),
       err: new URL(req.url ?? "/", `http://localhost:${PORT}`).searchParams.get("err") ?? undefined,
     }));
     return true;

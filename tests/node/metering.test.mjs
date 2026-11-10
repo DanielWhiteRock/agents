@@ -52,26 +52,35 @@ function fakeRuntime(script) {
 before(async () => {
   P = await import("../../dist/src/app/platform.js");
   points = await import("../../dist/src/billing/points.js");
+  // On Postgres every file shares one database, so by the time these run the
+  // demo org may have spent its grant buying packs in an earlier file. What is
+  // under test here is arithmetic, not whether somebody can afford it.
+  const { orgId } = await P.ensureDemoOrg();
+  await points.credit(orgId, "topup", 1_000_000, "test headroom");
 });
 
-test("bills each turn's delta once, though live snapshots move the observed cost", async () => {
+test("bills each turn's delta once, on tokens rather than on what we were charged", async () => {
+  // The buyer is charged on tokens at the tier's own rate — 12 points per Mtok
+  // in, 60 out — so the model they pick cannot change their bill. What the run
+  // cost us in dollars is recorded separately, because the gap between the two
+  // is the subsidy and it should be visible rather than assumed.
   P.setRuntime(fakeRuntime([{ finalCost: 9, out: 100 }, { snapshot: 12, finalCost: 14, out: 250 }]));
   const { orgId, userId } = await P.ensureDemoOrg();
   await P.seedCatalog();
   const version = await P.publishPack("guardrails");
   await P.grantEntitlement(orgId, version.id);
-  const opening = await points.balanceCents(orgId);
+  const opening = await points.balanceMillipoints(orgId);
 
+  // 2 in and 100 out = (2*12 + 100*60)/1000 = 6 thousandths of a point.
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
-  assert.equal((await P.sendTurn(run.id, "one")).billedCents, 9);
-  // 14 cumulative minus the 9 already charged. Not 14 again, and not 14-12.
-  assert.equal((await P.sendTurn(run.id, "two")).billedCents, 5);
+  assert.equal((await P.sendTurn(run.id, "one")).billedCents, 6);
+  // Cumulative 2 in / 250 out = 15; minus the 6 already charged. Not 15 again.
+  assert.equal((await P.sendTurn(run.id, "two")).billedCents, 9);
 
   const after = await P.getRun(run.id);
-  assert.equal(after.list_cost_cents, 14);
-  assert.equal(after.billed_up_to_cents, 14);
-  assert.equal(after.billed_cents, 14);
-  assert.equal(opening - (await points.balanceCents(orgId)), 14);
+  assert.equal(after.points_millipoints, 15, "what the buyer was charged");
+  assert.equal(after.list_cost_cents, 14, "what it cost us, kept separately");
+  assert.equal(opening - (await points.balanceMillipoints(orgId)), 15);
 });
 
 test("writes the platform's snapshot onto the run, absolute not additive", async () => {
@@ -87,7 +96,7 @@ test("writes the platform's snapshot onto the run, absolute not additive", async
   assert.equal(after.budget_cents, 50);
 });
 
-test("credits the author in millicents so a sub-cent share survives", async () => {
+test("credits the author finely enough that a small run still pays something", async () => {
   P.setRuntime(fakeRuntime([{ finalCost: 2, out: 50 }]));
   const { orgId, userId } = await P.ensureDemoOrg();
   const pack = await P.getPack("guardrails");
@@ -95,9 +104,11 @@ test("credits the author in millicents so a sub-cent share survives", async () =
   const before = await points.authorEarningsTotal(pack.id);
   await P.grantEntitlement(orgId, version.id);
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
-  // 20% of 2c is 0.4c = 400 millicents, which whole cents would floor away.
-  assert.equal((await P.sendTurn(run.id, "x")).authorCents, 400);
-  assert.equal((await points.authorEarningsTotal(pack.id)) - before, 400);
+  // 2 in / 50 out = 3 thousandths of a point; 20% of that is 0.6, which any
+  // coarser unit would floor to nothing and pay the author zero for real work.
+  const earned = (await P.sendTurn(run.id, "x")).authorCents;
+  assert.ok(earned > 0, "a small run still earns the author something");
+  assert.equal((await points.authorEarningsTotal(pack.id)) - before, earned);
 });
 
 test("refuses a run beyond the tier's concurrency limit", async () => {

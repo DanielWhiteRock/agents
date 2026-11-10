@@ -19,9 +19,9 @@ export type McpContext = { orgId: string; userId: string; baseUrl: string };
 const text = (s: string) => ({ content: [{ type: "text" as const, text: s }] });
 
 function packLine(p: {
-  slug: string; name: string; tagline: string; author: string; price_cents: number; model: string;
+  slug: string; name: string; tagline: string; author: string; price_points: number; model: string;
 }, owned: boolean): string {
-  return `${p.name} (${p.slug})\n  ${p.tagline}\n  by ${p.author} · ${p.price_cents === 0 ? "free" : fmt(p.price_cents)}`
+  return `${p.name} (${p.slug})\n  ${p.tagline}\n  by ${p.author} · ${p.price_points === 0 ? "free" : fmt(p.price_points)}`
     + ` · runs on ${p.model}${owned ? " · OWNED" : ""}`;
 }
 
@@ -74,7 +74,7 @@ export function buildServer(ctx: McpContext): McpServer {
       p.tagline,
       "",
       `Author: ${p.author}`,
-      `Price: ${p.price_cents === 0 ? "free" : `${fmt(p.price_cents)} one-off`}`,
+      `Price: ${p.price_points === 0 ? "free" : `${fmt(p.price_points)} one-off`}`,
       `Updates: ${p.upgrade_points} points`,
       `Default model: ${p.model}${p.effort ? ` at ${p.effort} effort` : ""}`,
       pinned.length ? `Author restricted it to: ${pinned.join(", ")}` : "Runs on any permitted model",
@@ -120,7 +120,7 @@ export function buildServer(ctx: McpContext): McpServer {
       return text(`${p.name} version ${v.version} is already in your library. Run it at ${ctx.baseUrl}/packs/${p.slug}`);
     }
     return text(
-      `${p.name} is not owned by this organisation. ${p.price_cents === 0 ? "It is free" : `It costs ${fmt(p.price_cents)}`}`
+      `${p.name} is not owned by this organisation. ${p.price_points === 0 ? "It is free" : `It costs ${fmt(p.price_points)}`}`
       + ` — finish at ${ctx.baseUrl}/packs/${p.slug}. Payment needs a browser, so it cannot be done from here.`);
   });
 

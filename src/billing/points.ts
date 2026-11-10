@@ -7,16 +7,16 @@ import { sql } from "../app/sql.js";
  * Earned points are cashable, so this is an accounting system rather than a
  * counter: every credit traces to the run that earned it and every debit to
  * what it bought, and a balance is always derived from the rows, never stored.
- * Amounts are cents of compute.
+ * Amounts are millipoints of compute.
  */
 export type Bucket = "grant" | "topup" | "earning";
 
 const num = (v: unknown): number => Number(v ?? 0);
 
-export async function balanceCents(orgId: string): Promise<number> {
+export async function balanceMillipoints(orgId: string): Promise<number> {
   const s = await sql();
   const row = await s.one<{ bal: unknown }>(
-    `SELECT COALESCE(SUM(delta_cents), 0) AS bal FROM points_ledger
+    `SELECT COALESCE(SUM(delta_millipoints), 0) AS bal FROM points_ledger
      WHERE org_id = $1 AND (expires_at IS NULL OR expires_at > $2)`, [orgId, now()]);
   return num(row?.bal);
 }
@@ -24,7 +24,7 @@ export async function balanceCents(orgId: string): Promise<number> {
 export async function balanceByBucket(orgId: string): Promise<Record<Bucket, number>> {
   const s = await sql();
   const rows = await s.query<{ bucket: Bucket; bal: unknown }>(
-    `SELECT bucket, COALESCE(SUM(delta_cents), 0) AS bal FROM points_ledger
+    `SELECT bucket, COALESCE(SUM(delta_millipoints), 0) AS bal FROM points_ledger
      WHERE org_id = $1 AND (expires_at IS NULL OR expires_at > $2) GROUP BY bucket`, [orgId, now()]);
   const out: Record<Bucket, number> = { grant: 0, topup: 0, earning: 0 };
   for (const r of rows) out[r.bucket] = num(r.bal);
@@ -32,14 +32,14 @@ export async function balanceByBucket(orgId: string): Promise<Record<Bucket, num
 }
 
 export async function credit(
-  orgId: string, bucket: Bucket, cents: number, reason: string, expiresAt?: string,
+  orgId: string, bucket: Bucket, millipoints: number, reason: string, expiresAt?: string,
 ): Promise<void> {
-  if (cents <= 0) throw new Error("credit must be positive");
+  if (millipoints <= 0) throw new Error("credit must be positive");
   const s = await sql();
   await s.query(
-    `INSERT INTO points_ledger (id, org_id, bucket, delta_cents, reason, expires_at, created_at)
+    `INSERT INTO points_ledger (id, org_id, bucket, delta_millipoints, reason, expires_at, created_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [id("pl"), orgId, bucket, cents, reason, expiresAt ?? null, now()]);
+    [id("pl"), orgId, bucket, millipoints, reason, expiresAt ?? null, now()]);
 }
 
 /**
@@ -48,29 +48,29 @@ export async function credit(
  * was actually debited: overshoot past a budget is absorbed rather than pushing
  * a balance negative.
  */
-export async function debit(orgId: string, cents: number, reason: string, runId?: string): Promise<number> {
-  if (cents <= 0) return 0;
+export async function debit(orgId: string, millipoints: number, reason: string, runId?: string): Promise<number> {
+  if (millipoints <= 0) return 0;
   const s = await sql();
   const bal = await balanceByBucket(orgId);
-  let remaining = cents;
+  let remaining = millipoints;
   for (const bucket of ["grant", "topup", "earning"] as const) {
     if (remaining <= 0) break;
     const take = Math.min(remaining, Math.max(0, bal[bucket]));
     if (take <= 0) continue;
     await s.query(
-      `INSERT INTO points_ledger (id, org_id, bucket, delta_cents, reason, run_id, created_at)
+      `INSERT INTO points_ledger (id, org_id, bucket, delta_millipoints, reason, run_id, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [id("pl"), orgId, bucket, -take, reason, runId ?? null, now()]);
     remaining -= take;
   }
-  return cents - remaining;
+  return millipoints - remaining;
 }
 
 /**
  * The author earns on every run, as a configurable share of what it cost.
  *
  * Kept in millicents: a 20% share of a two-cent turn is four tenths of a cent,
- * which in whole cents rounds to nothing — an author doing real work on cheap
+ * which in whole millipoints rounds to nothing — an author doing real work on cheap
  * turns would be paid zero forever. Returns millicents.
  */
 export async function creditAuthor(packId: string, runId: string, runCostCents: number): Promise<number> {
@@ -92,7 +92,27 @@ export async function authorEarningsTotal(packId: string): Promise<number> {
   return num(row?.total);
 }
 
+/** Real money, in dollars. Used only where money actually moves. */
 export const fmt = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
+
+/**
+ * What a run costs in points, from the tokens it actually used.
+ *
+ * This is the owner's tier table read backwards. Personal is 120 points for
+ * 5M input and 1M output; output lists at five times input, so the only rate
+ * that satisfies both is 12 points per million in and 60 per million out —
+ * and Team lands on exactly 360 at the same rate without being asked to.
+ *
+ * Returned in thousandths of a point, because a short turn costs about a
+ * hundredth of one and whole points would round every small run to nothing.
+ */
+export async function pointsForUsage(inputTokens: number, outputTokens: number): Promise<number> {
+  const [perIn, perOut] = await Promise.all([
+    settingInt("points_per_mtok_in"),
+    settingInt("points_per_mtok_out"),
+  ]);
+  return Math.round(((inputTokens * perIn) + (outputTokens * perOut)) / 1000);
+}
 
 /**
  * Compute, in the unit the buyer actually holds.
@@ -104,7 +124,19 @@ export const fmt = (cents: number): string => `$${(cents / 100).toFixed(2)}`;
  * so points are what they see. Dollars stay for real money: what a pack costs,
  * what an author is paid.
  */
-export const pts = (cents: number): string =>
-  `${cents.toLocaleString("en-US")} ${Math.abs(cents) === 1 ? "point" : "points"}`;
+/**
+ * Points, shown to the precision the number deserves.
+ *
+ * A balance of 120,000 millipoints is "120 points"; a turn that cost 13 of
+ * them is "0.013 points" rather than "0". Rounding a real charge to zero is
+ * how a meter stops being believed.
+ */
+export const pts = (millipoints: number): string => {
+  const p = millipoints / 1000;
+  const n = Math.abs(p) >= 10 || Number.isInteger(p)
+    ? p.toLocaleString("en-US", { maximumFractionDigits: 0 })
+    : p.toLocaleString("en-US", { maximumFractionDigits: 3 });
+  return `${n} ${Math.abs(p) === 1 ? "point" : "points"}`;
+};
 /** Millicents, shown to the tenth of a cent so small earnings stay visible. */
 export const fmtMilli = (milli: number): string => `$${(milli / 100000).toFixed(4)}`;

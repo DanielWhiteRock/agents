@@ -131,10 +131,10 @@ test("another organisation cannot refund your purchase", async () => {
 test("buying points credits non-expiring compute, and cannot be refunded", async () => {
   provider.setPayments(new provider.StubProvider());
   const { orgId, userId } = await org();
-  const before = await points.balanceCents(orgId);
+  const before = await points.balanceMillipoints(orgId);
   const out = await Pay.beginPointsPurchase({ orgId, userId, amountCents: 750, ...ARGS });
   assert.equal(out.status, "granted");
-  assert.equal((await points.balanceCents(orgId)) - before, 750);
+  assert.equal((await points.balanceMillipoints(orgId)) - before, 750);
   assert.equal((await points.balanceByBucket(orgId)).topup >= 750, true);
   await assert.rejects(Pay.refundPurchase(out.purchaseId, orgId), /cannot be refunded/);
 });

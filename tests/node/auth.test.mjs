@@ -110,7 +110,31 @@ test("a new organisation starts with its tier's monthly grant", async () => {
   const points = await import("../../dist/src/billing/points.js");
   const { orgId } = await A.signUp({ email: email(), name: "Fresh", password: "correct-horse", orgName: "Fresh" });
   const buckets = await points.balanceByBucket(orgId);
-  assert.equal(buckets.grant, 120, "the personal tier's grant, in cents of compute");
+  assert.equal(buckets.grant, 120_000, "the personal tier's 120 points, in thousandths");
   assert.equal(buckets.topup, 0);
-  assert.ok((await points.balanceCents(orgId)) > 0, "a new org can actually run something");
+  assert.ok((await points.balanceMillipoints(orgId)) > 0, "a new org can actually run something");
+});
+
+test("a migration that changes data runs once, however many times we boot", async () => {
+  // A one-time cleanup here once deleted every row of the points ledger, and
+  // because migrations re-ran on every start it did it again at each boot.
+  // Nothing destructive is safe without a record of what already happened.
+  const points = await import("../../dist/src/billing/points.js");
+  const s = await sql();
+
+  const { orgId } = await A.signUp({
+    email: `mig-${Date.now()}@example.com`, password: "correct-horse-battery",
+    name: "Mig", orgName: "Mig Ltd",
+  });
+  const before = await points.balanceMillipoints(orgId);
+  assert.ok(before > 0, "a new organisation has its grant");
+
+  const applied = (await s.query("SELECT COUNT(*) AS n FROM schema_migrations"))[0];
+  await db.initDb();
+  await db.initDb();
+
+  assert.equal(await points.balanceMillipoints(orgId), before,
+    "booting again does not move the ledger");
+  const after = (await s.query("SELECT COUNT(*) AS n FROM schema_migrations"))[0];
+  assert.equal(Number(after.n), Number(applied.n), "and does not re-record anything");
 });

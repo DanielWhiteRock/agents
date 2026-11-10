@@ -124,7 +124,7 @@ export async function signUp(args: {
   // The tier's monthly grant, which expires. Without this a new organisation
   // had no points at all, so every run came out of the platform's pocket and
   // the ledger stayed empty.
-  await credit(orgId, "grant", await settingInt(`tier.${tier}.points_cents`), `${tier} monthly grant`,
+  await credit(orgId, "grant", await settingInt(`tier.${tier}.points_millipoints`), `${tier} monthly grant`,
     new Date(Date.now() + 30 * 86400_000).toISOString());
   // The first organisation to sign up curates the catalog; later ones do not.
   await claimPlatformOrg(orgId);

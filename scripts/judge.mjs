@@ -68,6 +68,22 @@ const parseRgb = (s) => {
 
 const CHECKS = [
   {
+    id: "not-an-error-page", weight: 20,
+    rule: "Craft \u2014 a screen that is secretly a 500 should say so loudly, here before anywhere else",
+    async run(page) {
+      // The ledger page once rendered a server error that looked like a page:
+      // the only outward sign was signed-out navigation, and the review caught
+      // it as a wayfinding failure rather than as the crash it was.
+      const bad = await page.evaluate(() => {
+        const h1 = document.querySelector("h1")?.textContent?.trim() ?? "";
+        const title = document.title;
+        const hit = /something broke|^error\b|cannot do that|not allowed|no such/i;
+        return hit.test(h1) || hit.test(title) ? (h1 || title) : null;
+      });
+      return bad ? { pass: false, detail: `the page is an error: "${bad}"` } : { pass: true };
+    },
+  },
+  {
     id: "no-sideways-scroll", weight: 12,
     rule: "Flexibility — it has to work on a phone, and a page that scrolls sideways does not",
     async run(page) {

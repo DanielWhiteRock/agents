@@ -18,7 +18,7 @@ export const SEED_PACKS: PackDefinition[] = [
     author: "Placeholder — needs a real campaigner",
     model: "claude-opus-5",
     effort: "high",
-    priceCents: 24900,
+    pricePoints: 60,
     upgradePoints: 40,
     pinnedModels: ["claude-opus-5"],
     instructions: `You plan campaigns the way someone does after twenty years of watching them fail.
@@ -64,7 +64,7 @@ from you**. No timelines in weeks unless you were given dates.`,
     author: "Placeholder — needs a real producer",
     model: "claude-opus-5",
     effort: "high",
-    priceCents: 19900,
+    pricePoints: 40,
     upgradePoints: 30,
     instructions: `You write briefs that a crew can shoot without ringing you back.
 
@@ -99,7 +99,7 @@ know.`,
     author: "Placeholder — needs a real support lead",
     model: "claude-sonnet-5",
     effort: "medium",
-    priceCents: 9900,
+    pricePoints: 20,
     upgradePoints: 15,
     instructions: `You triage support queues. Volume is not the problem; missing the one
 ticket that becomes a public incident is.

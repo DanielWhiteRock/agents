@@ -18,7 +18,7 @@ export const PACK_ZERO: PackDefinition = {
   author: "alphaCEO",
   model: "claude-opus-5",
   effort: "high",
-  priceCents: 0,
+  pricePoints: 0,
   upgradePoints: 0,
   pinnedModels: [],
   instructions: `You review work produced by other AI agents before a human acts on it.

@@ -415,7 +415,7 @@ export function layout(
   ${v ? `<a href="/" title="Catalog">${icon("catalog", "Catalog", true)}</a>
   <a href="/runs" title="Runs">${icon("runs", "Runs", true)}</a>
   <a href="/ledger" title="Points">${icon("points", "Points", true)}</a>
-  ${opts.balance !== undefined ? `<a class="bal" href="/ledger" title="${esc(pts(opts.balance))} left">${opts.balance.toLocaleString("en-US")}</a>` : ""}
+  ${opts.balance !== undefined ? `<a class="bal" href="/ledger" title="${esc(pts(opts.balance))} left">${esc(pts(opts.balance).replace(" points", "").replace(" point", ""))}</a>` : ""}
   <details class="menu"><summary>${esc(v.name)}</summary><div>
     <p class="who" title="${esc(v.email)}">${esc(v.orgName)}${v.role === "owner" ? " · owner" : ""}</p>
     <a href="/authors">Authoring</a><a href="/schedules">Schedules</a><a href="/purchases">Purchases</a>
@@ -520,7 +520,7 @@ ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
 <p class="lede">${esc(p.tagline)}</p>
 <div class="row" style="margin-bottom:18px">
   <span class="tag">by ${esc(p.author)}</span>
-  <span class="tag">${p.price_cents === 0 ? "free" : esc(fmt(p.price_cents))} one-off</span>
+  <span class="tag">${p.price_points === 0 ? "free" : esc(fmt(p.price_points))} one-off</span>
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
@@ -532,7 +532,7 @@ ${v ? `
   <input type="hidden" name="packVersionId" value="${esc(v.id)}">
   <div class="row">
     <label>Model <select name="model">${choices.map((m) => `<option value="${esc(m)}"${m === p.model ? " selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
-    <button class="btn" type="submit">${owned ? "Start a run" : p.price_cents === 0 ? "Get it free and run" : `Buy for ${fmt(p.price_cents)} and run`}</button>
+    <button class="btn" type="submit">${owned ? "Start a run" : p.price_points === 0 ? "Get it free and run" : `Buy for ${fmt(p.price_points)} and run`}</button>
   </div>
   ${pinned.length ? `<p class="lede" style="margin-top:10px;font-size:14px">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
 </form>
@@ -628,7 +628,7 @@ export type Ask = { event_id: string; name: string; input: string };
 
 export function runPage(
   run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = [], viewer: Viewer = null,
-  trial: { turns: number; slug: string; priceCents: number } | null = null,
+  trial: { turns: number; slug: string; pricePoints: number } | null = null,
   outputs: Array<{ file_id: string; filename: string; size_bytes: number }> = [],
   usage: RunUsageView | null = null,
   retentionDays = 0,
@@ -640,7 +640,7 @@ ${run.is_trial && trial ? `<div class="note">
   <strong>This is a trial</strong> — ${Math.max(0, trial.turns - run.turn_count)} of ${trial.turns} turns left, capped at ${esc(pts(run.budget_cents))}.
   ${run.turn_count >= trial.turns ? `The trial is used up.` : ""}
   <form method="post" action="/packs/${esc(trial.slug)}/acquire" class="inline">
-    <button class="btn" style="margin-left:10px">Buy it for ${esc(fmt(trial.priceCents))} and keep going</button></form>
+    <button class="btn" style="margin-left:10px">Buy it for ${esc(fmt(trial.pricePoints))} and keep going</button></form>
 </div>` : ""}
 <div id="asks">${asks.map((a) => `<div class="note" style="border-color:var(--accent);background:color-mix(in oklab,var(--accent) 9%,transparent)">
   <strong>The worker is asking permission</strong> to run <code>${esc(a.name)}</code>:
@@ -714,7 +714,7 @@ function render(e){
     if (e.kind === 'user.message') body = p.text;
     else if (e.kind === 'agent.text') body = p.text;
     else if (e.kind === 'run.outputs') body = 'produced ' + p.files.map((f) => f.name + ' (' + (f.bytes/1024).toFixed(1) + 'KB)').join(', ');
-    else if (e.kind === 'run.metered') body = 'cost ' + (p.list_cost_cents/100).toFixed(2) + ' (+' + (p.delta_cents/100).toFixed(2) + ') · in ' + p.input_tokens + ' · out ' + p.output_tokens + ' · ' + p.active_seconds.toFixed(1) + 's · author earned $' + (p.author_millicents/100000).toFixed(4);
+    else if (e.kind === 'run.metered') body = 'charged ' + (p.points_millipoints/1000).toFixed(3) + ' points (+' + (p.delta_millipoints/1000).toFixed(3) + ') · in ' + p.input_tokens + ' · out ' + p.output_tokens + ' · ' + p.active_seconds.toFixed(1) + 's · cost us $' + (p.list_cost_cents/100).toFixed(2) + ' · author earned ' + (p.author_millicents/1000).toFixed(3) + ' points';
     else if (e.kind === 'tool.use') body = p.name + ' [' + p.permission + '] ' + JSON.stringify(p.input);
     else if (e.kind === 'tool.result') body = p.name + (p.isError ? ' FAILED ' : ' ok ') + (p.preview||'').slice(0,400);
     else if (e.kind === 'agent.thinking') body = 'thinking…';
@@ -774,10 +774,10 @@ src.addEventListener('error', () => { live.textContent = 'reconnecting…'; });
 </script>`, { balance, viewer });
 }
 
-export function ledgerPage(rows: Array<{ bucket: string; delta_cents: number; reason: string; created_at: string; run_id: string | null }>,
+export function ledgerPage(rows: Array<{ bucket: string; delta_millipoints: number; reason: string; created_at: string; run_id: string | null }>,
   buckets: Record<string, number>, balance: number, viewer: Viewer = null): string {
   return layout("Points", `<h1>Points</h1>
-<p class="lede">A point is a cent of compute. The monthly grant expires; top-ups and earnings don't.</p>
+<p class="lede">120 points is 5M in / 1M out on Personal. The grant expires; top-ups and earnings don't.</p>
 <div class="meters">
   <div class="meter"><div class="k">Balance</div><div class="v">${esc(pts(balance))}</div></div>
   <div class="meter"><div class="k">Grant (expires)</div><div class="v">${esc(pts(buckets["grant"] ?? 0))}</div></div>
@@ -791,7 +791,7 @@ export function ledgerPage(rows: Array<{ bucket: string; delta_cents: number; re
 <table><tr><th>When</th><th>Bucket</th><th>Reason</th><th class="num">Change</th></tr>
 ${rows.map((r) => `<tr><td>${esc(r.created_at.slice(5, 16).replace("T", " "))}</td><td><span class="tag">${esc(r.bucket)}</span></td>
 <td>${esc(r.reason)}${r.run_id ? ` <a href="/runs/${esc(r.run_id)}">trace</a>` : ""}</td>
-<td class="num" style="color:${r.delta_cents < 0 ? "var(--bad)" : "var(--good)"}">${r.delta_cents < 0 ? "−" : "+"}${esc(pts(Math.abs(r.delta_cents)))}</td></tr>`).join("")}
+<td class="num" style="color:${r.delta_millipoints < 0 ? "var(--bad)" : "var(--good)"}">${r.delta_millipoints < 0 ? "−" : "+"}${esc(pts(Math.abs(r.delta_millipoints)))}</td></tr>`).join("")}
 </table>`, { balance, viewer });
 }
 
@@ -1191,7 +1191,7 @@ document.getElementById('folder').addEventListener('change', (e) => send(e.targe
     : `<p><label>Address <span style="color:var(--muted);font-size:13px">(blank to take it from the name)</span><br>
     <input type="text" name="slug" placeholder="pricing-reviewer" style="width:100%"></label></p>`}
   <div class="row">
-    <label>Price <input type="text" name="priceCents" value="${p?.price_cents ?? 0}" size="7"> <span class="tag">cents, 0 = free</span></label>
+    <label>Price <input type="text" name="pricePoints" value="${p?.price_points ?? 0}" size="7"> <span class="tag">cents, 0 = free</span></label>
     <label>Update cost <input type="text" name="upgradePoints" value="${p?.upgrade_points ?? 0}" size="5"> <span class="tag">points</span></label>
   </div>
   <div class="row" style="margin-top:12px">
@@ -1231,7 +1231,7 @@ what lets you fix a mistake without quietly rewriting work somebody paid for.</p
 }
 
 export function curatePage(args: {
-  queue: Array<{ slug: string; name: string; author: string; tagline: string; price_cents: number }>;
+  queue: Array<{ slug: string; name: string; author: string; tagline: string; price_points: number }>;
   listed: Array<{ slug: string; name: string; author: string }>;
   balance: number; viewer: Viewer;
 }): string {
@@ -1243,7 +1243,7 @@ empty inventory. You are the taste.</p>
 ${args.queue.length === 0 ? `<p class="lede">Nothing submitted.</p>` : `<table><tr><th>Pack</th><th>Author</th><th class="num">Price</th><th></th></tr>
 ${args.queue.map((q) => `<tr>
   <td><a href="/packs/${esc(q.slug)}/edit">${esc(q.name)}</a><div style="color:var(--muted);font-size:13px">${esc(q.tagline)}</div></td>
-  <td>${esc(q.author)}</td><td class="num">${esc(fmt(q.price_cents))}</td>
+  <td>${esc(q.author)}</td><td class="num">${esc(fmt(q.price_points))}</td>
   <td><form method="post" action="/packs/${esc(q.slug)}/status" class="row">
     <button class="btn" name="status" value="listed">List it</button>
     <button class="btn ghost" name="status" value="draft">Send back</button></form></td>

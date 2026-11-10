@@ -1,7 +1,7 @@
 import { id, now, setting, settingInt } from "../app/db.js";
 import { sql } from "../app/sql.js";
 import { payments, type Money } from "./provider.js";
-import { balanceCents, credit, debit } from "./points.js";
+import { balanceMillipoints, credit, debit } from "./points.js";
 import { endRunsFor } from "../app/platform.js";
 
 /**
@@ -131,9 +131,8 @@ export async function beginPointsPurchase(args: {
  * cost. One currency: dollars now appear only where money actually moves —
  * the subscription, a top-up, an author cashing out.
  */
-export async function pricePoints(priceCents: number): Promise<number> {
-  if (priceCents <= 0) return 0;
-  return Math.round((priceCents / 100) * (await settingInt("points_per_dollar")));
+export function pricePoints(pack: { price_points: number }): number {
+  return Math.max(0, Math.round(pack.price_points));
 }
 
 /**
@@ -146,27 +145,29 @@ export async function pricePoints(priceCents: number): Promise<number> {
  */
 export async function buyWithPoints(args: {
   orgId: string; userId: string; packVersionId: string; packId: string;
-  priceCents: number; description: string;
+  pricePoints: number; description: string;
 }): Promise<{ purchaseId: string | null; points: number }> {
-  const points = await pricePoints(args.priceCents);
+  const points = args.pricePoints;
   if (points <= 0) {
     await grant(args.orgId, args.packVersionId);
     return { purchaseId: null, points: 0 };
   }
-  const balance = await balanceCents(args.orgId);
-  if (balance < points) {
-    throw new Error(`${args.description} costs ${points} points; you have ${balance}`);
+  const owed = points * 1000; // points, as thousandths
+  const balance = await balanceMillipoints(args.orgId);
+  if (balance < owed) {
+    throw new Error(
+      `${args.description} costs ${points} points; you have ${(balance / 1000).toFixed(1)}`);
   }
   const s = await sql();
   const purchaseId = id("pur");
-  await debit(args.orgId, points, `bought ${args.description}`);
+  await debit(args.orgId, owed, `bought ${args.description}`);
 
   // The author's share, in points, to whoever owns the pack. A pack the
   // platform curates has no outside author, so nothing is credited.
   const share = await settingInt("author_share_bps");
   const pack = await s.one<{ author_org_id: string | null }>(
     "SELECT author_org_id FROM packs WHERE id = $1", [args.packId]);
-  const authorPoints = Math.round((points * share) / 10_000);
+  const authorPoints = Math.round((owed * share) / 10_000);
   if (pack?.author_org_id && pack.author_org_id !== args.orgId && authorPoints > 0) {
     await credit(pack.author_org_id, "earning", authorPoints, `sold ${args.description}`);
   }
@@ -174,7 +175,7 @@ export async function buyWithPoints(args: {
   await s.query(
     `INSERT INTO purchases (id, org_id, user_id, kind, pack_version_id, amount_cents, provider, status, created_at)
      VALUES ($1,$2,$3,'pack',$4,$5,'points','paid',$6)`,
-    [purchaseId, args.orgId, args.userId, args.packVersionId, points, now()]);
+    [purchaseId, args.orgId, args.userId, args.packVersionId, owed, now()]);
   await grant(args.orgId, args.packVersionId);
   return { purchaseId, points };
 }

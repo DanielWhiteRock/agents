@@ -7,7 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { id, initDb, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
 import { sql } from "./sql.js";
-import { balanceCents, credit, creditAuthor, debit } from "../billing/points.js";
+import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
 import { resumeAfterDecision, runTurn, type TurnResult } from "../runtime/run.js";
 import { decidePreToolUse, needsInterception, parseHooks, sessionStartContext, type Hook } from "../packs/hooks.js";
@@ -30,7 +30,7 @@ import type { MountedFile } from "../runtime/types.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
-  price_cents: number; upgrade_points: number; model: string; effort: string;
+  price_points: number; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string;
   author_payout_email: string | null; extras: string; created_at: string;
 };
@@ -43,6 +43,7 @@ export type PackVersionRow = {
 export type RunRow = {
   id: string; org_id: string; user_id: string; pack_version_id: string; session_id: string;
   model: string; status: string; stop_reason: string | null; budget_cents: number;
+  points_millipoints: number;
   /** Set once the transcript has been deleted; the costs above survive it. */
   transcript_purged_at?: string | null;
   input_tokens: number; output_tokens: number; active_seconds: number;
@@ -108,7 +109,7 @@ export async function ensureDemoOrg(): Promise<{ orgId: string; userId: string }
   await s.query("INSERT INTO users (id, org_id, email, name, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
     [userId, orgId, "dflopi@gmail.com", "Daniel", "owner", now()]);
   // The monthly grant expires; top-ups and earnings do not.
-  await credit(orgId, "grant", await settingInt(`tier.${tier}.points_cents`), `${tier} monthly grant`,
+  await credit(orgId, "grant", await settingInt(`tier.${tier}.points_millipoints`), `${tier} monthly grant`,
     new Date(Date.now() + 30 * 86400_000).toISOString());
   await credit(orgId, "topup", 500, "launch credit so the demo can actually run");
   return { orgId, userId };
@@ -129,13 +130,13 @@ export async function listPacks(query = ""): Promise<PackRow[]> {
   const s = await sql();
   const q = query.trim();
   if (!q) {
-    return s.query<PackRow>("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_cents DESC");
+    return s.query<PackRow>("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_points DESC");
   }
   const like = `%${q.toLowerCase()}%`;
   return s.query<PackRow>(
     `SELECT * FROM packs WHERE status = 'listed'
        AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1)
-     ORDER BY price_cents DESC`, [like]);
+     ORDER BY price_points DESC`, [like]);
 }
 /**
  * What the shelf can honestly say about a pack.
@@ -214,11 +215,11 @@ export async function seedCatalog(): Promise<number> {
   let n = 0;
   for (const p of SEED_PACKS) {
     const rows = await s.query(
-      `INSERT INTO packs (id, slug, name, tagline, author, price_cents, upgrade_points, model, effort,
+      `INSERT INTO packs (id, slug, name, tagline, author, price_points, upgrade_points, model, effort,
          pinned_models, instructions, status, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'listed',$12)
        ON CONFLICT (slug) DO NOTHING RETURNING id`,
-      [id("pk"), p.slug, p.name, p.tagline, p.author, p.priceCents, p.upgradePoints, p.model,
+      [id("pk"), p.slug, p.name, p.tagline, p.author, p.pricePoints, p.upgradePoints, p.model,
         p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now()]);
     n += rows.length;
   }
@@ -253,7 +254,7 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
   const def: PackDefinition = {
     slug: pack.slug, name: pack.name, tagline: pack.tagline, author: pack.author,
     model: pack.model, effort: await effortFor(pack.model, pack.effort),
-    priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
+    pricePoints: pack.price_points, upgradePoints: pack.upgrade_points,
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
     destructivePolicy: await destructivePolicy(),
     attachSkillIds: await ensurePlatformSkills(),
@@ -500,7 +501,7 @@ export async function startRun(args: {
   if (!args.trial) await assertEntitled(args.orgId, args.packVersionId);
   // Points are the fuel. Starting a run with an empty balance would make the
   // subsidy unbounded, so it is refused rather than quietly absorbed.
-  if ((await balanceCents(args.orgId)) <= 0) throw new OutOfPointsError();
+  if ((await balanceMillipoints(args.orgId)) <= 0) throw new OutOfPointsError();
 
   const org = await s.one<{ concurrency_limit: number }>("SELECT * FROM orgs WHERE id = $1", [args.orgId]);
   if ((await activeRunCount(args.orgId)) >= Number(org!.concurrency_limit)) {
@@ -660,8 +661,14 @@ async function meter(runId: string, result: TurnResult): Promise<{ billedCents: 
   const version = (await getVersion(run.pack_version_id))!;
   const { session } = result;
 
+  // Two numbers, deliberately separate. What the run cost *us* is dollars we
+  // owe the provider; what it costs the *buyer* is points off a token
+  // allowance. Keeping both is the only way the subsidy in §8.3 is visible
+  // rather than assumed — and the buyer is charged on tokens, so the model
+  // they pick cannot change what they are billed.
   const costCents = Math.max(Number(cents(session.usage.listCost)), run.list_cost_cents);
-  const delta = Math.max(0, costCents - run.billed_up_to_cents);
+  const pointsSoFar = await pointsForUsage(session.usage.inputTokens, session.usage.outputTokens);
+  const delta = Math.max(0, pointsSoFar - run.points_millipoints);
   const billed = await debit(run.org_id, delta, "agent run", runId);
   // The author is credited on the work done, not on what we managed to collect:
   // if a balance ran dry mid-turn the platform ate the difference, which is the
@@ -677,14 +684,15 @@ async function meter(runId: string, result: TurnResult): Promise<{ billedCents: 
   await s.query(
     `UPDATE runs SET status = $1, stop_reason = $2, input_tokens = $3, output_tokens = $4,
        active_seconds = $5, list_cost_cents = $6, billed_up_to_cents = $7,
-       billed_cents = billed_cents + $8 WHERE id = $9`,
+       points_millipoints = $8, billed_cents = billed_cents + $9 WHERE id = $10`,
     [session.status, stopReason, session.usage.inputTokens, session.usage.outputTokens,
-      session.usage.activeSeconds, costCents, costCents, billed, runId]);
+      session.usage.activeSeconds, costCents, costCents, pointsSoFar, billed, runId]);
 
   for (const a of result.pendingAsks) await recordAsk(runId, a);
   await collectOutputs(runId, run.session_id);
   await recordEvent(runId, "run.metered", {
-    list_cost_cents: costCents, delta_cents: delta, billed_cents: billed,
+    list_cost_cents: costCents, points_millipoints: pointsSoFar,
+    delta_millipoints: delta, billed_millipoints: billed,
     author_millicents: authorMilli, input_tokens: session.usage.inputTokens,
     output_tokens: session.usage.outputTokens, active_seconds: session.usage.activeSeconds,
   });
@@ -783,7 +791,7 @@ export async function sendTurn(runId: string, text: string, onEvent?: (e: Runtim
     // A refund revokes the entitlement; the run must not keep working afterwards.
     await assertEntitled(run.org_id, run.pack_version_id);
   }
-  if ((await balanceCents(run.org_id)) <= 0) throw new OutOfPointsError();
+  if ((await balanceMillipoints(run.org_id)) <= 0) throw new OutOfPointsError();
   const s0 = await sql();
   await s0.query("UPDATE runs SET turn_count = turn_count + 1 WHERE id = $1", [runId]);
   await recordEvent(runId, "user.message", { text });
@@ -935,7 +943,7 @@ export async function exportPack(orgId: string, slug: string): Promise<string> {
   return exportPackMarkdown({
     slug: pack.slug, name: pack.name, tagline: pack.tagline, author: pack.author,
     model: pack.model, effort: await effortFor(pack.model, pack.effort),
-    priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
+    pricePoints: pack.price_points, upgradePoints: pack.upgrade_points,
     // The version's own instructions, not the pack's current ones: a buyer gets
     // what they bought, even after the author ships a newer version.
     instructions: version.instructions,

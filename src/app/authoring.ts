@@ -35,7 +35,7 @@ export class NotTheCuratorError extends DomainError {
 export type PackInput = {
   slug: string; name: string; tagline: string; author: string;
   model: string; effort?: PackDefinition["effort"];
-  priceCents: number; upgradePoints: number;
+  pricePoints: number; upgradePoints: number;
   instructions: string;
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
@@ -57,8 +57,8 @@ function validate(input: PackInput): void {
   if (!input.name.trim()) throw new PackConflictError("a pack needs a name");
   if (!input.instructions.trim()) throw new PackConflictError("a pack needs instructions — that is the product");
   if (!input.model.trim()) throw new PackConflictError("a pack needs a default model");
-  if (!Number.isInteger(input.priceCents) || input.priceCents < 0) {
-    throw new PackConflictError("the price must be a whole number of cents, or zero");
+  if (!Number.isInteger(input.pricePoints) || input.pricePoints < 0) {
+    throw new PackConflictError("the price must be a whole number of points, or zero");
   }
   if (!Number.isInteger(input.upgradePoints) || input.upgradePoints < 0) {
     throw new PackConflictError("update points must be a whole number, or zero");
@@ -71,11 +71,11 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   if (await P.getPack(slug)) throw new PackConflictError(`there is already a pack at /packs/${slug}`);
   const s = await sql();
   await s.query(
-    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_cents, upgrade_points,
+    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
        model, effort, pinned_models, extras, instructions, status, author_payout_email, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'draft',$14,$15)`,
     [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
-      orgId, input.priceCents, input.upgradePoints, input.model.trim(), input.effort ?? "",
+      orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, now()]);
   return (await P.getPack(slug))!;
@@ -89,11 +89,11 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
   validate(input);
   const s = await sql();
   await s.query(
-    `UPDATE packs SET name = $1, tagline = $2, author = $3, price_cents = $4, upgrade_points = $5,
+    `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
        author_payout_email = $11 WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
-      input.priceCents, input.upgradePoints, input.model.trim(), input.effort ?? "",
+      input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id]);
   return (await P.getPack(slug))!;
@@ -200,7 +200,7 @@ export async function importPack(args: {
     author: parsed.author ?? existing?.author ?? args.defaults?.author ?? "unattributed",
     model: parsed.model ?? existing?.model ?? args.defaults?.model ?? "claude-opus-5",
     effort: parsed.effort ?? (existing?.effort as PackInput["effort"]) ?? args.defaults?.effort,
-    priceCents: args.defaults?.priceCents ?? existing?.price_cents ?? 0,
+    pricePoints: args.defaults?.pricePoints ?? existing?.price_points ?? 0,
     upgradePoints: args.defaults?.upgradePoints ?? existing?.upgrade_points ?? 0,
     instructions: parsed.instructions,
     pinnedModels: parsed.pinnedModels.length

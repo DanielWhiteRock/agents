@@ -27,7 +27,7 @@ export type PackDefinition = {
   /** Author's name, shown in the catalog. */
   author: string;
   /** Price in minor units (cents), one-off. */
-  priceCents: number;
+  pricePoints: number;
   /** Points charged to take a newer version. */
   upgradePoints: number;
   tools?: PackTool[];

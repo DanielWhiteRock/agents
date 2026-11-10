@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS packs (
   tagline TEXT NOT NULL,
   author TEXT NOT NULL,
   author_org_id TEXT,
-  price_cents INTEGER NOT NULL,
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  price_points INTEGER NOT NULL DEFAULT 0,
   upgrade_points INTEGER NOT NULL,
   model TEXT NOT NULL,
   effort TEXT NOT NULL DEFAULT '',
@@ -152,7 +153,9 @@ CREATE TABLE IF NOT EXISTS points_ledger (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id),
   bucket TEXT NOT NULL CHECK (bucket IN ('grant','topup','earning')),
-  delta_cents INTEGER NOT NULL,
+  -- Thousandths of a point. A short turn costs about a hundredth of a point,
+  -- so whole points would round every small run to nothing or to one.
+  delta_millipoints INTEGER NOT NULL,
   reason TEXT NOT NULL,
   run_id TEXT,
   expires_at TEXT,
@@ -303,13 +306,13 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   topup_headroom_cents: "50",
   // The author's share of what a run costs, in basis points. 2000 = 20%.
   author_share_bps: "2000",
-  "tier.personal.points_cents": "120",
+  "tier.personal.points_millipoints": "120000",
   "tier.personal.concurrency": "5",
   "tier.personal.seats": "1",
-  "tier.team.points_cents": "360",
+  "tier.team.points_millipoints": "360000",
   "tier.team.concurrency": "15",
   "tier.team.seats": "10",
-  "tier.enterprise.points_cents": "720",
+  "tier.enterprise.points_millipoints": "720000",
   "tier.enterprise.concurrency": "999",
   "tier.enterprise.seats": "500",
   allowed_models: "claude-opus-5,claude-sonnet-5,claude-haiku-4-5",
@@ -327,7 +330,13 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // the rate at which points are sold, not the rate at which they are spent —
   // a point buys a cent of compute, so the gap between 24 and 100 is the
   // subsidy §8.3 says we are choosing to pay. Adjustable like every limit.
-  points_per_dollar: "24",
+  // Solved from the tier table: Personal is 120 points for 5M in and 1M out,
+  // and output lists at five times input, so 5a + 5a = 120 gives 12 and 60.
+  // Team lands on exactly 360 at the same rate. Enterprise computes to 1260
+  // against a table that says 720, so that tier is 1.75x more generous — a
+  // volume discount if intended, and worth checking if not.
+  points_per_mtok_in: "12",
+  points_per_mtok_out: "60",
   // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
@@ -365,6 +374,19 @@ const MIGRATIONS = [
   "ALTER TABLE packs ADD COLUMN extras TEXT NOT NULL DEFAULT '{}'",
   "ALTER TABLE pack_versions ADD COLUMN system_tokens INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE runs ADD COLUMN transcript_purged_at TEXT",
+  // Points stopped being cents of compute and became what the tier table
+  // always said they were: a share of a token allowance. An old row holding
+  // 120 meant 120 points and still does — only the resolution changed, so the
+  // conversion is a multiply. It must happen exactly once, which is what the
+  // ledger below is for.
+  "ALTER TABLE points_ledger RENAME COLUMN delta_cents TO delta_millipoints",
+  "UPDATE points_ledger SET delta_millipoints = delta_millipoints * 1000",
+  "ALTER TABLE runs ADD COLUMN points_millipoints INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE packs ADD COLUMN price_points INTEGER NOT NULL DEFAULT 0",
+  // A pack has to be affordable from the allowance it will be run on: Personal
+  // is 120 points a month, so a premium worker lands near half of one and
+  // leaves something to run it with.
+  "UPDATE packs SET price_points = price_cents / 400 WHERE price_points = 0 AND price_cents > 0",
 ];
 
 /**
@@ -398,8 +420,24 @@ async function bootstrap(): Promise<void> {
     schema = schema.split(token).join(value);
   }
   await s.exec(schema);
-  for (const sqlText of MIGRATIONS) {
-    try { await s.exec(sqlText); } catch { /* already applied */ }
+  // Applied migrations are written down.
+  //
+  // They used to be re-run on every boot and swallow their own errors, which
+  // is fine for `ADD COLUMN` and catastrophic for anything that changes data:
+  // a one-time cleanup here deleted every row of the points ledger, and then
+  // did it again on the next restart. Nothing destructive is safe without a
+  // record of what has already happened.
+  await s.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
+  const done = new Set((await s.query<{ name: string }>("SELECT name FROM schema_migrations"))
+    .map((r) => r.name));
+  for (const [i, sqlText] of MIGRATIONS.entries()) {
+    const name = `${String(i).padStart(3, "0")}:${sqlText.slice(0, 120)}`;
+    if (done.has(name)) continue;
+    // An ADD COLUMN that is already there still throws; that is applied, not
+    // failed, so it is recorded either way.
+    try { await s.exec(sqlText); } catch { /* already present */ }
+    await s.query("INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)", [name, now()]);
   }
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     await s.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", [key, value]);

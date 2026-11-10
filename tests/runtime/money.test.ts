@@ -45,9 +45,12 @@ describe("pts", () => {
     // A tier sells 120 points for $5. Showing "$1.20" would be true of the
     // compute and false of the deal.
     const { pts } = await import("../../src/billing/points.js");
-    expect(pts(120)).toBe("120 points");
-    expect(pts(1)).toBe("1 point");
+    expect(pts(120_000)).toBe("120 points");
+    expect(pts(1000)).toBe("1 point");
     expect(pts(0)).toBe("0 points");
-    expect(pts(12000)).toBe("12,000 points");
+    // A turn costs a fraction of a point, and rounding a real charge to zero
+    // is how a meter stops being believed.
+    expect(pts(13)).toBe("0.013 points");
+    expect(pts(270)).toBe("0.27 points");
   });
 });

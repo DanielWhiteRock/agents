@@ -32,7 +32,7 @@ const stubRuntime = () => ({
 const INPUT = {
   slug: "", name: "Pricing Reviewer", tagline: "Checks a pricing change before you ship it",
   author: "A Real Expert", model: "claude-opus-5", effort: "high",
-  priceCents: 4900, upgradePoints: 10, instructions: "Step 1: find the number that has to move.",
+  pricePoints: 49, upgradePoints: 10, instructions: "Step 1: find the number that has to move.",
 };
 
 before(async () => {
@@ -73,8 +73,8 @@ test("a pack needs a name, instructions, a model and a sane price", async () => 
   await assert.rejects(Auth.createPack(orgId, { ...base, name: " " }), /needs a name/);
   await assert.rejects(Auth.createPack(orgId, { ...base, instructions: " " }), /that is the product/);
   await assert.rejects(Auth.createPack(orgId, { ...base, model: "" }), /needs a default model/);
-  await assert.rejects(Auth.createPack(orgId, { ...base, priceCents: -1 }), /whole number of cents/);
-  await assert.rejects(Auth.createPack(orgId, { ...base, priceCents: 10.5 }), /whole number of cents/);
+  await assert.rejects(Auth.createPack(orgId, { ...base, pricePoints: -1 }), /whole number of points/);
+  await assert.rejects(Auth.createPack(orgId, { ...base, pricePoints: 10.5 }), /whole number of points/);
 });
 
 test("two packs cannot share an address", async () => {
@@ -92,9 +92,9 @@ test("only the authoring organisation can edit", async () => {
   await assert.rejects(
     Auth.updatePack(theirs.orgId, slug, { ...INPUT, slug, name: "Hijacked" }),
     (e) => e.name === "NotTheAuthorError");
-  const edited = await Auth.updatePack(mine.orgId, slug, { ...INPUT, slug, name: "Renamed", priceCents: 9900 });
+  const edited = await Auth.updatePack(mine.orgId, slug, { ...INPUT, slug, name: "Renamed", pricePoints: 99 });
   assert.equal(edited.name, "Renamed");
-  assert.equal(edited.price_cents, 9900);
+  assert.equal(edited.price_points, 99);
 });
 
 test("editing a pack does not change what an existing buyer runs", async () => {
@@ -138,7 +138,7 @@ test("submitting requires a published version, and listing requires the curator"
 test("withdrawing takes a pack off the shelf and leaves its buyers alone", async () => {
   const author = await org("Author Three");
   const slug = `withdraw-${++n}`;
-  await Auth.createPack(author.orgId, { ...INPUT, slug, priceCents: 0 });
+  await Auth.createPack(author.orgId, { ...INPUT, slug, pricePoints: 0 });
   const v = await P.publishPack(slug);
   await Pay.beginPurchase({ orgId: author.orgId, userId: author.userId, packVersionId: v.id,
     amountCents: 0, description: "x", baseUrl: "http://localhost:4317" });
@@ -155,7 +155,7 @@ test("withdrawing takes a pack off the shelf and leaves its buyers alone", async
 test("a pack that has been bought or run is withdrawn, never deleted", async () => {
   const author = await org("Author Four");
   const slug = `keep-${++n}`;
-  await Auth.createPack(author.orgId, { ...INPUT, slug, priceCents: 0 });
+  await Auth.createPack(author.orgId, { ...INPUT, slug, pricePoints: 0 });
   const v = await P.publishPack(slug);
   await Pay.beginPurchase({ orgId: author.orgId, userId: author.userId, packVersionId: v.id,
     amountCents: 0, description: "x", baseUrl: "http://localhost:4317" });
@@ -282,7 +282,7 @@ test("an exported pack can be re-imported unchanged", async () => {
 test("an author can pull their own pack back without buying it", async () => {
   const { orgId } = await org();
   const slug = `mypull-${++n}`;
-  await Auth.createPack(orgId, { ...INPUT, slug, priceCents: 24900 });
+  await Auth.createPack(orgId, { ...INPUT, slug, pricePoints: 249 });
   await P.publishPack(slug);
   assert.equal(await P.entitled(orgId, (await P.latestVersion((await P.getPack(slug)).id)).id), false);
   const md = await P.exportPack(orgId, slug);

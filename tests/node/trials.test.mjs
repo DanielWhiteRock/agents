@@ -99,10 +99,10 @@ test("a trial still costs the trialist's own points, which is what stops it bein
   const points = await import("../../dist/src/billing/points.js");
   const { orgId, userId } = await org();
   const v = await P.latestVersion((await P.getPack("campaign-strategist")).id);
-  const before = await points.balanceCents(orgId);
+  const before = await points.balanceMillipoints(orgId);
   const run = await P.startRun({ orgId, userId, packVersionId: v.id, trial: true });
   await P.sendTurn(run.id, "a brief");
-  assert.equal(before - (await points.balanceCents(orgId)), 1, "the one cent the fake run cost");
+  assert.equal(before - (await points.balanceMillipoints(orgId)), 1, "the one cent the fake run cost");
 });
 
 test("the author is credited for trial runs too", async () => {
