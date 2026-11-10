@@ -341,3 +341,20 @@ test("a buyer's export carries the platform wrapper and the licence notice", asy
   assert.ok(definition.content.includes("alphaCEO agent platform"), "the buyer runs it with our rules on top");
   assert.ok(definition.content.includes("not for redistribution"));
 });
+
+test("a malformed upload is refused rather than crashed on", async () => {
+  // Found by the Senior Engineer pack reviewing this route: `typeof null` is
+  // "object", so reaching for .path on a null entry threw inside the filter
+  // and surfaced as a 500. A bad upload is a 400 about the upload.
+  const { orgId } = await org();
+  await assert.rejects(
+    Auth.importPack({ orgId, files: [{ path: "nope.txt", text: "x" }] }),
+    /no agent.md in that folder|not in a place a pack recognises/,
+    "a file outside the contract is named, not swallowed");
+
+  for (const junk of [null, undefined, 42, "a string", { path: "agent.md" }]) {
+    const survives = typeof junk === "object" && junk !== null
+      && typeof junk.path === "string" && typeof junk.text === "string";
+    assert.equal(survives, false, `${JSON.stringify(junk)} must not reach importPack`);
+  }
+});

@@ -17,6 +17,8 @@ import * as V from "./views.js";
 const PORT = Number(process.env["PORT"] ?? 4317);
 const SECURE_COOKIES = process.env["SECURE_COOKIES"] === "1";
 const COOKIE = "agents_session";
+/** A pack above this is a mistake, and saying so beats truncating it. */
+const MAX_PACK_FILES = 200;
 
 type Ctx = { orgId: string; userId: string; role: A.Role; viewer: V.Viewer };
 
@@ -593,9 +595,26 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const files = Array.isArray(payload?.files) ? payload.files : [];
     const clean = files
       .filter((f): f is { path: string; text: string } =>
-        typeof (f as { path?: unknown }).path === "string" && typeof (f as { text?: unknown }).text === "string")
-      .slice(0, 200);
-    res.writeHead(200, { "content-type": "application/json" });
+        // `typeof null` is "object", so reaching for .path on a null entry
+        // threw inside the filter and became a 500. A malformed upload is a
+        // 400 about the upload, not a crash.
+        typeof f === "object" && f !== null
+        && typeof (f as { path?: unknown }).path === "string"
+        && typeof (f as { text?: unknown }).text === "string");
+    // Truncating at 200 and saying nothing turned a 300-file folder into a
+    // partial pack that published cleanly and was missing half its skills.
+    if (clean.length > MAX_PACK_FILES) {
+      res.writeHead(413, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({
+        error: `${clean.length} files; a pack holds at most ${MAX_PACK_FILES}. `
+          + "Split it, or leave out what the agent does not read.",
+      }));
+    }
+    // The status is written when the outcome is known. Writing 200 up here
+    // meant every later writeHead threw on headers-already-sent, the outer
+    // handler saw headersSent and ended the response, and an import that
+    // failed came back as 200 with an empty body — so the CLI reported
+    // "undefined" and the actual error was never seen by anyone.
     if (clean.length === 0) {
       res.writeHead(400, { "content-type": "application/json" });
       return void res.end(JSON.stringify({ error: "send { files: [{ path, text }] }" }));
@@ -605,6 +624,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         orgId: ctx.orgId, files: clean,
         ...(typeof payload?.slug === "string" ? { slugOverride: payload.slug } : {}),
       });
+      res.writeHead(200, { "content-type": "application/json" });
       return void res.end(JSON.stringify({
         slug: out.pack.slug, created: out.created, status: out.pack.status,
         name: out.pack.name, unknownKeys: out.parsed.unknownKeys,
@@ -848,7 +868,13 @@ async function main(): Promise<void> {
 
   const server = http.createServer((req, res) => {
     void handle(req, res).catch((e) => {
-      if (res.headersSent) return void res.end();
+      if (res.headersSent) {
+        // The response is already committed, so the client gets whatever was
+        // promised — but swallowing the error here is what made a broken
+        // upload look like a silent success for as long as it did.
+        console.error("[error after headers sent]", msg(e));
+        return void res.end();
+      }
       const status = statusOf(e);
       if (status) {
         // An answer, not a crash: no stack trace and no "something broke".
