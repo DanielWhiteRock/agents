@@ -10,7 +10,7 @@
 
 A pack page today is a name, a tagline, a price and a buy button. `src/app/views.ts:604`
 renders the whole thing in sixty lines, and most of what a buyer would want to know is
-either sealed inside the pack (by design) or sitting unused in our own tables.
+either buried in the pack's own instructions or sitting unused in our own tables.
 
 Agensi's equivalent page — their `code-reviewer` listing — carries about thirty fields:
 a long description, use cases, an example session, a file manifest, limitations, an FAQ,
@@ -105,10 +105,12 @@ Things that would make this a failure even if every field shipped:
   (`src/app/authoring.ts`). Listing metadata is a property of the **pack**, not the
   version — a better description is not a new version — with one exception noted under
   **Changelog**.
-- **Instructions never reach a buyer.** The pack page says so in as many words. Every
-  generated field is derived *from* instructions and must not reproduce them. This is the
-  single hardest constraint in this document and the one most likely to be violated by
-  accident.
+- **Instructions are handed to a buyer, deliberately.** *Superseded 2026-11-10.* Over
+  MCP a free pack returns its instructions to any signed-in agent and a paid pack returns
+  them on entitlement — see `2026-11-10-mcp-full-surface-design.md`. Nothing in this
+  document may rely on instructions staying private, and the pack page copy that promises
+  they do has to change with it. A generated listing field should still *describe* rather
+  than paste: a description that is a chunk of the pack body is bad copy, not a leak.
 - **Authors can arrive as a folder.** `importPack` builds a pack from uploaded files and
   `parsePackMarkdown` reads `agent.md` frontmatter. Every new author-supplied field needs
   a frontmatter key, or folder-imported packs will never have it.

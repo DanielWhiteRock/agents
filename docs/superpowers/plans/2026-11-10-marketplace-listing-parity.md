@@ -15,7 +15,7 @@
 - **Schema changes are additive only.** New columns and tables go on the end of the `MIGRATIONS` array in `src/app/db.ts`, or into `SCHEMA` as `CREATE TABLE IF NOT EXISTS`. Never edit or reorder an existing migration entry — they are recorded by index-prefixed name in `schema_migrations` and applied once.
 - **Postgres dialect with `$1` placeholders.** The SQLite driver rewrites positionally. Use `{PK_SERIAL}` / `{REAL}` substitution tokens where a dialect differs.
 - **The catalog stays behind signup.** Do not touch the `PUBLIC` route regex at `src/app/server.ts:59`.
-- **A pack's `instructions` never reach a buyer.** No generated or rendered field may quote or reconstruct them.
+- **A pack's `instructions` may reach a buyer.** *Superseded 2026-11-10* (see `2026-11-10-mcp-full-surface-design.md`): free packs hand them out over MCP, paid packs on entitlement. A generated *listing* field still must not paste them verbatim, for copy quality — not secrecy.
 - **A version is immutable.** Listing metadata attaches to the pack, not the version — except changelog notes, which attach to the version and are written once at publish.
 - **Empty sections do not render.** Every new block is conditional on having content.
 - **Ratings:** eligibility is a completed non-trial run; the average is hidden below **5** ratings.
@@ -450,10 +450,10 @@ test("a draft whose text reproduces the instructions is refused", …)
 - [ ] **Step 2: Run them and watch them fail**
 - [ ] **Step 3: Implement the staleness hook, the verbatim guard in `saveDraft`, the approval screen and route, then the script**
 
-The guard: reject when any 12-word sequence of the draft appears verbatim in `instructions`. Cheap, and it catches the failure mode that matters.
+The guard: reject when any 12-word sequence of the draft appears verbatim in `instructions`. It survives the 2026-11-10 change as a **copy-quality** check — a listing that pastes the pack body is lazy prose, not a breach — so keep it and drop the secrecy language around it.
 
 - [ ] **Step 4: Run them and watch them pass**
-- [ ] **Step 5: Commit** — `feat: seventy listings nobody had to write, and none of them leak the method`
+- [ ] **Step 5: Commit** — `feat: seventy listings nobody had to write`
 
 ---
 
@@ -507,9 +507,9 @@ test("the seed refuses a Postgres target", …)   // Review Focus 5: DATABASE_UR
 
 **Interfaces:**
 - Consumes: Tasks 2, 6, 9.
-- Produces: `search_packs` lines carry runs and rating-where-shown; `pack_details` carries the description, use cases, limitations, requirements, permissions summary, creator handle and rating. Instructions stay sealed.
+- Produces: `search_packs` lines carry runs and rating-where-shown; `pack_details` carries the description, use cases, limitations, requirements, permissions summary, creator handle and rating.
 
-- [ ] **Step 1: Write the failing test** — `pack_details` includes the description and the permissions summary, and contains no 12-word sequence from `instructions`.
+- [ ] **Step 1: Write the failing test** — `pack_details` includes the description and the permissions summary. (The no-12-word-sequence assertion is dropped: instructions are no longer sealed.)
 - [ ] **Step 2: Run it and watch it fail** — `npm run test:integration`
 - [ ] **Step 3: Widen `packLine` and the `pack_details` response**
 - [ ] **Step 4: Run it and watch it pass**
