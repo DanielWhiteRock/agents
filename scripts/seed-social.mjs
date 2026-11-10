@@ -164,11 +164,60 @@ async function ensurePublished(slug) {
   return { pack, version };
 }
 
+// ------------------------------------------- the platform_org_id side effect
+//
+// `auth.signUp` — which every `seedOrg` call goes through, deliberately,
+// because it is the real sign-up path — ends by calling `claimPlatformOrg`:
+// an `INSERT ... ON CONFLICT (key) DO NOTHING` on `settings.platform_org_id`.
+// On a database with no prior sign-ups, that is a one-way claim: the first
+// organisation this script creates becomes the platform's permanent curator,
+// and nothing else ever un-sets it. `wipe()` deleting that org from `orgs`
+// would leave `platform_org_id` pointing at a row that no longer exists —
+// not a crash, since every curator check is an equality against this value,
+// but "nobody is the curator" for the rest of that database's life, which
+// breaks `--wipe`'s own promise to remove what the seed created and nothing
+// else. These two functions make that promise hold: a snapshot taken once,
+// before the first `seedOrg` call, of whatever `platform_org_id` was (or
+// that it was absent), restored verbatim by `wipe()` — and the snapshot
+// itself removed, since it is as much a seed artifact as any row above.
+const PLATFORM_ORG_SNAPSHOT_KEY = "seed_social_platform_org_id_snapshot";
+const ABSENT = "__absent__";
+
+/** Called once, before any org is created. A second seed() run (without a wipe in between) must not overwrite the true original with an in-between state, so this is a no-op once the snapshot already exists. */
+async function snapshotPlatformOrgId() {
+  const s = await sql();
+  const already = await s.one("SELECT 1 AS ok FROM settings WHERE key = $1", [PLATFORM_ORG_SNAPSHOT_KEY]);
+  if (already) return;
+  const current = await s.one("SELECT value FROM settings WHERE key = 'platform_org_id'");
+  await s.query(
+    "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
+    [PLATFORM_ORG_SNAPSHOT_KEY, current ? current.value : ABSENT],
+  );
+}
+
+/** Restores platform_org_id to exactly what snapshotPlatformOrgId recorded — including deleting it if it was absent before — then deletes the snapshot itself. A no-op if seed() never ran (or was already wiped) in this database. */
+async function restorePlatformOrgId() {
+  const s = await sql();
+  const snapshot = await s.one("SELECT value FROM settings WHERE key = $1", [PLATFORM_ORG_SNAPSHOT_KEY]);
+  if (!snapshot) return;
+  if (snapshot.value === ABSENT) {
+    await s.query("DELETE FROM settings WHERE key = 'platform_org_id'");
+  } else {
+    await s.query(
+      "INSERT INTO settings (key, value) VALUES ('platform_org_id', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      [snapshot.value],
+    );
+  }
+  await s.query("DELETE FROM settings WHERE key = $1", [PLATFORM_ORG_SNAPSHOT_KEY]);
+}
+
 // -------------------------------------------------------------- the seed
 
 async function seed() {
   P.setRuntime(stubRuntime());
   await P.seedCatalog(); // idempotent: ON CONFLICT (slug) DO NOTHING
+  // Before the first organisation is created — see the block above.
+  await snapshotPlatformOrgId();
 
   // Pack A: seven ratings, above RATING_THRESHOLD (5) — the average renders.
   const { pack: packA, version: versionA } = await ensurePublished("guardrails");
@@ -254,6 +303,10 @@ async function seed() {
  * Deleted in FK order (children before the parents `orgs`/`runs` they point
  * at), using subqueries scoped to `is_seed` rather than passed parameters —
  * nothing here is untrusted input, so there is nothing to parameterise.
+ *
+ * Also restores `platform_org_id` (see `restorePlatformOrgId` above) — the
+ * one thing seeding changes that is not reachable from `orgs.is_seed`,
+ * because it lives in `settings`, keyed by nothing seed-specific.
  */
 async function wipe() {
   const s = await sql();
@@ -275,6 +328,7 @@ async function wipe() {
   await s.exec(`DELETE FROM user_sessions WHERE user_id IN (SELECT id FROM users WHERE org_id IN ${SEED_ORGS})`);
   await s.exec(`DELETE FROM users WHERE org_id IN ${SEED_ORGS}`);
   await s.exec("DELETE FROM orgs WHERE is_seed = 1");
+  await restorePlatformOrgId();
   return Number(before?.n ?? 0);
 }
 

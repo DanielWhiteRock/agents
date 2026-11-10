@@ -7,6 +7,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 if (!process.env.DATABASE_URL) {
   process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "social-")), "t.db");
@@ -458,4 +460,46 @@ test("--wipe removes every seeded row and nothing else: the catalog packs stay p
   assert.equal(stillThere.status, "listed");
   const version = await P.latestVersion(stillThere.id);
   assert.ok(version, "the published version seeding created (or reused) is left in place");
+});
+
+// `auth.signUp` — which every seeded org goes through — ends by calling
+// `claimPlatformOrg`: a one-way `INSERT ... ON CONFLICT DO NOTHING` on
+// `settings.platform_org_id`. On the database already shared by every other
+// test above, some real `org()` call claimed that long before any seeding
+// test ran, so none of them can exercise "it was absent before seeding" —
+// exactly the gap this test closes, in a genuinely fresh database, in a
+// separate process (so db.ts's own module-level `ready`/`current` singletons
+// — which would otherwise skip re-running the schema against a new file —
+// are never in the way).
+test("a seed followed by --wipe restores platform_org_id to exactly what it was before — including still absent, on a genuinely fresh database", async () => {
+  const scriptPath = fileURLToPath(new URL("../../scripts/seed-social.mjs", import.meta.url));
+  const freshPath = join(mkdtempSync(join(tmpdir(), "seed-fresh-")), "t.db");
+  const env = { ...process.env, DB_PATH: freshPath };
+  delete env.DATABASE_URL;
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const readSetting = (key) => {
+    const conn = new DatabaseSync(freshPath);
+    try {
+      const row = conn.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+      return row ? row.value : undefined;
+    } finally { conn.close(); }
+  };
+  const countOrgs = () => {
+    const conn = new DatabaseSync(freshPath);
+    try { return Number(conn.prepare("SELECT COUNT(*) AS n FROM orgs").get().n); }
+    finally { conn.close(); }
+  };
+
+  execFileSync(process.execPath, [scriptPath], { env, stdio: "pipe" });
+  assert.equal(readSetting("platform_org_id") === undefined, false,
+    "the seed's first signup claims platform_org_id, which had no prior value on this fresh database");
+  assert.ok(countOrgs() > 0, "the seed actually wrote organisations");
+
+  execFileSync(process.execPath, [scriptPath, "--wipe"], { env, stdio: "pipe" });
+  assert.equal(readSetting("platform_org_id"), undefined,
+    "platform_org_id must be exactly what it was before seeding — absent, on a fresh database — not left pointing at a deleted org");
+  assert.equal(countOrgs(), 0, "every seeded org is gone");
+  assert.equal(readSetting("seed_social_platform_org_id_snapshot"), undefined,
+    "the snapshot itself is a seed artifact and must not survive the wipe either");
 });
