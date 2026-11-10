@@ -55,6 +55,41 @@ export const PACK_MOUNT = `${UPLOAD_ROOT}/pack`;
 /** What we ask for, relative, so the rewrite lands on PACK_MOUNT. */
 const requestedMount = (path: string): string => `pack/${path}`;
 
+/**
+ * Delegation and background workflow runs.
+ *
+ * Both are platform features and both default to on — but only when a
+ * multiagent block exists at all, so omitting it silently gave up dynamic
+ * workflows. Every pack gets one now.
+ *
+ * The two settings are deliberately different:
+ *
+ * `subagents` is restricted to the specialists the author declared in agents/,
+ * with inline agents off, because a pack's specialists are part of its design
+ * and letting the model invent others escapes what the buyer bought. A pack
+ * that declares none cannot delegate at all.
+ *
+ * `workflows` allows inline agents, because a dynamic workflow is a program the
+ * model writes and its agents are that program's own business. Restricting a
+ * run to a list the author never wrote would make workflows useless rather than
+ * safe. A run's agents are transient and the server archives them at the end.
+ * `{type: "self"}` is listed so a workflow can fan the pack itself out across
+ * many pieces of work.
+ *
+ * Every agent in a run spends tokens, which is why every session is created
+ * with a hard budget.
+ */
+function multiagentBlock(subagents: PublishedSubagent[]): Record<string, unknown> {
+  const predefined = subagents.map((s) => ({ type: "agent", id: s.agentId, version: Number(s.version) }));
+  return {
+    type: "multiagent_20261001",
+    subagents: subagents.length > 0
+      ? { type: "enabled", inline_agents: { type: "disabled" }, predefined_agents: predefined }
+      : { type: "disabled" },
+    workflows: { type: "enabled", predefined_agents: [...predefined, { type: "self" }] },
+  };
+}
+
 const STATUSES: Record<string, SessionStatus> = {
   running: "running", idle: "idle", requires_action: "requires_action", terminated: "terminated",
 };
@@ -214,23 +249,7 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       ...(published.length
         ? { skills: published.map((s) => ({ type: "custom", skill_id: s.skillId, version: "latest" })) }
         : {}),
-      ...(publishedSubagents.length
-        ? {
-            multiagent: {
-              type: "multiagent_20261001",
-              subagents: {
-                type: "enabled",
-                // The author declared this pack's specialists. Letting the model
-                // invent its own at runtime would escape both the author's
-                // design and what the buyer paid for.
-                inline_agents: { type: "disabled" },
-                predefined_agents: publishedSubagents.map((s) => ({
-                  type: "agent", id: s.agentId, version: Number(s.version),
-                })),
-              },
-            },
-          }
-        : {}),
+      multiagent: multiagentBlock(publishedSubagents),
       metadata: { pack_slug: pack.slug },
     });
     return {
@@ -332,6 +351,41 @@ export class ManagedAgentsRuntime implements AgentRuntime {
             };
             break;
           }
+          case "workflow_run.created":
+            yield {
+              type: "workflow.run", state: "created",
+              runId: String(ev.workflow_run_id ?? ev.id ?? ""),
+              ...(ev.name ? { name: String(ev.name) } : {}),
+              ...(ev.description ? { description: String(ev.description) } : {}),
+              ...(Array.isArray(ev.phases) ? { phases: ev.phases.length } : {}),
+            };
+            break;
+          case "workflow_run.status_running":
+          case "workflow_run.status_ended":
+            yield {
+              type: "workflow.run",
+              state: ev.type === "workflow_run.status_ended" ? "ended" : "running",
+              runId: String(ev.workflow_run_id ?? ""),
+              ...(ev.result?.type ? { result: String(ev.result.type) } : {}),
+            };
+            break;
+          case "workflow_run.phase_started":
+          case "workflow_run.phase_ended":
+            yield {
+              type: "workflow.phase",
+              runId: String(ev.workflow_run_id ?? ""),
+              phaseId: String(ev.workflow_run_phase_id ?? ""),
+              state: ev.type === "workflow_run.phase_ended" ? "ended" : "started",
+            };
+            break;
+          case "session.thread_created":
+            yield {
+              type: "thread.created",
+              threadId: String(ev.session_thread_id ?? ""),
+              agentName: ev.agent_name ?? null,
+              runId: ev.workflow_run_id ?? null,
+            };
+            break;
           case "session.usage":
             yield {
               type: "usage.snapshot",

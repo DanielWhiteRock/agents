@@ -45,13 +45,34 @@ platform wrapper and the licence notice, because that is the file they run.
 | `agents/<name>.md` | created as its own agent and listed in `multiagent.subagents.predefined_agents`, with inline agents disabled |
 | `commands/<name>.md` | uploaded and mounted, and named in the system prompt so the agent runs it when asked for `/name` |
 | `hooks/<name>.md` | **enforced.** A `PreToolUse` hook publishes the pack with `always_ask`, and the server answers every pause from the hooks — denying what they forbid, allowing everything else at once. A `SessionStart` hook is injected as privileged context |
-| `workflows/`, `docs/` | uploaded and mounted at `/mnt/session/uploads/pack/`, and described to the agent |
+| `workflows/<name>.md` | **run.** Every pack is published with `multiagent.workflows` enabled, so the agent starts a real background workflow run — phases, parallel agents, its own threads — using the plan file as the plan |
+| `docs/` | uploaded and mounted at `/mnt/session/uploads/pack/`, and described to the agent |
 | `.claude-plugin/`, README, LICENSE | carried and exported |
 
 The runtime has fields for the first two. The rest it has no fields for, so the
 files are put on the machine and the agent is told where they are and what they
 mean — which is why `/audit` works even though no platform feature implements
 slash commands.
+
+### Workflows
+
+Two different things are called a workflow. `.claude/workflows/*.js` is a Claude
+Code harness feature that executes an author's JavaScript. Managed Agents has
+its own dynamic workflows, where the *model* writes the program and the server
+runs it in the background across phases and threads.
+
+So a `workflows/*.md` file here is the **plan**, not the program. The agent reads
+it and starts a real run against it. Verified: a four-product sweep produced
+`workflow_run.created`, three phase pairs, six threads — four reviewers in
+parallel, a collector, and the pack's own declared subagent stress-testing the
+conclusion — then `workflow_run.status_ended: completed`.
+
+`subagents` is restricted to the specialists the author declared, with inline
+agents off, because a pack's specialists are part of its design. `workflows`
+allows inline agents, because a run's agents are the program's own business and
+restricting them to a list the author never wrote would make runs useless rather
+than safe. Every agent in a run spends tokens, which is why every session is
+created with a hard budget.
 
 ### Hooks
 

@@ -211,13 +211,10 @@ describe("publishing a pack folder", () => {
     // The subagent is created first, because the main agent references it by id.
     expect(fake.beta.agents.create.mock.calls[0]![0].name).toBe("reviewer");
     const main = fake.beta.agents.create.mock.calls[1]![0];
-    expect(main.multiagent).toEqual({
-      type: "multiagent_20261001",
-      subagents: {
-        type: "enabled",
-        inline_agents: { type: "disabled" },
-        predefined_agents: [{ type: "agent", id: "agt_sub", version: 1 }],
-      },
+    expect(main.multiagent.subagents).toEqual({
+      type: "enabled",
+      inline_agents: { type: "disabled" },
+      predefined_agents: [{ type: "agent", id: "agt_sub", version: 1 }],
     });
     expect(out.subagents).toEqual([{ name: "reviewer", agentId: "agt_sub", version: "1" }]);
   });
@@ -238,9 +235,11 @@ describe("publishing a pack folder", () => {
     await expect(runtime.publishPack(PACK_ZERO, [], many)).rejects.toThrow(/at most 20 subagents/);
   });
 
-  it("sends no multiagent block when a pack declares no subagents", async () => {
+  it("still sends a multiagent block when a pack declares no subagents, so workflows stay on", async () => {
     await runtime.publishPack(PACK_ZERO, [SKILL]);
-    expect(fake.beta.agents.create.mock.calls[0]![0].multiagent).toBeUndefined();
+    const block = fake.beta.agents.create.mock.calls[0]![0].multiagent;
+    expect(block.subagents).toEqual({ type: "disabled" });
+    expect(block.workflows.type).toBe("enabled");
   });
 });
 
@@ -327,5 +326,91 @@ describe("sending a turn with privileged context", () => {
     await runtime.sendMessage("s1", "do the thing");
     expect(fake.beta.sessions.events.send.mock.calls[0]![1].events.map((e: { type: string }) => e.type))
       .toEqual(["user.message"]);
+  });
+});
+
+describe("delegation and workflow runs", () => {
+  const blockOf = () => fake.beta.agents.create.mock.calls.at(-1)![0].multiagent;
+
+  it("enables dynamic workflows even for a pack with no declared specialists", async () => {
+    await runtime.publishPack(PACK_ZERO);
+    // Omitting multiagent entirely is what silently gave up workflows.
+    expect(blockOf()).toEqual({
+      type: "multiagent_20261001",
+      subagents: { type: "disabled" },
+      workflows: { type: "enabled", predefined_agents: [{ type: "self" }] },
+    });
+  });
+
+  it("restricts delegation to the specialists the author declared", async () => {
+    fake.beta.agents.create
+      .mockResolvedValueOnce({ id: "agt_sub", version: 1 })
+      .mockResolvedValueOnce({ id: "agt_main", version: 1 });
+    await runtime.publishPack(PACK_ZERO, [], [{ name: "reviewer", system: "You review." }]);
+    expect(blockOf().subagents).toEqual({
+      type: "enabled",
+      inline_agents: { type: "disabled" },
+      predefined_agents: [{ type: "agent", id: "agt_sub", version: 1 }],
+    });
+  });
+
+  it("lets a workflow use the declared agents and copies of the pack itself", async () => {
+    fake.beta.agents.create
+      .mockResolvedValueOnce({ id: "agt_sub", version: 1 })
+      .mockResolvedValueOnce({ id: "agt_main", version: 1 });
+    await runtime.publishPack(PACK_ZERO, [], [{ name: "reviewer", system: "You review." }]);
+    expect(blockOf().workflows).toEqual({
+      type: "enabled",
+      predefined_agents: [{ type: "agent", id: "agt_sub", version: 1 }, { type: "self" }],
+    });
+  });
+
+  it("does not disable inline agents for workflows, which would make a run useless", async () => {
+    await runtime.publishPack(PACK_ZERO);
+    // A workflow writes its own agents; restricting it to a list the author
+    // never wrote stops runs working rather than making them safe.
+    expect(blockOf().workflows.inline_agents).toBeUndefined();
+  });
+});
+
+describe("workflow run events", () => {
+  it("maps a run, its phases and its threads instead of filing them as raw", async () => {
+    // Shapes captured from a live workflow run.
+    fake.beta.sessions.events.stream.mockResolvedValue((async function* () {
+      yield { type: "workflow_run.created", name: "Portfolio price sweep", description: "d",
+        phases: [{ id: "wrph_1" }, { id: "wrph_2" }, { id: "wrph_3" }], workflow_run_id: "wrun_1" };
+      yield { type: "workflow_run.status_running", workflow_run_id: "wrun_1" };
+      yield { type: "workflow_run.phase_started", workflow_run_id: "wrun_1", workflow_run_phase_id: "wrph_1" };
+      yield { type: "session.thread_created", session_thread_id: "sthr_1",
+        agent_name: "devils-advocate", workflow_run_id: "wrun_1" };
+      yield { type: "workflow_run.phase_ended", workflow_run_id: "wrun_1", workflow_run_phase_id: "wrph_1" };
+      yield { type: "workflow_run.status_ended", workflow_run_id: "wrun_1", result: { type: "completed" } };
+      yield { type: "session.status_idle", stop_reason: null };
+    })());
+    const out = [];
+    for await (const e of await runtime.streamEvents("s1")) out.push(e);
+
+    expect(out.map((e) => e.type)).toEqual([
+      "workflow.run", "workflow.run", "workflow.phase", "thread.created",
+      "workflow.phase", "workflow.run", "status",
+    ]);
+    expect(out[0]).toEqual({
+      type: "workflow.run", state: "created", runId: "wrun_1",
+      name: "Portfolio price sweep", description: "d", phases: 3,
+    });
+    expect(out[3]).toEqual({
+      type: "thread.created", threadId: "sthr_1", agentName: "devils-advocate", runId: "wrun_1",
+    });
+    expect(out[5]).toEqual({ type: "workflow.run", state: "ended", runId: "wrun_1", result: "completed" });
+  });
+
+  it("maps a thread created outside a workflow run too", async () => {
+    fake.beta.sessions.events.stream.mockResolvedValue((async function* () {
+      yield { type: "session.thread_created", session_thread_id: "sthr_9", agent_name: null };
+      yield { type: "session.status_idle", stop_reason: null };
+    })());
+    const out = [];
+    for await (const e of await runtime.streamEvents("s1")) out.push(e);
+    expect(out[0]).toEqual({ type: "thread.created", threadId: "sthr_9", agentName: null, runId: null });
   });
 });

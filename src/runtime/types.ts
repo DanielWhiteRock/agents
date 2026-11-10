@@ -69,6 +69,11 @@ export type RuntimeEvent =
   | { type: "thread.status"; status: SessionStatus; agentName: string | null; stopReason: string | null }
   /** The stream echoes back what we sent; useful in the transcript, not new information. */
   | { type: "echo"; of: string; text: string | null }
+  /** A background workflow run the agent started, and its phases. */
+  | { type: "workflow.run"; runId: string; state: "created" | "running" | "ended";
+      name?: string; description?: string; phases?: number; result?: string }
+  | { type: "workflow.phase"; runId: string; phaseId: string; state: "started" | "ended" }
+  | { type: "thread.created"; threadId: string; agentName: string | null; runId: string | null }
   | { type: "tool.use"; eventId: string; name: string; input: unknown; permission: ToolDecision; source: "builtin" | "mcp" | "custom" }
   | { type: "tool.result"; name: string; isError: boolean; preview: string }
   | { type: "model.usage"; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }

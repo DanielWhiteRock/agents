@@ -19,6 +19,9 @@ for (const e of d.prepare("SELECT kind, payload, created_at FROM run_events WHER
     case "usage.snapshot": line = `platform total $${(Number(p.usage.listCost.amount) / 100).toFixed(2)} · in ${p.usage.inputTokens} out ${p.usage.outputTokens} · ${p.usage.activeSeconds.toFixed(1)}s${p.budget ? ` · budget $${(Number(p.budget.amount) / 100).toFixed(2)}` : ""}`; break;
     case "model.request_start": line = "model request started"; break;
     case "thread.status": line = `${p.agentName ?? "thread"}: ${p.status}${p.stopReason ? ` (${p.stopReason})` : ""}`; break;
+    case "workflow.run": line = `${p.state}${p.name ? ` — ${p.name}` : ""}${p.phases ? ` (${p.phases} phases)` : ""}${p.result ? ` — ${p.result}` : ""} ${p.runId}`; break;
+    case "workflow.phase": line = `phase ${p.state} ${p.phaseId}`; break;
+    case "thread.created": line = `thread for ${p.agentName ?? "an agent"}${p.runId ? ` in ${p.runId}` : ""}`; break;
     case "echo": line = `${p.of}${p.text ? ` — “${String(p.text).slice(0, 50)}…”` : ""}`; break;
     case "raw": line = `(${p.payload?.type ?? "unmapped"})`; break;
     default: line = JSON.stringify(p).slice(0, 80);

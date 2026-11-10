@@ -59,7 +59,10 @@ function folderSection(f: FolderBrief): string {
   }
   if (f.workflows.length > 0) {
     lines.push(
-      "Multi-step plans. Read one and carry it out yourself, delegating to your subagents where it says to:",
+      "Plans for work with many pieces. Read one, then start a workflow run to carry it out: a run works",
+      "through phases in the background with many agents at once, so a long job finishes sooner than doing",
+      "each piece in turn. Use a run when the plan is genuinely wide — many documents, many products, many",
+      "sources — and do the work yourself when it is not.",
       ...f.workflows.map((w) => `  ${f.root}/${w}`), "");
   }
   if (f.docs.length > 0) {
