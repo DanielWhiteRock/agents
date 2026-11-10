@@ -1,0 +1,19 @@
+# Local Postgres for development. `docker compose up -d` then:
+#   DATABASE_URL=postgres://agents:agents@localhost:5433/agents npm start
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: agents
+      POSTGRES_PASSWORD: agents
+      POSTGRES_DB: agents
+    # 5433 on the host, to avoid colliding with anything already on 5432.
+    ports: ["5433:5432"]
+    volumes: ["agents-pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agents -d agents"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  agents-pgdata:

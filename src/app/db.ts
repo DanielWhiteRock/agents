@@ -1,14 +1,11 @@
-import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { sql } from "./sql.js";
 
-export const DB_PATH = process.env["DB_PATH"] ?? "data/platform.db";
-
+/**
+ * Schema in one dialect, with the two places the dialects genuinely differ
+ * substituted per driver. Everything else — ON CONFLICT, CHECK, partial
+ * indexes — is written once and works on both.
+ */
 const SCHEMA = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
--- Every limit is a row, not a constant: the subsidy must be dialable without a deploy.
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -41,7 +38,6 @@ CREATE TABLE IF NOT EXISTS packs (
   price_cents INTEGER NOT NULL,
   upgrade_points INTEGER NOT NULL,
   model TEXT NOT NULL,
-  -- empty string means this model takes no effort setting
   effort TEXT NOT NULL DEFAULT '',
   pinned_models TEXT NOT NULL DEFAULT '[]',
   instructions TEXT NOT NULL,
@@ -69,8 +65,9 @@ CREATE TABLE IF NOT EXISTS entitlements (
   UNIQUE (org_id, pack_version_id)
 );
 
--- Points are denominated in MONEY (cents), never tokens, so model choice cannot
--- wreck unit economics. Three buckets with different expiry and cash status.
+-- Points are denominated in MONEY (cents), never tokens, so the model a buyer
+-- picks cannot wreck unit economics. Earned points are cashable, which makes
+-- this an accounting record: every row traces to what earned or spent it.
 CREATE TABLE IF NOT EXISTS points_ledger (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL REFERENCES orgs(id),
@@ -81,6 +78,7 @@ CREATE TABLE IF NOT EXISTS points_ledger (
   expires_at TEXT,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS points_ledger_org ON points_ledger(org_id, created_at);
 
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY,
@@ -94,21 +92,22 @@ CREATE TABLE IF NOT EXISTS runs (
   budget_cents INTEGER NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0,
-  active_seconds REAL NOT NULL DEFAULT 0,
-  -- Latest cumulative cost observed from the platform (live, updated mid-turn).
+  active_seconds {REAL} NOT NULL DEFAULT 0,
+  -- Latest cumulative cost observed from the platform, updated mid-turn.
   list_cost_cents INTEGER NOT NULL DEFAULT 0,
-  -- How much of that cumulative cost has already been charged. Billing works on
-  -- the gap between the two: without this, live snapshots would overwrite the
-  -- figure billing compares against and every delta would come out as zero.
+  -- How much of that has already been charged. Billing works on the gap:
+  -- sharing one column would let a live snapshot overwrite the figure billing
+  -- measures from, making every delta zero and charging nobody for anything.
   billed_up_to_cents INTEGER NOT NULL DEFAULT 0,
   billed_cents INTEGER NOT NULL DEFAULT 0,
   started_at TEXT NOT NULL,
   ended_at TEXT
 );
+CREATE INDEX IF NOT EXISTS runs_org ON runs(org_id, started_at);
 
 -- The transcript. Billing evidence, author feedback and dispute record in one.
 CREATE TABLE IF NOT EXISTS run_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id {PK_SERIAL},
   run_id TEXT NOT NULL REFERENCES runs(id),
   kind TEXT NOT NULL,
   payload TEXT NOT NULL,
@@ -116,8 +115,8 @@ CREATE TABLE IF NOT EXISTS run_events (
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id, id);
 
--- A tool call that paused for a human. The platform default is always_allow, so
--- these only exist because the pack asked for them.
+-- A tool call that paused for a human. The platform default is always_allow,
+-- so these exist only because a pack asked for them.
 CREATE TABLE IF NOT EXISTS pending_asks (
   event_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES runs(id),
@@ -127,7 +126,7 @@ CREATE TABLE IF NOT EXISTS pending_asks (
   decided_at TEXT,
   created_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS pending_asks_run ON pending_asks(run_id, decision);
+CREATE INDEX IF NOT EXISTS pending_asks_run ON pending_asks(run_id);
 
 -- Stored in MILLICENTS. A 20% share of a two-cent turn is 0.4 of a cent; in
 -- whole cents that floors to nothing and the author is paid zero for real work.
@@ -140,77 +139,73 @@ CREATE TABLE IF NOT EXISTS author_earnings (
 );
 `;
 
-export type Db = DatabaseSync;
-
-let db: Db | null = null;
-
-export function getDb(): Db {
-  if (db) return db;
-  mkdirSync(dirname(DB_PATH), { recursive: true });
-  db = new DatabaseSync(DB_PATH);
-  db.exec(SCHEMA);
-  migrate(db);
-  seedSettings(db);
-  return db;
-}
-
-/** Additive column migrations. CREATE TABLE IF NOT EXISTS cannot add a column. */
-const MIGRATIONS = [
-  "ALTER TABLE runs ADD COLUMN billed_up_to_cents INTEGER NOT NULL DEFAULT 0",
-];
-
-function migrate(d: Db): void {
-  for (const sql of MIGRATIONS) {
-    try { d.exec(sql); } catch { /* already applied */ }
-  }
-}
+const SUBSTITUTIONS = {
+  postgres: { "{PK_SERIAL}": "BIGSERIAL PRIMARY KEY", "{REAL}": "DOUBLE PRECISION" },
+  sqlite: { "{PK_SERIAL}": "INTEGER PRIMARY KEY AUTOINCREMENT", "{REAL}": "REAL" },
+} as const;
 
 /** Defaults for every adjustable limit. Change the row, not the code. */
 const DEFAULT_SETTINGS: Record<string, string> = {
-  // What a run is allowed to cost before it pauses, in cents.
   default_run_budget_cents: "50",
-  // Headroom added when a buyer tops up a capped run, in cents.
   topup_headroom_cents: "50",
-  // Author's share of what a run costs, in basis points. 2000 = 20%.
+  // The author's share of what a run costs, in basis points. 2000 = 20%.
   author_share_bps: "2000",
-  // Monthly grant and concurrency per tier, in cents of compute.
   "tier.personal.points_cents": "120",
   "tier.personal.concurrency": "5",
   "tier.team.points_cents": "360",
   "tier.team.concurrency": "15",
   "tier.enterprise.points_cents": "720",
   "tier.enterprise.concurrency": "999",
-  // Models a buyer may pick. A pack may narrow this further via pinned_models.
   allowed_models: "claude-opus-5,claude-sonnet-5,claude-haiku-4-5",
-  // Models that reject the `effort` field outright (400). Effort is omitted for these.
+  // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
 };
 
-function seedSettings(d: Db): void {
-  const ins = d.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)");
-  for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
+let ready: Promise<void> | null = null;
+
+export async function initDb(): Promise<void> {
+  if (!ready) ready = bootstrap();
+  return ready;
 }
 
-export function setting(key: string): string {
-  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value?: string } | undefined;
-  if (row?.value === undefined) throw new Error(`missing setting: ${key}`);
+async function bootstrap(): Promise<void> {
+  const s = await sql();
+  let schema = SCHEMA;
+  for (const [token, value] of Object.entries(SUBSTITUTIONS[s.dialect])) {
+    schema = schema.split(token).join(value);
+  }
+  await s.exec(schema);
+  for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+    await s.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", [key, value]);
+  }
+}
+
+export async function setting(key: string): Promise<string> {
+  const s = await sql();
+  const row = await s.one<{ value: string }>("SELECT value FROM settings WHERE key = $1", [key]);
+  if (!row) throw new Error(`missing setting: ${key}`);
   return row.value;
 }
 
-export function settingInt(key: string): number {
-  const n = Number(setting(key));
+export async function settingInt(key: string): Promise<number> {
+  const n = Number(await setting(key));
   if (!Number.isFinite(n)) throw new Error(`setting ${key} is not a number`);
   return n;
 }
 
-export function putSetting(key: string, value: string): void {
-  getDb().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+export async function putSetting(key: string, value: string): Promise<void> {
+  const s = await sql();
+  await s.query(
+    "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    [key, value]);
 }
 
-export function allSettings(): Array<{ key: string; value: string }> {
-  return getDb().prepare("SELECT key, value FROM settings ORDER BY key").all() as Array<{ key: string; value: string }>;
+export async function allSettings(): Promise<Array<{ key: string; value: string }>> {
+  const s = await sql();
+  return s.query<{ key: string; value: string }>("SELECT key, value FROM settings ORDER BY key");
 }
 
 export const now = (): string => new Date().toISOString();
-export const id = (prefix: string): string => `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+export const id = (prefix: string): string =>
+  `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;

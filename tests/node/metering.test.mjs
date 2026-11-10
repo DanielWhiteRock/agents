@@ -52,31 +52,31 @@ before(async () => {
 
 test("bills each turn's delta once, though live snapshots move the observed cost", async () => {
   P.setRuntime(fakeRuntime([{ finalCost: 9, out: 100 }, { snapshot: 12, finalCost: 14, out: 250 }]));
-  const { orgId, userId } = P.ensureDemoOrg();
-  P.seedCatalog();
+  const { orgId, userId } = await P.ensureDemoOrg();
+  await P.seedCatalog();
   const version = await P.publishPack("guardrails");
-  P.grantEntitlement(orgId, version.id);
-  const opening = points.balanceCents(orgId);
+  await P.grantEntitlement(orgId, version.id);
+  const opening = await points.balanceCents(orgId);
 
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
   assert.equal((await P.sendTurn(run.id, "one")).billedCents, 9);
   // 14 cumulative minus the 9 already charged. Not 14 again, and not 14-12.
   assert.equal((await P.sendTurn(run.id, "two")).billedCents, 5);
 
-  const after = P.getRun(run.id);
+  const after = await P.getRun(run.id);
   assert.equal(after.list_cost_cents, 14);
   assert.equal(after.billed_up_to_cents, 14);
   assert.equal(after.billed_cents, 14);
-  assert.equal(opening - points.balanceCents(orgId), 14);
+  assert.equal(opening - (await points.balanceCents(orgId)), 14);
 });
 
 test("writes the platform's snapshot onto the run, absolute not additive", async () => {
   P.setRuntime(fakeRuntime([{ snapshot: 4, finalCost: 4, out: 1129 }]));
-  const { orgId, userId } = P.ensureDemoOrg();
-  const version = P.latestVersion(P.getPack("guardrails").id);
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
   await P.sendTurn(run.id, "review this");
-  const after = P.getRun(run.id);
+  const after = await P.getRun(run.id);
   assert.equal(after.output_tokens, 1129);
   assert.equal(after.list_cost_cents, 4);
   assert.equal(after.budget_cents, 50);
@@ -84,24 +84,24 @@ test("writes the platform's snapshot onto the run, absolute not additive", async
 
 test("credits the author in millicents so a sub-cent share survives", async () => {
   P.setRuntime(fakeRuntime([{ finalCost: 2, out: 50 }]));
-  const { orgId, userId } = P.ensureDemoOrg();
-  const pack = P.getPack("guardrails");
-  const version = P.latestVersion(pack.id);
-  const before = points.authorEarningsTotal(pack.id);
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const pack = await P.getPack("guardrails");
+  const version = await P.latestVersion(pack.id);
+  const before = await points.authorEarningsTotal(pack.id);
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
   // 20% of 2c is 0.4c = 400 millicents, which whole cents would floor away.
   assert.equal((await P.sendTurn(run.id, "x")).authorCents, 400);
-  assert.equal(points.authorEarningsTotal(pack.id) - before, 400);
+  assert.equal((await points.authorEarningsTotal(pack.id)) - before, 400);
 });
 
 test("refuses a run beyond the tier's concurrency limit", async () => {
   P.setRuntime(fakeRuntime([{ finalCost: 1, out: 1 }]));
-  const { orgId, userId } = P.ensureDemoOrg();
-  const version = P.latestVersion(P.getPack("guardrails").id);
-  const before = P.activeRunCount(orgId);
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  const before = await P.activeRunCount(orgId);
   await assert.rejects(
     (async () => { for (let i = 0; i <= 20; i += 1) await P.startRun({ orgId, userId, packVersionId: version.id }); })(),
     /concurrency limit reached/,
   );
-  assert.ok(P.activeRunCount(orgId) > before);
+  assert.ok((await P.activeRunCount(orgId)) > before);
 });

@@ -1,0 +1,113 @@
+/**
+ * One async query interface, two drivers.
+ *
+ * Postgres is the real target — the deployment needs it and SQLite cannot live
+ * on a serverless host. SQLite stays as a zero-setup local driver so the app
+ * runs with nothing installed, which is how every bug last night got found.
+ *
+ * SQL is written in Postgres dialect with `$1` placeholders; the SQLite driver
+ * rewrites them positionally. Keeping one dialect in the source is the whole
+ * point — two would rot.
+ */
+export type Row = Record<string, unknown>;
+
+export interface Sql {
+  readonly dialect: "postgres" | "sqlite";
+  query<T = Row>(text: string, params?: unknown[]): Promise<T[]>;
+  one<T = Row>(text: string, params?: unknown[]): Promise<T | undefined>;
+  exec(text: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+// ----------------------------------------------------------------- postgres
+
+class PostgresSql implements Sql {
+  readonly dialect = "postgres" as const;
+  // Typed loosely: pg's own types are imported lazily so SQLite-only runs do
+  // not need the dependency resolved at startup.
+  private constructor(private readonly pool: { query: (t: string, p?: unknown[]) => Promise<{ rows: Row[] }>; end: () => Promise<void> }) {}
+
+  static async connect(url: string): Promise<PostgresSql> {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: url, max: 8 });
+    await pool.query("SELECT 1");
+    return new PostgresSql(pool as never);
+  }
+
+  async query<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
+    const r = await this.pool.query(text, params);
+    return r.rows as T[];
+  }
+  async one<T = Row>(text: string, params: unknown[] = []): Promise<T | undefined> {
+    return (await this.query<T>(text, params))[0];
+  }
+  async exec(text: string): Promise<void> { await this.pool.query(text); }
+  async close(): Promise<void> { await this.pool.end(); }
+}
+
+// ------------------------------------------------------------------- sqlite
+
+/** `$1, $2` → `?, ?` in first-appearance order, so one SQL string serves both. */
+export function toSqlitePlaceholders(text: string, params: unknown[]): { text: string; params: unknown[] } {
+  const order: number[] = [];
+  const rewritten = text.replace(/\$(\d+)/g, (_m, n: string) => {
+    order.push(Number(n) - 1);
+    return "?";
+  });
+  return { text: rewritten, params: order.map((i) => params[i]) };
+}
+
+class SqliteSql implements Sql {
+  readonly dialect = "sqlite" as const;
+  private constructor(private readonly db: { prepare: (s: string) => { all: (...a: unknown[]) => unknown[]; run: (...a: unknown[]) => unknown }; exec: (s: string) => void; close: () => void }) {}
+
+  static async open(path: string): Promise<SqliteSql> {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { mkdirSync } = await import("node:fs");
+    const { dirname } = await import("node:path");
+    mkdirSync(dirname(path), { recursive: true });
+    const db = new DatabaseSync(path);
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    return new SqliteSql(db as never);
+  }
+
+  async query<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
+    const q = toSqlitePlaceholders(text, params);
+    const stmt = this.db.prepare(q.text);
+    const args = q.params.map(normaliseForSqlite);
+    // node:sqlite has no RETURNING-aware run(); every statement goes through all().
+    return stmt.all(...args) as T[];
+  }
+  async one<T = Row>(text: string, params: unknown[] = []): Promise<T | undefined> {
+    return (await this.query<T>(text, params))[0];
+  }
+  async exec(text: string): Promise<void> { this.db.exec(text); }
+  async close(): Promise<void> { this.db.close(); }
+}
+
+/** SQLite takes no booleans, no undefined, and no non-integer bigints. */
+function normaliseForSqlite(v: unknown): unknown {
+  if (v === undefined) return null;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (typeof v === "bigint") return Number(v);
+  return v;
+}
+
+// ------------------------------------------------------------------ factory
+
+let current: Sql | null = null;
+
+/**
+ * Postgres when DATABASE_URL is set, SQLite otherwise. Nothing above this
+ * module knows or cares which.
+ */
+export async function sql(): Promise<Sql> {
+  if (current) return current;
+  const url = process.env["DATABASE_URL"];
+  current = url
+    ? await PostgresSql.connect(url)
+    : await SqliteSql.open(process.env["DB_PATH"] ?? "data/platform.db");
+  return current;
+}
+
+export function setSql(s: Sql | null): void { current = s; }

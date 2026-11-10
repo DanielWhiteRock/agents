@@ -16,21 +16,44 @@ ANTHROPIC_API_KEY=sk-ant-... npm start
 # http://localhost:4317
 ```
 
-Storage is `node:sqlite` at `data/platform.db` — nothing to install, no server to
-provision. A demo organisation, a points grant and four packs are seeded on first
-boot.
+### Storage: Postgres, or SQLite with nothing installed
+
+One async interface, two drivers — `src/app/sql.ts`. SQL is written once in
+Postgres dialect with `$1` placeholders; the SQLite driver rewrites them
+positionally, and the schema substitutes the two types that genuinely differ.
+
+```bash
+docker compose up -d                                             # Postgres 17 on :5433
+DATABASE_URL=postgres://agents:agents@localhost:5433/agents npm start
+```
+
+With `DATABASE_URL` set it uses Postgres — which is what a deployment needs,
+since SQLite cannot live on a serverless host. Without it, `node:sqlite` at
+`data/platform.db`, so the app runs with no database to provision at all.
+`/healthz` reports which one is live.
+
+A demo organisation, a points grant and four packs are seeded on first boot.
 
 First time through: open a pack, press **Publish to the runtime** (this creates
 the agent on Managed Agents), then **Acquire** and send it a brief.
 
 ```bash
-npm test          # 59 tests
+npm test          # 66 unit (vitest) + 4 integration (node --test, real schema)
 npm run typecheck
 node scripts/probe.mjs            # what the latest run did and cost
 node scripts/probe.mjs --answer   # what the agent actually said
 node scripts/costs.mjs            # every run, with cost
 node scripts/verify-managed-agents.mjs   # live platform capability check
+
+# against Postgres
+export DATABASE_URL=postgres://agents:agents@localhost:5433/agents
+node scripts/reset-db.mjs && node --test tests/node/*.test.mjs
+node scripts/pg-probe.mjs <run-id> --answer
 ```
+
+Integration tests run on Node's own test runner against the build, because
+Vite's builtin list does not yet include `node:sqlite`. They pass on both
+drivers — run them with `DATABASE_URL` set to exercise Postgres.
 
 ## How it fits together
 
@@ -42,6 +65,7 @@ node scripts/verify-managed-agents.mjs   # live platform capability check
 | Money | `src/runtime/money.ts` | Exact minor units, `bigint` only. Never a float cent. |
 | Packs | `src/packs/` | Pack shape, the platform wrapper prompt, the seed catalog. |
 | Redaction | `src/transcripts/redact.ts` | Strips pack instructions from anything a buyer sees. |
+| Storage | `src/app/sql.ts` | One async interface; Postgres and SQLite drivers. |
 | Ledger | `src/billing/points.ts` | Points as cents of compute; author earnings in millicents. |
 | Service | `src/app/platform.ts` | Packs, runs, the transcript, metering. |
 | Web | `src/app/server.ts`, `views.ts` | Catalog, runs, live traces, points, limits. |
@@ -58,6 +82,11 @@ node scripts/verify-managed-agents.mjs   # live platform capability check
   the delta since the last reading is charged.
 - **Every limit is a settings row**, never a constant. See `/settings`.
 - **Buyers never see a raw transcript.**
+- **Transcript writes are serialised per run.** Asynchronous writes from a live
+  stream would otherwise land out of order, and an out-of-order transcript is
+  useless as billing or dispute evidence.
+- **Postgres returns `SUM` as a string.** Every aggregate is coerced, never
+  trusted to arrive as a number.
 
 Design: `docs/superpowers/specs/2026-11-09-agent-marketplace-design.md`
 Plan: `docs/superpowers/plans/2026-11-09-runtime-spine.md`
