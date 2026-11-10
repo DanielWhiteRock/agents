@@ -281,7 +281,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     return html(res, V.runPage(run, await packNameOf(run.pack_version_id), await bal(),
       run.stop_reason === "budget_reached", asks, viewer, trial,
       (await P.runOutputs(run.id)).map((o) => ({ file_id: o.file_id, filename: o.filename, size_bytes: Number(o.size_bytes) })),
-      await P.runUsage(run.id)));
+      await P.runUsage(run.id), await settingInt("transcript_retention_days")));
   }
 
   // Deliverables the agent wrote
@@ -314,6 +314,16 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const f = await body(req);
     const runId = msgMatch[1]!;
     void P.sendTurn(runId, f["text"] ?? "").catch((e) => P.recordEvent(runId, "run.error", { message: msg(e) }));
+    return redirect(res, `/runs/${runId}`);
+  }
+
+  // Delete this transcript now, rather than waiting for the retention window.
+  const forgetMatch = /^\/runs\/([a-z0-9_]+)\/forget$/.exec(path);
+  if (method === "POST" && forgetMatch) {
+    const runId = forgetMatch[1]!;
+    const owned = await P.getRun(runId);
+    if (!owned || owned.org_id !== ctx.orgId) return html(res, V.layout("Not found", "<h1>No such run</h1>", { viewer }), 404);
+    await P.forgetTranscript(runId);
     return redirect(res, `/runs/${runId}`);
   }
 

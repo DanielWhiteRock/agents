@@ -154,6 +154,25 @@ Integration tests run on Node's own test runner against the build, because
 Vite's builtin list does not yet include `node:sqlite`. They pass on both
 drivers — run them with `DATABASE_URL` set to exercise Postgres.
 
+## Judging the interface
+
+Every screen is scored against Apple's interface rules, in a real browser,
+because the things worth checking — contrast of rendered text, tap target
+size, overflow at phone width, whether reduced motion actually collapses an
+animation — only exist once something is laid out.
+
+```bash
+npm start &                 # it drives the running app
+npm run judge               # the table, with failures
+npm run judge -- --verbose  # every check, passing or not
+npm run judge:strict        # exits non-zero below 99
+```
+
+Each check names the rule it serves and either passes or does not. Taste
+decides which checks belong there; the checks themselves are mechanical, so
+the review can run in CI and can tell you whether today is worse than
+yesterday. 16 screens, all at 100.
+
 ## Deploying it
 
 Render, as a container with a managed Postgres: `render.yaml` is a working

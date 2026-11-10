@@ -126,13 +126,34 @@ textarea{width:100%;background:var(--panel);color:var(--ink);border:1px solid va
 border-radius:.625rem;padding:.6875rem;font:inherit;min-height:5.25rem;resize:vertical;
 transition:border-color var(--dur-snappy) var(--spring)}
 textarea:focus{border-color:var(--accent)}
-select,input[type=text]{background:var(--panel);color:var(--ink);border:1px solid var(--line);
-border-radius:.5rem;padding:.5rem;font:inherit;
+select,input[type=text],input[type=email],input[type=password],input[type=search],
+input[type=number],input[type=url],input[type=tel]{
+background:var(--panel);color:var(--ink);border:1px solid var(--line);
+border-radius:.5rem;padding:.5rem .625rem;font:inherit;min-height:2.25rem;
 transition:border-color var(--dur-snappy) var(--spring)}
-select:focus,input[type=text]:focus{border-color:var(--accent)}
+select:focus,input:focus{border-color:var(--accent)}
+/* A checkbox is hit by its label, so the label is the target that has to be
+   big enough — the box itself only has to be visible. */
+label:has(input[type=checkbox]),label:has(input[type=radio]){
+min-height:2rem;display:inline-flex;align-items:center;gap:.4375rem}
+input[type=checkbox],input[type=radio]{width:1.0625rem;height:1.0625rem;accent-color:var(--accent)}
 form.inline{display:inline}
 
+/* A link inside prose or a table row is still something a thumb has to find.
+   Padding gives it the target; the matching negative margin means nothing
+   moves. */
+td a,p a,.lede a,.fine a,li a{display:inline-block;padding:.4375rem .375rem;
+margin:-.4375rem -.375rem;border-radius:.375rem}
+td a:hover,p a:hover,.lede a:hover,li a:hover{background:color-mix(in oklab,var(--accent) 10%,transparent);
+text-decoration:none}
+td a:active,p a:active,.lede a:active,li a:active{transform:scale(.97);transition:transform var(--press) ease-out}
+
 /* ----------------------------------------------------------------- data */
+/* The table scrolls, not the page. A page that slides sideways under a thumb
+   feels broken in a way a scrollable table does not. */
+.scroller{overflow-x:auto;overscroll-behavior-x:contain;margin:0 0 .5rem;
+-webkit-overflow-scrolling:touch}
+.scroller table{min-width:30rem}
 table{width:100%;border-collapse:collapse;font-size:.875rem}
 th,td{text-align:left;padding:.5rem .625rem;border-bottom:1px solid var(--line)}
 /* Small text takes positive tracking; this is the one place it opens up. */
@@ -235,6 +256,16 @@ header.top{background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:
 .tag,.btn.ghost{border-width:2px}}
 `;
 
+/**
+ * Put every table in a box that can scroll on its own.
+ *
+ * Done here rather than at seventeen call sites, so a table written tomorrow
+ * is covered without anybody remembering to wrap it. The page is the thing
+ * that must not slide sideways under a thumb; a table that does is fine.
+ */
+const scrollable = (html: string): string =>
+  html.replace(/<table>/g, '<div class="scroller"><table>').replace(/<\/table>/g, "</table></div>");
+
 export type Viewer = { name: string; email: string; role: string; orgName: string } | null;
 
 export function layout(
@@ -259,12 +290,17 @@ export function layout(
 <script>
 // Where am I — marked here rather than threaded through every page's call,
 // and it degrades to the plain nav if this never runs.
-(function(){var p=location.pathname;var best=null;
+(function(){var p=location.pathname;
+// A pack page is part of the catalog and a run page part of Runs: the section
+// a screen belongs to is not always the prefix of its URL.
+var SECTION={'/packs':'/','/runs':'/runs','/invite':'/'};
+for(var k in SECTION){if(p.indexOf(k+'/')===0){p=SECTION[k];break;}}
+var best=null;
 for(var a of document.querySelectorAll('nav a')){var h=a.getAttribute('href');
 if(h===p||(h!=='/'&&p.indexOf(h)===0)){if(!best||h.length>best.getAttribute('href').length)best=a;}}
 if(best)best.setAttribute('aria-current','page');})();
 </script>
-<div class="wrap">${body}
+<div class="wrap">${scrollable(body)}
 <footer>Packs run on Anthropic Managed Agents. Spend is the platform's own <code>list_cost</code>, priced at public list rates. Seed pack instructions are placeholders, not an expert's work.</footer>
 </div></body></html>`;
 }
@@ -429,6 +465,7 @@ export function runPage(
   trial: { turns: number; slug: string; priceCents: number } | null = null,
   outputs: Array<{ file_id: string; filename: string; size_bytes: number }> = [],
   usage: RunUsageView | null = null,
+  retentionDays = 0,
 ): string {
   return layout(`Run · ${packName}`, `
 <h1>${esc(packName)}</h1>
@@ -475,6 +512,19 @@ ${outputs.map((o) => `<tr><td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file
 <td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file_id)}" download>download</a></td></tr>`).join("")}
 </table>` : ""}
 ${usage ? `<h2>Where the context and the money went</h2>${usagePanel(usage)}` : ""}
+${run.transcript_purged_at
+  ? `<div class="note"><strong>This transcript has been deleted.</strong>
+     Removed here and at the provider on ${esc(run.transcript_purged_at.slice(0, 10))}.
+     What it cost is kept — that is a billing record — but what was said is gone.</div>`
+  : `<h2>Keeping this transcript</h2>
+     <p class="lede" style="font-size:.875rem">Transcripts are deleted
+     ${retentionDays > 0 ? `${retentionDays} days after a run finishes` : "only when you ask"},
+     here and at the provider, which keeps its own copy until something tells it not to.
+     You can delete this one now; the cost record survives either way.</p>
+     <form method="post" action="/runs/${esc(run.id)}/forget"
+           onsubmit="return confirm('Delete this transcript here and at the provider? This cannot be undone.')">
+       <button class="btn ghost" type="submit">Delete this transcript</button>
+     </form>`}
 <h2>Trace</h2>
 <div class="tracebar">
   <label><input type="checkbox" id="onlytalk"> Just the conversation</label>

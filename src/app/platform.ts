@@ -43,6 +43,8 @@ export type PackVersionRow = {
 export type RunRow = {
   id: string; org_id: string; user_id: string; pack_version_id: string; session_id: string;
   model: string; status: string; stop_reason: string | null; budget_cents: number;
+  /** Set once the transcript has been deleted; the costs above survive it. */
+  transcript_purged_at?: string | null;
   input_tokens: number; output_tokens: number; active_seconds: number;
   list_cost_cents: number; billed_up_to_cents: number; billed_cents: number;
   is_trial: number; turn_count: number;
@@ -1027,6 +1029,54 @@ export async function reconcileOpenRuns(): Promise<number> {
     }).catch(() => {});
     await endRun(r.id).catch(() => {});
   }
+  return rows.length;
+}
+
+/**
+ * Delete a run's transcript, here and at the provider, keeping the receipt.
+ *
+ * The split is the whole policy: what it cost is a billing record and has to
+ * survive, what was said is the buyer's content and should not outlive its
+ * purpose. So the run row stays — tokens, cost, who ran it, when — and the
+ * events go, along with the session at the provider, which keeps its own copy
+ * until something tells it not to.
+ *
+ * It is written down on the run itself rather than silently leaving a gap,
+ * because a trace that is empty and a trace that was deleted are different
+ * facts and a buyer asking "where did my transcript go" deserves the second.
+ */
+export async function forgetTranscript(runId: string): Promise<void> {
+  const s = await sql();
+  const run = await getRun(runId);
+  if (!run || run.transcript_purged_at) return;
+  // The provider holds the only other copy; a failure there must not leave us
+  // believing we deleted something we did not.
+  await runtime().deleteSession(run.session_id).catch(() => {});
+  await s.query("DELETE FROM run_events WHERE run_id = $1", [runId]);
+  const at = now();
+  await s.query(
+    "UPDATE runs SET transcript_purged_at = $1, ended_at = COALESCE(ended_at, $1) WHERE id = $2",
+    [at, runId]);
+  await recordEvent(runId, "transcript.purged", { at });
+}
+
+/**
+ * Every transcript past its retention window, deleted.
+ *
+ * Only finished runs: deleting out from under a live one would make the trace
+ * blank while the agent was still working. A retention of 0 means keep
+ * forever, which is a choice somebody can make rather than the default that
+ * happens when nobody implements this.
+ */
+export async function purgeExpiredTranscripts(at = new Date()): Promise<number> {
+  const days = Number(await setting("transcript_retention_days"));
+  if (!Number.isFinite(days) || days <= 0) return 0;
+  const cutoff = new Date(at.getTime() - days * 86_400_000).toISOString();
+  const s = await sql();
+  const rows = await s.query<{ id: string }>(
+    `SELECT id FROM runs
+      WHERE ended_at IS NOT NULL AND ended_at < $1 AND transcript_purged_at IS NULL`, [cutoff]);
+  for (const r of rows) await forgetTranscript(r.id).catch(() => {});
   return rows.length;
 }
 

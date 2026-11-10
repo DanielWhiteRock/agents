@@ -277,3 +277,61 @@ test("a run that has sent nothing reports an empty breakdown rather than guessin
   assert.equal(u.used, 0);
   assert.equal(u.tools.length, 0);
 });
+
+test("deleting a transcript removes what was said and keeps what it cost", async () => {
+  // The spec calls a retention and deletion policy release-one work, because
+  // the provider keeps session transcripts until something explicitly deletes
+  // them — so no policy is a policy of forever, which nobody chose.
+  P.setRuntime(fakeRuntime([{ finalCost: 5, out: 11 }]));
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  await P.reconcileOpenRuns();
+
+  P.setRuntime(fakeRuntime([{ finalCost: 5, out: 11 }]));
+  const run = await P.startRun({ orgId, userId, packVersionId: version.id });
+  await P.recordEvent(run.id, "user.message", { text: "something private" });
+  assert.ok((await P.runEvents(run.id)).length > 0);
+
+  await P.forgetTranscript(run.id);
+
+  const events = await P.runEvents(run.id);
+  assert.ok(!events.some((e) => JSON.stringify(e).includes("something private")),
+    "what was said is gone");
+  assert.ok(events.some((e) => e.kind === "transcript.purged"),
+    "and the deletion is recorded, because an empty trace and a deleted one are different facts");
+
+  const after = await P.getRun(run.id);
+  assert.ok(after.transcript_purged_at, "the run says when");
+  assert.equal(after.budget_cents, run.budget_cents, "the billing record survives");
+});
+
+test("retention deletes finished transcripts past the window and leaves live ones", async () => {
+  const { putSetting } = await import("../../dist/src/app/db.js");
+  const sql = (await import("../../dist/src/app/sql.js")).sql;
+  P.setRuntime(fakeRuntime([{ finalCost: 1, out: 1 }]));
+  const { orgId, userId } = await P.ensureDemoOrg();
+  const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
+  await P.reconcileOpenRuns();
+
+  P.setRuntime(fakeRuntime([{ finalCost: 1, out: 1 }, { finalCost: 1, out: 1 }]));
+  const old = await P.startRun({ orgId, userId, packVersionId: version.id });
+  const live = await P.startRun({ orgId, userId, packVersionId: version.id });
+  const s = await sql();
+  // Finished, and finished long enough ago to be past any sane window.
+  await s.query("UPDATE runs SET ended_at = $1 WHERE id = $2",
+    ["2020-01-01T00:00:00.000Z", old.id]);
+
+  await putSetting("transcript_retention_days", "30");
+  const purged = await P.purgeExpiredTranscripts();
+  assert.ok(purged >= 1);
+  assert.ok((await P.getRun(old.id)).transcript_purged_at, "the old one is gone");
+  assert.equal((await P.getRun(live.id)).transcript_purged_at ?? null, null,
+    "a run still going is never deleted out from under itself");
+
+  // 0 is "keep forever" — a choice, not the absence of one.
+  await putSetting("transcript_retention_days", "0");
+  assert.equal(await P.purgeExpiredTranscripts(), 0);
+  await putSetting("transcript_retention_days", "90");
+});

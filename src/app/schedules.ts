@@ -144,11 +144,20 @@ let ticker: NodeJS.Timeout | null = null;
 
 export function startScheduler(): void {
   if (ticker) return;
+  // Retention is checked on the same ticker but not at the same rate: a
+  // deletion policy measured in days does not need looking at every minute.
+  let lastPurge = 0;
   const tick = async (): Promise<void> => {
     try {
       const out = await runDueSchedules();
       if (out.fired || out.failed) console.log(`[schedules] fired ${out.fired}, failed ${out.failed}`);
     } catch (e) { console.error("[schedules]", (e as Error)?.message ?? e); }
+    try {
+      if (Date.now() - lastPurge < 3_600_000) return;
+      lastPurge = Date.now();
+      const purged = await P.purgeExpiredTranscripts();
+      if (purged) console.log(`[retention] deleted ${purged} transcript(s) past the window`);
+    } catch (e) { console.error("[retention]", (e as Error)?.message ?? e); }
   };
   ticker = setInterval(() => void tick(), 60_000);
   ticker.unref?.();

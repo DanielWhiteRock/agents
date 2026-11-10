@@ -317,6 +317,12 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // Adjustable, because this moves and a wrong constant here would quietly
   // mislead rather than fail.
   model_context_windows: "claude-opus-5=200000,claude-sonnet-5=200000,claude-haiku-4-5=200000",
+  // How long a finished run's transcript is kept before it is deleted, here and
+  // at the provider. Managed Agents keeps session transcripts until something
+  // explicitly deletes them, so "we never got round to it" is a retention
+  // policy of forever — which is not one anybody chose. 0 keeps them forever,
+  // deliberately rather than by default.
+  transcript_retention_days: "90",
   // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
@@ -353,6 +359,7 @@ const MIGRATIONS = [
   "ALTER TABLE runs ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE packs ADD COLUMN extras TEXT NOT NULL DEFAULT '{}'",
   "ALTER TABLE pack_versions ADD COLUMN system_tokens INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE runs ADD COLUMN transcript_purged_at TEXT",
 ];
 
 /**
