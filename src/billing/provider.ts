@@ -71,10 +71,16 @@ export class StubProvider implements PaymentProvider {
 /**
  * PayPal Orders v2 for charges, Payouts v1 for author commissions.
  *
- * UNVERIFIED: written from the documented API shapes and never exercised
- * against a live account, because no credentials exist yet. Treat the first
- * real sandbox run as the test, and keep the stub as the default until it
- * passes.
+ * Verified against PayPal's sandbox on 2026-11-10, which is what the note here
+ * used to ask for: auth by client_credentials, an order created and returning
+ * a real approval link, a payout batch accepted. Both failure paths were
+ * exercised too, because those are the ones a customer meets — capturing
+ * before the buyer approves comes back 422 ORDER_NOT_APPROVED rather than
+ * hanging, and refunding an order with nothing captured names the problem.
+ *
+ * Sandbox is still the default: `base` falls back to api-m.sandbox.paypal.com,
+ * so going live is an explicit PAYPAL_BASE, never something that happens
+ * because the right keys were in the environment.
  */
 export class PayPalProvider implements PaymentProvider {
   readonly name = "paypal";
