@@ -5,59 +5,182 @@ export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 
 const CSS = `
-:root{--bg:#fbfaf8;--panel:#fff;--ink:#17161a;--muted:#6b6975;--line:#e6e3dd;--accent:#2f5d50;--accent-ink:#fff;--warn:#8a5a1a;--bad:#8c2f2f;--good:#2f6b4f;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#121214;--panel:#1a1a1e;--ink:#edecea;--muted:#9a98a2;--line:#2b2b32;--accent:#7fb8a4;--accent-ink:#10231d;--warn:#d9a95c;--bad:#e0847c;--good:#86c9a4}}
-:root[data-theme=dark]{--bg:#121214;--panel:#1a1a1e;--ink:#edecea;--muted:#9a98a2;--line:#2b2b32;--accent:#7fb8a4;--accent-ink:#10231d;--warn:#d9a95c;--bad:#e0847c;--good:#86c9a4}
+/* ---------------------------------------------------------------- tokens
+   Springs, not durations. Both critically-damped curves are the same shape
+   sampled over different settle times, which is what a spring actually is:
+   damping decides the shape, response decides how long it takes to get there.
+   Generated from Apple's two parameters — damping ratio and response — not
+   hand-tuned, so every number here is one we can defend.                   */
+:root{
+--bg:#fbfaf8;--panel:#fff;--ink:#17161a;--muted:#6b6975;--line:#e6e3dd;
+--accent:#2f5d50;--accent-ink:#fff;--warn:#8a5a1a;--bad:#8c2f2f;--good:#2f6b4f;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+--chrome:rgba(255,255,255,.72);--chrome-edge:rgba(255,255,255,.5);
+--lift:0 1px 2px rgba(20,18,24,.05),0 8px 24px -12px rgba(20,18,24,.18);
+--lift-hi:0 2px 4px rgba(20,18,24,.06),0 18px 40px -16px rgba(20,18,24,.28);
+--spring:linear(0,.0438,.1419,.2604,.3801,.4909,.5883,.6712,.74,.7961,.8412,.8771,.9053,.9274,.9445,.9578,.968,.9758,.9817,.9862,.9896,.9922,.9942,.9956,.9967,.9976,.9982,.9987,.999);
+--spring-bounce:linear(0,.039,.1324,.2525,.3805,.504,.6158,.7125,.7927,.8571,.9071,.9446,.9717,.9904,1.0026,1.01,1.0138,1.0151,1.0148,1.0136,1.0119,1.0099,1.008,1.0063,1.0048,1.0035,1.0024,1.0016,1.001);
+--dur:588ms;      /* damping 1.0, response 0.4s — move, reposition */
+--dur-snappy:441ms;/* damping 1.0, response 0.3s — chrome, small things */
+--dur-bounce:540ms;/* damping 0.8, response 0.4s — after momentum only */
+--press:100ms;     /* response is instant; this is just the travel */
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+--bg:#121214;--panel:#1a1a1e;--ink:#edecea;--muted:#9a98a2;--line:#2b2b32;
+--accent:#7fb8a4;--accent-ink:#10231d;--warn:#d9a95c;--bad:#e0847c;--good:#86c9a4;
+--chrome:rgba(22,22,26,.72);--chrome-edge:rgba(255,255,255,.08);
+--lift:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+--lift-hi:0 2px 4px rgba(0,0,0,.45),0 18px 40px -16px rgba(0,0,0,.7)}}
+:root[data-theme=dark]{
+--bg:#121214;--panel:#1a1a1e;--ink:#edecea;--muted:#9a98a2;--line:#2b2b32;
+--accent:#7fb8a4;--accent-ink:#10231d;--warn:#d9a95c;--bad:#e0847c;--good:#86c9a4;
+--chrome:rgba(22,22,26,.72);--chrome-edge:rgba(255,255,255,.08);
+--lift:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.6);
+--lift-hi:0 2px 4px rgba(0,0,0,.45),0 18px 40px -16px rgba(0,0,0,.7)}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-.wrap{max-width:1000px;margin:0 auto;padding:0 16px 64px}
-header.top{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
-header.top .wrap{display:flex;gap:20px;align-items:center;padding:14px 16px;flex-wrap:wrap}
+
+/* ------------------------------------------------------------ typography
+   The system font already ships optical sizing and tracking tables, so it is
+   the default rather than a fallback. Tracking is size-specific: large text
+   tightens as it grows, small uppercase labels open up. Everything is in rem
+   so a reader who raises their text size moves the layout with it.          */
+html{font-size:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:1rem/1.55 system-ui,-apple-system,"Segoe UI",ui-sans-serif,sans-serif;
+-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline;text-underline-offset:.15em}
+h1{font-size:clamp(1.75rem,1.35rem+1.7vw,2.25rem);line-height:1.08;letter-spacing:-.021em;
+font-weight:640;margin:2rem 0 .375rem}
+h2{font-size:1.1875rem;line-height:1.3;letter-spacing:-.012em;font-weight:620;margin:2rem 0 .625rem}
+h3{font-size:1.0625rem;line-height:1.3;letter-spacing:-.01em;font-weight:600;margin:0 0 .25rem}
+p.lede{color:var(--muted);margin:0 0 1.25rem;max-width:62ch;line-height:1.55}
+code,.price{font-family:var(--mono);font-size:.9375em}
+
+/* ---------------------------------------------------------------- layout */
+.wrap{max-width:62.5rem;margin:0 auto;padding:0 1rem 4rem}
+
+/* ----------------------------------------------------------- the material
+   Chrome is a translucent layer the page scrolls underneath, not an opaque
+   strip that eats the top of the window. The bottom edge is a short gradient
+   rather than a hairline, so content meets the chrome by fading into blur —
+   the edge belongs to the material, not to a border.                        */
+header.top{position:sticky;top:0;z-index:5;background:var(--chrome);
+-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);
+border-bottom:1px solid var(--chrome-edge)}
+header.top::after{content:"";position:absolute;left:0;right:0;top:100%;height:1.5rem;
+background:linear-gradient(var(--bg),transparent);pointer-events:none}
+header.top .wrap{display:flex;gap:1.25rem;align-items:center;padding:.875rem 1rem;flex-wrap:wrap}
 .brand{font-weight:650;letter-spacing:-.02em}
-.brand small{color:var(--muted);font-weight:400;margin-left:8px}
-nav{display:flex;gap:16px;margin-left:auto;flex-wrap:wrap}
-nav a{color:var(--muted);font-size:14px}nav a:hover{color:var(--ink)}
-h1{font-size:28px;letter-spacing:-.02em;margin:28px 0 6px}
-h2{font-size:18px;margin:28px 0 10px;letter-spacing:-.01em}
-p.lede{color:var(--muted);margin:0 0 20px;max-width:62ch}
-.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(290px,1fr))}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
-.card h3{margin:0 0 4px;font-size:17px}
-.card .by{color:var(--muted);font-size:13px;margin:0 0 10px}
-.card p{margin:0 0 14px;color:var(--ink);font-size:14.5px}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.spread{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
-.price{font-family:var(--mono);font-size:15px}
-.btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:9px 14px;font:inherit;font-size:14px;font-weight:550;cursor:pointer}
+.brand small{color:var(--muted);font-weight:400;margin-left:.5rem;letter-spacing:0}
+nav{display:flex;gap:.25rem;margin-left:auto;flex-wrap:wrap;align-items:center}
+nav a{color:var(--muted);font-size:.875rem;padding:.3rem .5rem;border-radius:.5rem;
+transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) var(--spring)}
+nav a:hover{color:var(--ink);background:color-mix(in oklab,var(--ink) 7%,transparent);text-decoration:none}
+nav a:active{background:color-mix(in oklab,var(--ink) 12%,transparent)}
+/* Where am I: the current section is stated, not left to be inferred. */
+nav a[aria-current=page]{color:var(--ink);background:color-mix(in oklab,var(--ink) 9%,transparent);font-weight:560}
+
+/* ------------------------------------------------------------- surfaces */
+.grid{display:grid;gap:.875rem;grid-template-columns:repeat(auto-fill,minmax(18.125rem,1fr))}
+/* Column, so the action sits on the baseline across cards of different
+   heights. Ragged buttons are the kind of thing that reads as carelessness. */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;padding:1.125rem;
+box-shadow:var(--lift);display:flex;flex-direction:column;
+transition:transform var(--dur) var(--spring),box-shadow var(--dur) var(--spring)}
+.card>.row:last-child{margin-top:auto;padding-top:.25rem}
+.card:hover{transform:translateY(-2px);box-shadow:var(--lift-hi)}
+.card .by{color:var(--muted);font-size:.8125rem;margin:0 0 .625rem;letter-spacing:.005em}
+.card p{margin:0 0 .875rem;color:var(--ink);font-size:.9375rem;line-height:1.5}
+.row{display:flex;gap:.625rem;align-items:center;flex-wrap:wrap}
+.spread{display:flex;justify-content:space-between;align-items:baseline;gap:.75rem}
+.price{font-size:.9375rem}
+
+/* --------------------------------------------------------------- controls
+   Feedback belongs on the press, not the release: :active fires on
+   pointer-down, and 100ms is travel time, not a wait. The spring is only for
+   the way back, where there is no finger to keep up with.                   */
+.btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:0;
+border-radius:.625rem;padding:.5625rem .875rem;font:inherit;font-size:.875rem;font-weight:560;
+letter-spacing:-.003em;cursor:pointer;
+transition:transform var(--dur-snappy) var(--spring),filter var(--dur-snappy) var(--spring)}
 .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
-.btn:hover{filter:brightness(1.07)}
-.tag{display:inline-block;font-size:11.5px;font-family:var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
-th{color:var(--muted);font-weight:550;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+.btn:hover{filter:brightness(1.07);text-decoration:none}
+.btn:active{transform:scale(.97);transition:transform var(--press) ease-out}
+.btn.ghost:active{background:color-mix(in oklab,var(--ink) 8%,transparent)}
+:where(a,button,input,select,textarea,summary):focus-visible{
+outline:2px solid var(--accent);outline-offset:2px;border-radius:.375rem}
+.tag{display:inline-block;font-size:.71875rem;font-family:var(--mono);color:var(--muted);
+border:1px solid var(--line);border-radius:999px;padding:.125rem .5rem;letter-spacing:.01em}
+textarea{width:100%;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+border-radius:.625rem;padding:.6875rem;font:inherit;min-height:5.25rem;resize:vertical;
+transition:border-color var(--dur-snappy) var(--spring)}
+textarea:focus{border-color:var(--accent)}
+select,input[type=text]{background:var(--panel);color:var(--ink);border:1px solid var(--line);
+border-radius:.5rem;padding:.5rem;font:inherit;
+transition:border-color var(--dur-snappy) var(--spring)}
+select:focus,input[type=text]:focus{border-color:var(--accent)}
+form.inline{display:inline}
+
+/* ----------------------------------------------------------------- data */
+table{width:100%;border-collapse:collapse;font-size:.875rem}
+th,td{text-align:left;padding:.5rem .625rem;border-bottom:1px solid var(--line)}
+/* Small text takes positive tracking; this is the one place it opens up. */
+th{color:var(--muted);font-weight:560;font-size:.78125rem;text-transform:uppercase;letter-spacing:.055em}
 td.num,th.num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
-.meters{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin:0 0 16px}
-.meter{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
-.meter .k{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.meter .v{font-family:var(--mono);font-size:19px;font-variant-numeric:tabular-nums;margin-top:3px}
-.bar{height:6px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:9px}
-.bar>i{display:block;height:100%;background:var(--accent);width:0}
-#trace{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 0;max-height:60vh;overflow:auto}
-.ev{padding:9px 14px;border-bottom:1px solid var(--line);font-size:14px}
+tbody tr,table tr{transition:background var(--dur-snappy) var(--spring)}
+.meters{display:grid;gap:.625rem;grid-template-columns:repeat(auto-fit,minmax(8.125rem,1fr));margin:0 0 1rem}
+.meter{background:var(--panel);border:1px solid var(--line);border-radius:.75rem;padding:.6875rem .8125rem;
+box-shadow:var(--lift)}
+.meter .k{font-size:.71875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.055em}
+.meter .v{font-family:var(--mono);font-size:1.1875rem;font-variant-numeric:tabular-nums;margin-top:.1875rem;
+letter-spacing:-.01em}
+/* scaleX, not width: the compositor can run it, and it springs to each new
+   reading instead of jumping as the numbers arrive. */
+.bar{height:.375rem;background:var(--line);border-radius:99px;overflow:hidden;margin-top:.5625rem}
+.bar>i{display:block;height:100%;background:var(--accent);width:100%;transform-origin:left center;
+transform:scaleX(0);transition:transform var(--dur) var(--spring)}
+
+/* ---------------------------------------------------------------- trace */
+#trace{background:var(--panel);border:1px solid var(--line);border-radius:.875rem;padding:.25rem 0;
+max-height:60vh;overflow:auto;box-shadow:var(--lift);overscroll-behavior:contain}
+.ev{padding:.5625rem .875rem;border-bottom:1px solid var(--line);font-size:.875rem;
+animation:arrive var(--dur-snappy) var(--spring) both}
 .ev:last-child{border-bottom:0}
-.ev .k{font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.ev pre{margin:4px 0 0;white-space:pre-wrap;word-break:break-word;font:inherit}
+.ev .k{font-family:var(--mono);font-size:.6875rem;color:var(--muted);text-transform:uppercase;letter-spacing:.055em}
+.ev pre{margin:.25rem 0 0;white-space:pre-wrap;word-break:break-word;font:inherit;line-height:1.5}
 .ev.user{background:color-mix(in oklab,var(--accent) 7%,transparent)}
 .ev.meter .k{color:var(--good)}
 .ev.err .k{color:var(--bad)}
 .ev.warnrow .k{color:var(--warn)}
-textarea{width:100%;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:11px;font:inherit;min-height:84px;resize:vertical}
-select,input[type=text]{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
-.note{border-left:3px solid var(--warn);background:color-mix(in oklab,var(--warn) 9%,transparent);padding:10px 14px;border-radius:0 8px 8px 0;font-size:14px;margin:0 0 18px}
+/* An event arrives from the direction the transcript grows, so the motion
+   points where the next one is coming from. */
+@keyframes arrive{from{opacity:0;transform:translateY(.5rem)}to{opacity:1;transform:none}}
+
+/* ---------------------------------------------------------------- notes */
+.note{border-left:3px solid var(--warn);background:color-mix(in oklab,var(--warn) 9%,transparent);
+padding:.625rem .875rem;border-radius:0 .5rem .5rem 0;font-size:.875rem;margin:0 0 1.125rem;line-height:1.5}
 .note.bad{border-color:var(--bad);background:color-mix(in oklab,var(--bad) 9%,transparent)}
-footer{color:var(--muted);font-size:13px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
-form.inline{display:inline}
+footer{color:var(--muted);font-size:.8125rem;margin-top:2.5rem;border-top:1px solid var(--line);
+padding-top:1rem;line-height:1.5}
+
+/* -------------------------------------------------------- accommodations
+   Three independent signals, each answered on its own terms. Reduced motion
+   keeps the feedback and drops the travel; it does not mean no feedback.    */
+@media (prefers-reduced-motion:reduce){
+*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+transition-duration:.01ms!important;scroll-behavior:auto!important}
+.ev{animation:fade 160ms ease both}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.card:hover{transform:none}
+.btn:active{transform:none;filter:brightness(.92)}}
+@media (prefers-reduced-transparency:reduce){
+header.top{background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:none}}
+@media (prefers-contrast:more){
+:root{--muted:#403e48;--line:#8d8a94}
+header.top{background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:none}
+.card,.meter,#trace{border-width:2px;box-shadow:none}
+.tag,.btn.ghost{border-width:2px}}
 `;
 
 export type Viewer = { name: string; email: string; role: string; orgName: string } | null;
@@ -81,6 +204,14 @@ export function layout(
   <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
   : `<a href="/login">Sign in</a><a href="/signup">Create an account</a>`}
 </nav></div></header>
+<script>
+// Where am I — marked here rather than threaded through every page's call,
+// and it degrades to the plain nav if this never runs.
+(function(){var p=location.pathname;var best=null;
+for(var a of document.querySelectorAll('nav a')){var h=a.getAttribute('href');
+if(h===p||(h!=='/'&&p.indexOf(h)===0)){if(!best||h.length>best.getAttribute('href').length)best=a;}}
+if(best)best.setAttribute('aria-current','page');})();
+</script>
 <div class="wrap">${body}
 <footer>Packs run on Anthropic Managed Agents. Spend is the platform's own <code>list_cost</code>, priced at public list rates. Seed pack instructions are placeholders, not an expert's work.</footer>
 </div></body></html>`;
@@ -193,7 +324,7 @@ ${exhausted ? `<div class="note" id="capnote">This run hit its budget. The platf
 <form method="post" action="/runs/${esc(run.id)}/topup" class="inline"><button class="btn" style="margin-left:10px">Top up and resume</button></form></div>` : ""}
 <div class="meters">
   <div class="meter"><div class="k">Cost so far</div><div class="v" id="m-cost">${esc(fmt(run.list_cost_cents))}</div>
-    <div class="bar"><i id="m-bar" style="width:${Math.min(100, (run.list_cost_cents / Math.max(1, run.budget_cents)) * 100)}%"></i></div></div>
+    <div class="bar"><i id="m-bar" style="transform:scaleX(${Math.min(1, run.list_cost_cents / Math.max(1, run.budget_cents)).toFixed(4)})"></i></div></div>
   <div class="meter"><div class="k">Budget</div><div class="v">${esc(fmt(run.budget_cents))}</div></div>
   <div class="meter"><div class="k">Input tokens</div><div class="v" id="m-in">${run.input_tokens}</div></div>
   <div class="meter"><div class="k">Output tokens</div><div class="v" id="m-out">${run.output_tokens}</div></div>
@@ -221,7 +352,9 @@ ${outputs.map((o) => `<tr><td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file
 const trace = document.getElementById('trace');
 const live = document.getElementById('live');
 const KIND = {'user.message':'user','user.decision':'user','run.metered':'meter',
-  'usage.snapshot':'meter','workflow.run':'meter','workflow.phase':'meter','run.error':'err','error':'err','run.budget_reached':'warnrow','tool.use':'warnrow'};
+  'usage.snapshot':'meter','workflow.run':'meter','workflow.phase':'meter','run.error':'err','error':'err',
+  'run.interrupted':'err','run.budget_reached':'warnrow','tool.use':'warnrow','hook.decision':'warnrow',
+  'run.topped_up':'meter'};
 function render(e){
   const d = document.createElement('div');
   d.className = 'ev ' + (KIND[e.kind] || '');
@@ -231,7 +364,7 @@ function render(e){
     if (e.kind === 'user.message') body = p.text;
     else if (e.kind === 'agent.text') body = p.text;
     else if (e.kind === 'run.outputs') body = 'produced ' + p.files.map((f) => f.name + ' (' + (f.bytes/1024).toFixed(1) + 'KB)').join(', ');
-    else if (e.kind === 'run.metered') body = 'cost ' + (p.list_cost_cents/100).toFixed(2) + ' (+' + (p.delta_cents/100).toFixed(2) + ') · in ' + p.input_tokens + ' · out ' + p.output_tokens + ' · ' + p.active_seconds.toFixed(1) + 's · author earned ' + (p.author_cents/100).toFixed(2);
+    else if (e.kind === 'run.metered') body = 'cost ' + (p.list_cost_cents/100).toFixed(2) + ' (+' + (p.delta_cents/100).toFixed(2) + ') · in ' + p.input_tokens + ' · out ' + p.output_tokens + ' · ' + p.active_seconds.toFixed(1) + 's · author earned $' + (p.author_millicents/100000).toFixed(4);
     else if (e.kind === 'tool.use') body = p.name + ' [' + p.permission + '] ' + JSON.stringify(p.input);
     else if (e.kind === 'tool.result') body = p.name + (p.isError ? ' FAILED ' : ' ok ') + (p.preview||'').slice(0,400);
     else if (e.kind === 'agent.thinking') body = 'thinking…';
@@ -245,6 +378,13 @@ function render(e){
     else if (e.kind === 'workflow.phase') body = 'phase ' + p.state + '  ' + p.phaseId;
     else if (e.kind === 'thread.created') body = 'thread for ' + (p.agentName || 'an agent') + (p.runId ? ' in run ' + p.runId : '');
     else if (e.kind === 'echo') body = 'echo ' + p.of + (p.text ? ' — ' + p.text.slice(0,120) : '');
+    else if (e.kind === 'run.started') body = 'run started on ' + p.model + ' · budget $' + (p.budget_cents/100).toFixed(2) + (p.trial ? ' · trial' : '') + ' · ' + p.session;
+    else if (e.kind === 'run.ended') body = 'run ended';
+    else if (e.kind === 'run.interrupted') body = p.message;
+    else if (e.kind === 'run.error') body = p.message;
+    else if (e.kind === 'run.budget_reached') body = 'budget reached — the platform refuses further messages until the cap is raised';
+    else if (e.kind === 'run.topped_up') body = 'topped up · $' + (p.headroom_cents/100).toFixed(2) + ' of new headroom';
+    else if (e.kind === 'hook.decision') body = p.result.toUpperCase() + ' ' + p.tool + (p.reason ? ' — ' + p.reason : '') + '  (a hook decided this, not a person)';
     else if (e.kind === 'raw') body = (p.payload && p.payload.type) ? p.payload.type : JSON.stringify(p).slice(0,200);
     else body = JSON.stringify(p);
   } catch { body = e.payload; }
@@ -263,7 +403,7 @@ src.addEventListener('meters', (m) => {
   document.getElementById('m-out').textContent = s.output_tokens;
   document.getElementById('m-sec').textContent = s.active_seconds.toFixed(1) + 's';
   document.getElementById('m-billed').textContent = '$' + (s.billed_cents/100).toFixed(2);
-  document.getElementById('m-bar').style.width = Math.min(100, (s.list_cost_cents / Math.max(1,s.budget_cents)) * 100) + '%';
+  document.getElementById('m-bar').style.transform = 'scaleX(' + Math.min(1, s.list_cost_cents / Math.max(1,s.budget_cents)).toFixed(4) + ')';
   if (s.stop_reason === 'budget_reached' && !document.getElementById('capnote')) location.reload();
 });
 let askSig = '';
