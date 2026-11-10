@@ -189,3 +189,65 @@ test("POST /packs/:slug/review succeeds once the organisation has a completed, n
   const editPage = await fetch(`${server.baseUrl}/packs/${pack.slug}`, { headers: { cookie } });
   assert.match(await editPage.text(), /Update your review/);
 });
+
+test("a downvote does not raise the useful count or flip the downvoter's own button", async () => {
+  const { pack } = await freshPack();
+  const cookie = await signUpCookie(server.baseUrl);
+
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/vote`, {
+    method: "POST", redirect: "manual",
+    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ value: "-1" }),
+  });
+  assert.equal(res.status, 303);
+
+  const row = await (await sql()).one("SELECT value FROM pack_votes WHERE pack_id = $1", [pack.id]);
+  assert.equal(Number(row.value), -1, "the downvote itself is stored as cast");
+
+  const page = await fetch(`${server.baseUrl}/packs/${pack.slug}`, { headers: { cookie } });
+  const html = await page.text();
+  assert.doesNotMatch(html, /marked this useful/);
+  assert.match(html, /Looks good/);
+  assert.doesNotMatch(html, /Marked useful/);
+});
+
+test("POST /packs/:slug/vote refuses a non-finite value rather than storing one", async () => {
+  const { pack } = await freshPack();
+  const cookie = await signUpCookie(server.baseUrl);
+
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/vote`, {
+    method: "POST", redirect: "manual",
+    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ value: "not-a-number" }),
+  });
+  assert.equal(res.status, 303);
+  assert.match(res.headers.get("location"), new RegExp(`^/packs/${pack.slug}\\?err=`));
+
+  const row = await (await sql()).one("SELECT * FROM pack_votes WHERE pack_id = $1", [pack.id]);
+  assert.equal(row, undefined, "a malformed vote value leaves no row behind");
+});
+
+test("POST /packs/:slug/review refuses a non-finite rating rather than storing a null one", async () => {
+  const { pack, version } = await freshPack();
+  const buyer = await org("Malformed Rating Co");
+  await Pay.beginPurchase({
+    orgId: buyer.orgId, userId: buyer.userId, packVersionId: version.id,
+    amountCents: 0, description: "x", baseUrl: server.baseUrl,
+  });
+  const run = await P.startRun({ orgId: buyer.orgId, userId: buyer.userId, packVersionId: version.id });
+  await (await sql()).query("UPDATE runs SET ended_at = $1 WHERE id = $2", [db.now(), run.id]);
+
+  const cookie = await cookieFor(buyer.userId);
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/review`, {
+    method: "POST", redirect: "manual",
+    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ rating: "not-a-number", body: "garbage rating field", byline: "Malformed Rating Co" }),
+  });
+  assert.equal(res.status, 303);
+  assert.match(res.headers.get("location"), new RegExp(`^/packs/${pack.slug}\\?err=`));
+
+  const row = await (await sql()).one(
+    "SELECT * FROM pack_reviews WHERE pack_id = $1 AND org_id = $2", [pack.id, buyer.orgId],
+  );
+  assert.equal(row, undefined, "a rejected rating leaves no review behind — not one with rating bound to null");
+});

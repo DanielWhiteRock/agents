@@ -158,12 +158,19 @@ async function myReviewOf(
   };
 }
 
-/** How many organisations marked this pack useful, and whether this one already has. */
+/**
+ * How many organisations marked this pack useful, and whether this one
+ * already has. `-1` is a real, legitimate stored value — a downvote — and
+ * is not "useful" in either direction: both queries filter to `value > 0`
+ * so a downvote neither inflates the count nor flips this viewer's own
+ * button to "Marked useful".
+ */
 async function votesOf(packId: string, orgId: string): Promise<{ count: number; voted: boolean }> {
   const s = await sql();
-  const rows = await s.query<{ ok: number }>("SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1", [packId]);
+  const rows = await s.query<{ ok: number }>(
+    "SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND value > 0", [packId]);
   const mine = await s.one<{ ok: number }>(
-    "SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [packId, orgId]);
+    "SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND org_id = $2 AND value > 0", [packId, orgId]);
   return { count: rows.length, voted: Boolean(mine) };
 }
 
@@ -337,7 +344,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   }
 
   // "This looks good" — no run required, so no eligibility check belongs
-  // here either; `vote()` itself clamps whatever value arrives.
+  // here either; `vote()` itself clamps an in-range value and rejects
+  // anything that is not a finite number.
   const voteMatch = /^\/packs\/([a-z0-9-]+)\/vote$/.exec(path);
   if (method === "POST" && voteMatch) {
     const slug = voteMatch[1]!;

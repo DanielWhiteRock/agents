@@ -125,6 +125,33 @@ test("a completed, non-trial run earns you an opinion", async () => {
   });
 });
 
+test("submitReview rejects a non-finite rating rather than storing it as null", async () => {
+  const { pack, version } = await packAndVersion();
+  const { buyer, run } = await buyerWithRun(version.id);
+  await endRun(run.id);
+
+  await assert.rejects(
+    S.submitReview({
+      orgId: buyer.orgId, userId: buyer.userId, packId: pack.id,
+      rating: NaN, body: "a malformed rating field", byline: "Buyer Co", anonymous: false,
+    }),
+    (e) => e.name === "SocialInputError",
+  );
+
+  const s = await sql();
+  const row = await s.one("SELECT * FROM pack_reviews WHERE pack_id = $1 AND org_id = $2", [pack.id, buyer.orgId]);
+  assert.equal(row, undefined, "a rejected rating leaves no review behind — not one with rating bound to null");
+
+  // Omitting the rating entirely is the legitimate, body-only case, and
+  // still works: `== null` is the only path that means "no rating given".
+  await S.submitReview({
+    orgId: buyer.orgId, userId: buyer.userId, packId: pack.id,
+    body: "no rating, just notes", byline: "Buyer Co", anonymous: false,
+  });
+  const after = await s.one("SELECT * FROM pack_reviews WHERE pack_id = $1 AND org_id = $2", [pack.id, buyer.orgId]);
+  assert.equal(after.rating, null);
+});
+
 test("the average appears at exactly five ratings and not at four", async () => {
   const { pack, version } = await packAndVersion();
 
@@ -252,6 +279,19 @@ test("vote() clamps anything outside -1..1, because the next task orders the she
   await S.vote(voter.orgId, pack.id, 0.6);
   row = await s.one("SELECT value FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [pack.id, voter.orgId]);
   assert.equal(Number(row.value), 1, "a fractional in-range value rounds rather than truncating to 0");
+});
+
+test("vote() rejects a non-finite value rather than inventing 0", async () => {
+  const { pack } = await packAndVersion();
+  const voter = await org("Malformed Vote Co");
+
+  await assert.rejects(S.vote(voter.orgId, pack.id, NaN), (e) => e.name === "SocialInputError");
+  await assert.rejects(S.vote(voter.orgId, pack.id, Infinity), (e) => e.name === "SocialInputError");
+  await assert.rejects(S.vote(voter.orgId, pack.id, -Infinity), (e) => e.name === "SocialInputError");
+
+  const s = await sql();
+  const row = await s.one("SELECT * FROM pack_votes WHERE pack_id = $1 AND org_id = $2", [pack.id, voter.orgId]);
+  assert.equal(row, undefined, "nothing in the domain means 0; a rejected vote leaves no row behind");
 });
 
 test("toggleSave bookmarks a pack, then un-bookmarks it", async () => {

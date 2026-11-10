@@ -38,6 +38,18 @@ export class ReviewNotAllowedError extends DomainError {
 }
 
 /**
+ * Thrown by `submitReview` and `vote` for a numeric input that is not a
+ * finite number — `NaN`, `Infinity`, or anything a malformed form field
+ * coerces to one of those. Neither function has a value that means
+ * "unparseable"; coercing one silently (a `NaN` rating binding as `null`, a
+ * `NaN` vote falling back to `0`) turns a bad request into a plausible-looking
+ * row instead of an error, which is worse than failing loudly.
+ */
+export class SocialInputError extends DomainError {
+  constructor(message: string) { super(message, 400, "SocialInputError"); }
+}
+
+/**
  * True only when this organisation has a finished, non-trial run of some
  * version of this pack. Counted the way `packStats` counts runs — joined
  * through `pack_versions`, `is_trial = 0` — with one addition: the run must
@@ -79,6 +91,13 @@ export type SubmitReviewInput = {
 export async function submitReview(args: SubmitReviewInput): Promise<void> {
   if (!(await mayReview(args.orgId, args.packId))) throw new ReviewNotAllowedError();
 
+  // `args.rating == null` is "no rating given" — a legitimate, body-only
+  // review. A value that is present but not finite (a malformed form field
+  // coerced to `NaN`) is a different thing: a bad request, rejected here
+  // rather than silently bound as a null rating.
+  if (args.rating != null && !Number.isFinite(args.rating)) {
+    throw new SocialInputError("rating must be a finite number between 1 and 5");
+  }
   const rating = args.rating == null ? null : Math.max(1, Math.min(5, Math.round(args.rating)));
   const byline = args.anonymous ? null : (args.byline.trim() || null);
   const t = now();
@@ -153,10 +172,15 @@ export async function creatorRating(creatorId: string): Promise<{ average: numbe
  * through — the UI only ever sends 1, but a later caller (the MCP surface,
  * say) might not, and the next task orders the whole shelf by the sum of
  * these, so an unbounded value would skew it for everyone, not just the
- * pack that sent it.
+ * pack that sent it. A value that is not finite — `NaN`, `Infinity`, a
+ * malformed form field — has no in-range version to clamp to, so it is
+ * rejected rather than coerced: nothing in the domain means `0`, and
+ * inventing one would land a vote nobody cast.
  */
 export async function vote(orgId: string, packId: string, value: number): Promise<void> {
-  const clamped = Math.max(-1, Math.min(1, Math.round(Number(value) || 0)));
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new SocialInputError("vote value must be a finite number");
+  const clamped = Math.max(-1, Math.min(1, Math.round(n)));
   const s = await sql();
   await s.query(
     `INSERT INTO pack_votes (pack_id, org_id, value) VALUES ($1,$2,$3)
