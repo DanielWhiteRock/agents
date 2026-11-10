@@ -16,7 +16,7 @@ function fakeRuntime(script) {
   const zero = { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } };
   return {
     ensureEnvironment: async () => "env_1",
-    publishPack: async () => ({ runtimePackId: "agt_1", version: "1" }),
+    publishPack: async () => ({ runtimePackId: "agt_1", version: "1", skills: [], subagents: [] }),
     createSession: async () => ({ id: "sesn_1", status: "running", stopReason: null, usage: zero }),
     sendMessage: async () => {},
     streamEvents: async () => {

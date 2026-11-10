@@ -55,5 +55,14 @@ if (!res.ok) {
   process.exit(1);
 }
 console.log(`${out.created ? "Created" : "Updated"} ${out.name} at /packs/${out.slug} (${out.status})`);
+if (out.skills?.length) console.log(`Skills: ${out.skills.join(", ")}`);
+if (out.subagents?.length) console.log(`Subagents: ${out.subagents.join(", ")}`);
+if (out.carriedNotRun?.length) {
+  console.log(`Carried but not run on the platform: ${out.carriedNotRun.join(", ")}`);
+}
 if (out.unknownKeys?.length) console.log(`Ignored unrecognised keys: ${out.unknownKeys.join(", ")}`);
-console.log(`Finish it at ${host}/packs/${out.slug}/edit`);
+if (out.warnings?.length) {
+  console.log("\nWorth fixing:");
+  for (const w of out.warnings) console.log(`  - ${w}`);
+}
+console.log(`\nFinish it at ${host}/packs/${out.slug}/edit`);

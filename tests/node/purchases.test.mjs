@@ -35,7 +35,7 @@ before(async () => {
   await db.initDb();
   await P.seedCatalog();
   P.setRuntime({
-    publishPack: async () => ({ runtimePackId: "agt_test", version: "1" }),
+    publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
   });
 });
@@ -204,7 +204,7 @@ test("a refund stops the run, and the pack cannot be run again", async () => {
   const out = await Pay.beginPurchase({ orgId, userId, packVersionId: v.id, amountCents: 9900, description: "x", ...ARGS });
 
   P.setRuntime({
-    publishPack: async () => ({ runtimePackId: "agt_test", version: "1" }),
+    publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
     createSession: async () => ({ id: "sesn_r", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
@@ -234,7 +234,7 @@ test("a run is refused when the balance is empty, and allowed once topped up", a
   const v = await P.publishPack("guardrails");
   await Pay.beginPurchase({ orgId, userId, packVersionId: v.id, amountCents: 0, description: "free", ...ARGS });
   P.setRuntime({
-    publishPack: async () => ({ runtimePackId: "agt_test", version: "1" }),
+    publishPack: async () => ({ runtimePackId: "agt_test", version: "1", skills: [], subagents: [] }),
     ensureEnvironment: async () => "env_1",
     createSession: async () => ({ id: "sesn_p", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),

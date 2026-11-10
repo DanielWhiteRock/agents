@@ -6,6 +6,7 @@ import * as A from "./auth.js";
 import * as Pay from "../billing/purchases.js";
 import { payments } from "../billing/provider.js";
 import { handleMcpRequest } from "../mcp/server.js";
+import { tarGz } from "../packs/tar.js";
 import { statusOf } from "./errors.js";
 import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
@@ -139,12 +140,29 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const slug = expMatch[1]!;
     const pack = await P.getPack(slug);
     if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
-    const md = await P.exportPack(ctx.orgId, slug);
+    const format = url.searchParams.get("format") ?? "tar";
+    const tree = await P.exportPackTree(ctx.orgId, slug);
+
+    if (format === "json") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return void res.end(JSON.stringify({ slug, files: tree }));
+    }
+    if (format === "md") {
+      // The definition alone, for a pack with no folder behind it.
+      res.writeHead(200, {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="${slug}.md"`,
+      });
+      return void res.end(await P.exportPack(ctx.orgId, slug));
+    }
+    // A real directory, so `tar xzf` gives the author's folder back.
+    const gz = tarGz(tree, slug);
     res.writeHead(200, {
-      "content-type": "text/markdown; charset=utf-8",
-      "content-disposition": `attachment; filename="${slug}.md"`,
+      "content-type": "application/gzip",
+      "content-disposition": `attachment; filename="${slug}.tar.gz"`,
+      "content-length": String(gz.length),
     });
-    return void res.end(md);
+    return void res.end(gz);
   }
 
   const trialMatch = /^\/packs\/([a-z0-9-]+)\/trial$/.exec(path);
@@ -531,6 +549,8 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       return void res.end(JSON.stringify({
         slug: out.pack.slug, created: out.created, status: out.pack.status,
         name: out.pack.name, unknownKeys: out.parsed.unknownKeys,
+        skills: out.skills, subagents: out.subagents, carriedNotRun: out.inert,
+        warnings: out.warnings.map((w) => `${w.skill}/${w.file}: ${w.message}`),
       }));
     } catch (e) {
       res.writeHead(statusOf(e) ?? 400, { "content-type": "application/json" });

@@ -7,7 +7,8 @@ import { type Money, addCents, parseMoney } from "./money.js";
 import { parseUsage } from "./usage.js";
 import {
   type AgentRuntime, type CreateSessionOptions, type PublishedPack,
-  type RuntimeEvent, type RuntimeSession, type SessionStatus, type ToolDecision,
+  type RuntimeEvent, type RuntimeSession, type SessionStatus, type SkillUpload, type ToolDecision,
+  type PublishedSkill, type PublishedSubagent, type SubagentUpload,
   BudgetExhaustedError, BudgetRemovalForbiddenError, BudgetRequiredError,
 } from "./types.js";
 import type { PackDefinition } from "../packs/types.js";
@@ -15,6 +16,8 @@ import { composeSystemPrompt } from "../packs/wrapper.js";
 
 /** Structural subset of the SDK we use, so tests can inject a fake. */
 export type ManagedAgentsClient = {
+  /** Skills are out of beta: client.skills, not client.beta.skills. */
+  skills: { create(body: any): Promise<{ id: string; latest_version_id?: string }> };
   beta: {
     environments: { create(body: any): Promise<{ id: string }> };
     agents: { create(body: any): Promise<{ id: string; version: number }> };
@@ -30,6 +33,12 @@ export type ManagedAgentsClient = {
     };
   };
 };
+
+/** Built-ins that change the world, so they ask before running. */
+const DESTRUCTIVE = ["bash", "write", "edit"] as const;
+
+/** The platform caps a subagents.predefined_agents list at 20. */
+export const MAX_SUBAGENTS = 20;
 
 const STATUSES: Record<string, SessionStatus> = {
   running: "running", idle: "idle", requires_action: "requires_action", terminated: "terminated",
@@ -83,17 +92,54 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     return env.id;
   }
 
-  async publishPack(pack: PackDefinition): Promise<PublishedPack> {
+  /**
+   * Upload one skill directory to the workspace.
+   *
+   * Every file must sit under a single top-level directory with SKILL.md at its
+   * root, so each file is named `<skill>/<relative path>`.
+   */
+  private async uploadSkill(skill: SkillUpload): Promise<PublishedSkill> {
+    const { toFile } = await import("@anthropic-ai/sdk");
+    const files = await Promise.all(skill.files.map((f) =>
+      toFile(Buffer.from(f.content, "utf8"), `${skill.name}/${f.path}`)));
+    const created = await this.client.skills.create({ files });
+    return { name: skill.name, skillId: created.id, skillVersion: created.latest_version_id ?? "latest" };
+  }
+
+  /**
+   * A subagent is its own agent object, referenced by id.
+   *
+   * It inherits the pack's model unless its own definition names one, and it
+   * gets the same always_ask posture on destructive tools — a specialist is not
+   * a reason to drop the guardrail.
+   */
+  private async createSubagent(sub: SubagentUpload, fallbackModel: string): Promise<PublishedSubagent> {
+    const agent = await this.client.beta.agents.create({
+      name: sub.name,
+      model: { id: sub.model ?? fallbackModel },
+      system: sub.system,
+      ...(sub.description ? { description: sub.description } : {}),
+      tools: [{
+        type: "agent_toolset_20260401",
+        default_config: { enabled: true },
+        configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: "always_ask" } })),
+      }],
+    });
+    return { name: sub.name, agentId: agent.id, version: String(agent.version) };
+  }
+
+  async publishPack(
+    pack: PackDefinition, skills: SkillUpload[] = [], subagents: SubagentUpload[] = [],
+  ): Promise<PublishedPack> {
+    if (subagents.length > MAX_SUBAGENTS) {
+      throw new Error(`a pack may declare at most ${MAX_SUBAGENTS} subagents; this one has ${subagents.length}`);
+    }
     const tools: any[] = [{
       type: "agent_toolset_20260401",
       default_config: { enabled: true },
       // Spending/destructive built-ins never run unattended. The platform
       // default is always_allow, so this must be stated explicitly.
-      configs: [
-        { name: "bash", permission_policy: { type: "always_ask" } },
-        { name: "write", permission_policy: { type: "always_ask" } },
-        { name: "edit", permission_policy: { type: "always_ask" } },
-      ],
+      configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: "always_ask" } })),
     }];
     for (const t of pack.tools ?? []) {
       tools.push({
@@ -102,6 +148,15 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       });
     }
     for (const m of pack.mcpServers ?? []) tools.push({ type: "mcp_toolset", mcp_server_name: m.name });
+
+    // Skills are uploaded before the agent, because the agent references them
+    // by id. A failure here stops the publish rather than creating an agent
+    // whose skills are half there.
+    const published: PublishedSkill[] = [];
+    for (const skill of skills) published.push(await this.uploadSkill(skill));
+
+    const publishedSubagents: PublishedSubagent[] = [];
+    for (const sub of subagents) publishedSubagents.push(await this.createSubagent(sub, pack.model));
 
     const agent = await this.client.beta.agents.create({
       name: pack.name,
@@ -112,9 +167,32 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       ...(pack.mcpServers?.length
         ? { mcp_servers: pack.mcpServers.map((m) => ({ type: "url", name: m.name, url: m.url })) }
         : {}),
+      ...(published.length
+        ? { skills: published.map((s) => ({ type: "custom", skill_id: s.skillId, version: "latest" })) }
+        : {}),
+      ...(publishedSubagents.length
+        ? {
+            multiagent: {
+              type: "multiagent_20261001",
+              subagents: {
+                type: "enabled",
+                // The author declared this pack's specialists. Letting the model
+                // invent its own at runtime would escape both the author's
+                // design and what the buyer paid for.
+                inline_agents: { type: "disabled" },
+                predefined_agents: publishedSubagents.map((s) => ({
+                  type: "agent", id: s.agentId, version: Number(s.version),
+                })),
+              },
+            },
+          }
+        : {}),
       metadata: { pack_slug: pack.slug },
     });
-    return { runtimePackId: agent.id, version: String(agent.version) };
+    return {
+      runtimePackId: agent.id, version: String(agent.version),
+      skills: published, subagents: publishedSubagents,
+    };
   }
 
   async createSession(opts: CreateSessionOptions): Promise<RuntimeSession> {

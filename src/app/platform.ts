@@ -17,6 +17,9 @@ import type { PackDefinition } from "../packs/types.js";
 import { SEED_PACKS } from "../packs/seed-packs.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
 import { exportPackMarkdown } from "../packs/export.js";
+import {
+  type PackTree, assertWithinLimits, checkSkills, normaliseTree, readFrontMatterMeta, validateTree,
+} from "../packs/tree.js";
 
 export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
@@ -156,7 +159,27 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
   };
-  const published = await runtime().publishPack(def);
+  // The folder, if the author uploaded one. Its skills/ become real platform
+  // skills; a pack with no folder still publishes from its instructions alone.
+  const tree = await packTree(pack.id);
+  const parsed = tree.length > 0 ? validateTree(tree) : null;
+  const skills = parsed?.skills ?? [];
+  const subagents = (parsed?.subagents ?? []).map((sa) => {
+    const meta = readFrontMatterMeta(sa.file.content);
+    const body = sa.file.content.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
+    return {
+      name: meta.name ?? sa.name,
+      ...(meta.description ? { description: meta.description } : {}),
+      system: body || `You are the ${sa.name} specialist for ${pack.name}.`,
+    };
+  });
+
+  const published = await runtime().publishPack(
+    def,
+    skills.map((sk) => ({ name: sk.name, files: sk.files.map((f) => ({ path: f.path, content: f.content })) })),
+    subagents,
+  );
+
   const prev = await latestVersion(pack.id);
   const vid = id("pv");
   const s = await sql();
@@ -164,7 +187,70 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     `INSERT INTO pack_versions (id, pack_id, version, runtime_pack_id, runtime_version, instructions, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
     [vid, pack.id, (prev?.version ?? 0) + 1, published.runtimePackId, published.version, pack.instructions, now()]);
+  // Snapshot the folder and the uploaded skills, so a buyer exports what they
+  // bought however the author edits it afterwards.
+  for (const f of tree) {
+    await s.query("INSERT INTO pack_version_files (pack_version_id, path, content) VALUES ($1,$2,$3)",
+      [vid, f.path, f.content]);
+  }
+  for (const sk of published.skills ?? []) {
+    await s.query(
+      "INSERT INTO pack_version_skills (pack_version_id, name, skill_id, skill_version) VALUES ($1,$2,$3,$4)",
+      [vid, sk.name, sk.skillId, sk.skillVersion]);
+  }
+  for (const sa of published.subagents ?? []) {
+    await s.query(
+      "INSERT INTO pack_version_skills (pack_version_id, name, skill_id, skill_version) VALUES ($1,$2,$3,$4)",
+      [vid, `agent:${sa.name}`, sa.agentId, sa.version]);
+  }
   return (await getVersion(vid))!;
+}
+
+// ------------------------------------------------------------- pack folders
+
+export async function packTree(packId: string): Promise<PackTree> {
+  const s = await sql();
+  return s.query<{ path: string; content: string }>(
+    "SELECT path, content FROM pack_files WHERE pack_id = $1 ORDER BY path", [packId]);
+}
+
+export async function versionTree(packVersionId: string): Promise<PackTree> {
+  const s = await sql();
+  return s.query<{ path: string; content: string }>(
+    "SELECT path, content FROM pack_version_files WHERE pack_version_id = $1 ORDER BY path", [packVersionId]);
+}
+
+/** Replace a pack's folder wholesale, after checking it is publishable. */
+export async function savePackTree(packId: string, files: PackTree): Promise<{
+  warnings: ReturnType<typeof checkSkills>["warnings"];
+}> {
+  const tree = normaliseTree(files);
+  assertWithinLimits(tree);
+  const { skills } = validateTree(tree);
+  const check = checkSkills(skills);
+  if (check.errors.length > 0) {
+    throw new PackTreeRejected(check.errors.map((e) => `${e.skill}/${e.file}: ${e.message}`));
+  }
+  const s = await sql();
+  await s.query("DELETE FROM pack_files WHERE pack_id = $1", [packId]);
+  for (const f of tree) {
+    await s.query("INSERT INTO pack_files (pack_id, path, content) VALUES ($1,$2,$3)", [packId, f.path, f.content]);
+  }
+  return { warnings: check.warnings };
+}
+
+export class PackTreeRejected extends DomainError {
+  constructor(readonly problems: string[]) {
+    super(`that pack is not publishable yet:\n- ${problems.join("\n- ")}`, 409, "PackTreeRejected");
+  }
+}
+
+export async function versionSkills(packVersionId: string): Promise<Array<{
+  name: string; skill_id: string; skill_version: string;
+}>> {
+  const s = await sql();
+  return s.query("SELECT name, skill_id, skill_version FROM pack_version_skills WHERE pack_version_id = $1 ORDER BY name",
+    [packVersionId]);
 }
 
 export async function entitled(orgId: string, packVersionId: string): Promise<boolean> {
@@ -534,6 +620,32 @@ export async function topUp(runId: string): Promise<RunRow> {
  * author's instructions — which is exactly what authors are told plainly can
  * happen, rather than promised against.
  */
+/**
+ * A bought pack as a folder.
+ *
+ * The version's own snapshot, so a buyer gets what they bought however the
+ * author edits it afterwards. A pack with no uploaded folder still exports as a
+ * single agent.md, which is what every pack written in the browser is.
+ */
+export async function exportPackTree(orgId: string, slug: string): Promise<PackTree> {
+  const pack = await getPack(slug);
+  if (!pack) throw new Error(`no such pack: ${slug}`);
+  const version = await latestVersion(pack.id);
+  if (!version) throw new Error(`${pack.name} has not been published yet`);
+  await assertEntitled(orgId, version.id);
+
+  const snapshot = await versionTree(version.id);
+  const definition = await exportPack(orgId, slug);
+  if (snapshot.length === 0) return [{ path: "agent.md", content: definition }];
+
+  // The definition is regenerated rather than taken from the snapshot, so the
+  // exported agent.md carries the platform wrapper and the licence notice.
+  return [
+    { path: "agent.md", content: definition },
+    ...snapshot.filter((f) => f.path.toLowerCase() !== "agent.md" && f.path.toLowerCase() !== "pack.md"),
+  ].sort((a, b) => a.path.localeCompare(b.path));
+}
+
 export async function exportPack(orgId: string, slug: string): Promise<string> {
   const pack = await getPack(slug);
   if (!pack) throw new Error(`no such pack: ${slug}`);

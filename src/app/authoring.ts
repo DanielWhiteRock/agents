@@ -3,7 +3,8 @@ import { sql } from "./sql.js";
 import { DomainError } from "./errors.js";
 import * as P from "./platform.js";
 import type { PackDefinition } from "../packs/types.js";
-import { parsePackFolder, parsePackMarkdown, type ParsedPack } from "../packs/import.js";
+import { parsePackMarkdown, type ParsedPack } from "../packs/import.js";
+import { normaliseTree, validateTree, type PackTree } from "../packs/tree.js";
 
 /**
  * Creating, editing, withdrawing and deleting packs — the supply side.
@@ -173,10 +174,16 @@ export type UploadFile = { path: string; text: string };
  */
 export async function importPack(args: {
   orgId: string; files: UploadFile[]; slugOverride?: string; defaults?: Partial<PackInput>;
-}): Promise<{ pack: P.PackRow; created: boolean; parsed: ParsedPack }> {
-  const parsed = args.files.length === 1 && args.files[0]
-    ? parsePackMarkdown(args.files[0].text)
-    : parsePackFolder(args.files);
+}): Promise<{
+  pack: P.PackRow; created: boolean; parsed: ParsedPack;
+  skills: string[]; subagents: string[]; inert: string[];
+  warnings: Array<{ skill: string; file: string; message: string }>;
+}> {
+  // The folder is stored as a folder. Only agent.md's body becomes the system
+  // prompt; skills stay separate files so the model can read one at a time.
+  const tree: PackTree = normaliseTree(args.files.map((f) => ({ path: f.path, content: f.text })));
+  const { definition, skills, subagents, inert } = validateTree(tree);
+  const parsed = parsePackMarkdown(definition.content);
 
   const slug = normaliseSlug(args.slugOverride || parsed.slug || parsed.name || "");
   const existing = await P.getPack(slug);
@@ -198,9 +205,17 @@ export async function importPack(args: {
     payoutEmail: args.defaults?.payoutEmail ?? existing?.author_payout_email ?? undefined,
   };
 
-  if (existing) {
-    if (existing.author_org_id !== args.orgId) throw new NotTheAuthorError();
-    return { pack: await updatePack(args.orgId, slug, input), created: false, parsed };
-  }
-  return { pack: await createPack(args.orgId, input), created: true, parsed };
+  const created = !existing;
+  if (existing && existing.author_org_id !== args.orgId) throw new NotTheAuthorError();
+  const pack = existing
+    ? await updatePack(args.orgId, slug, input)
+    : await createPack(args.orgId, input);
+
+  const { warnings } = await P.savePackTree(pack.id, tree);
+  return {
+    pack: (await P.getPack(slug))!, created, parsed,
+    skills: skills.map((sk) => sk.name),
+    subagents: subagents.map((sa) => sa.name),
+    inert, warnings,
+  };
 }

@@ -14,7 +14,7 @@ let n = 0;
 const email = () => `t${++n}-${Date.now()}@example.com`;
 
 const stubRuntime = () => ({
-  publishPack: async () => ({ runtimePackId: "agt_t", version: "1" }),
+  publishPack: async () => ({ runtimePackId: "agt_t", version: "1", skills: [], subagents: [] }),
   ensureEnvironment: async () => "env_1",
   createSession: async () => ({ id: "sesn_t", status: "running", stopReason: null,
     usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),

@@ -84,6 +84,15 @@ CREATE TABLE IF NOT EXISTS packs (
   created_at TEXT NOT NULL
 );
 
+-- A pack is a folder. These are its files, in the layout Claude Code plugins
+-- use: agent.md, skills/<name>/SKILL.md, agents/, commands/, hooks/, docs/.
+CREATE TABLE IF NOT EXISTS pack_files (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  path TEXT NOT NULL,
+  content TEXT NOT NULL,
+  PRIMARY KEY (pack_id, path)
+);
+
 CREATE TABLE IF NOT EXISTS pack_versions (
   id TEXT PRIMARY KEY,
   pack_id TEXT NOT NULL REFERENCES packs(id),
@@ -93,6 +102,25 @@ CREATE TABLE IF NOT EXISTS pack_versions (
   instructions TEXT NOT NULL,
   created_at TEXT NOT NULL,
   UNIQUE (pack_id, version)
+);
+
+-- The folder as it was when this version was published, so a buyer exports
+-- exactly what they bought however the author edits it afterwards.
+CREATE TABLE IF NOT EXISTS pack_version_files (
+  pack_version_id TEXT NOT NULL REFERENCES pack_versions(id),
+  path TEXT NOT NULL,
+  content TEXT NOT NULL,
+  PRIMARY KEY (pack_version_id, path)
+);
+
+-- The platform skills uploaded for a version, so a republish does not orphan
+-- them and an export can say which skills a pack shipped.
+CREATE TABLE IF NOT EXISTS pack_version_skills (
+  pack_version_id TEXT NOT NULL REFERENCES pack_versions(id),
+  name TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  skill_version TEXT NOT NULL,
+  PRIMARY KEY (pack_version_id, name)
 );
 
 -- Owned by the organisation, never by the purchasing user.

@@ -2,6 +2,16 @@ import type { Money } from "./money.js";
 import type { RuntimeUsage } from "./usage.js";
 import type { PackDefinition } from "../packs/types.js";
 
+/** One skill directory, ready to upload: SKILL.md at the root of its own folder. */
+export type SkillUpload = { name: string; files: Array<{ path: string; content: string }> };
+
+/** A subagent the pack declared in agents/<name>.md. */
+export type SubagentUpload = {
+  name: string; description?: string; model?: string; system: string;
+};
+
+export type PublishedSubagent = { name: string; agentId: string; version: string };
+
 export type SessionStatus = "running" | "idle" | "requires_action" | "terminated";
 
 export type RuntimeSession = {
@@ -11,10 +21,20 @@ export type RuntimeSession = {
   usage: RuntimeUsage;
 };
 
-export type PublishedPack = { runtimePackId: string; version: string };
+export type PublishedPack = {
+  runtimePackId: string;
+  version: string;
+  /** The platform skills uploaded for this version, in the order declared. */
+  skills: PublishedSkill[];
+  /** The subagents created for this version, attached as predefined agents. */
+  subagents: PublishedSubagent[];
+};
+
+export type PublishedSkill = { name: string; skillId: string; skillVersion: string };
 
 export type CreateSessionOptions = {
-  pack: PublishedPack;
+  /** A session only needs to know which agent version to pin to. */
+  pack: Pick<PublishedPack, "runtimePackId" | "version">;
   environmentId: string;
   /** Required. A budget cannot be added to a session later — only changed or removed. */
   budget: Money;
@@ -48,7 +68,12 @@ export type PendingAsk = { eventId: string; name: string; input: unknown };
 
 export interface AgentRuntime {
   ensureEnvironment(name: string): Promise<string>;
-  publishPack(pack: PackDefinition): Promise<PublishedPack>;
+  /**
+   * Publish a pack. `skills` are real platform skills, uploaded and attached,
+   * so the model reads only the one a task calls for instead of carrying the
+   * whole method in its system prompt.
+   */
+  publishPack(pack: PackDefinition, skills?: SkillUpload[], subagents?: SubagentUpload[]): Promise<PublishedPack>;
   createSession(opts: CreateSessionOptions): Promise<RuntimeSession>;
   sendMessage(sessionId: string, text: string): Promise<void>;
   streamEvents(sessionId: string): Promise<AsyncIterable<RuntimeEvent>>;

@@ -6,8 +6,8 @@
  *
  * Writes <slug>.md, which `ant apply <slug>.md` accepts directly.
  */
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const args = process.argv.slice(2);
 const slug = args.find((a) => !a.startsWith("--"));
@@ -28,15 +28,22 @@ if (!token) {
   process.exit(2);
 }
 
-const res = await fetch(`${host}/packs/${encodeURIComponent(slug)}/export`, {
+// JSON rather than the tar, so the CLI writes the folder itself and never
+// needs a tar reader.
+const res = await fetch(`${host}/packs/${encodeURIComponent(slug)}/export?format=json`, {
   headers: { authorization: `Bearer ${token}` },
 });
 if (!res.ok) {
   console.error(`Could not install ${slug}: ${res.status} ${(await res.text()).slice(0, 300)}`);
   process.exit(1);
 }
-const body = await res.text();
-const path = join(dir, `${slug}.md`);
-writeFileSync(path, body);
-console.log(`Wrote ${path} (${body.length} bytes)`);
-console.log(`Apply it with:  ant apply ${path}`);
+const { files } = await res.json();
+const root = join(dir, slug);
+for (const file of files) {
+  const target = join(root, file.path);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, file.content);
+}
+console.log(`Wrote ${files.length} file(s) into ${root}/`);
+for (const f of files) console.log(`  ${f.path}`);
+console.log(`\nApply it with:  ant apply ${join(root, "agent.md")}`);

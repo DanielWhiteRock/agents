@@ -14,7 +14,7 @@ let n = 0;
 const email = () => `a${++n}-${Date.now()}@example.com`;
 
 const stubRuntime = () => ({
-  publishPack: async () => ({ runtimePackId: `agt_${++n}`, version: "1" }),
+  publishPack: async () => ({ runtimePackId: `agt_${++n}`, version: "1", skills: [], subagents: [] }),
   ensureEnvironment: async () => "env_1",
   createSession: async () => ({ id: `sesn_${++n}`, status: "running", stopReason: null,
     usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
@@ -184,17 +184,69 @@ test("importing a single file creates a pack, and importing again updates it", a
   assert.equal(second.pack.instructions, "Second version of the method.");
 });
 
-test("importing a folder assembles the definition and its skill files", async () => {
+test("a folder is stored as a folder, with skills kept as separate files", async () => {
   const { orgId } = await org();
   const slug = `folder-${++n}`;
   const out = await Auth.importPack({ orgId, files: [
     { path: `${slug}/agent.md`, text: `---\nname: Folder Pack\nslug: ${slug}\nmodel: claude-opus-5\n---\nThe method.` },
-    { path: `${slug}/skills/01-first.md`, text: "Do this first." },
-    { path: `${slug}/skills/02-second.md`, text: "Then this." },
+    { path: `${slug}/skills/elasticity/SKILL.md`,
+      text: "---\nname: elasticity\ndescription: Checks price elasticity. Use when pricing changes.\n---\nDouble it, halve it." },
+    { path: `${slug}/skills/elasticity/references/notes.md`, text: "detail" },
+    { path: `${slug}/agents/reviewer.md`, text: "---\nname: reviewer\ndescription: Reviews drafts.\n---\nYou review." },
+    { path: `${slug}/commands/audit.md`, text: "# audit" },
   ] });
+
   assert.equal(out.created, true);
-  assert.ok(out.pack.instructions.includes("The method."));
-  assert.ok(out.pack.instructions.indexOf("Do this first") < out.pack.instructions.indexOf("Then this"));
+  assert.deepEqual(out.skills, ["elasticity"]);
+  assert.deepEqual(out.subagents, ["reviewer"]);
+  assert.deepEqual(out.inert, ["commands"], "commands travel but do not run here");
+
+  // The system prompt is agent.md's body only — skills are NOT flattened into it.
+  assert.equal(out.pack.instructions, "The method.");
+  assert.ok(!out.pack.instructions.includes("Double it"), "a skill stays a file so it can be read on demand");
+
+  const tree = await P.packTree(out.pack.id);
+  assert.deepEqual(tree.map((f) => f.path).sort(), [
+    "agent.md", "agents/reviewer.md", "commands/audit.md",
+    "skills/elasticity/SKILL.md", "skills/elasticity/references/notes.md",
+  ]);
+});
+
+test("a folder whose skill breaks the published rules is refused, with the reason", async () => {
+  const { orgId } = await org();
+  const slug = `badskill-${++n}`;
+  await assert.rejects(Auth.importPack({ orgId, files: [
+    { path: "agent.md", text: `---\nname: Bad\nslug: ${slug}\n---\nmethod` },
+    // Uppercase and underscores are not a legal skill name, and there is no description.
+    { path: "skills/Bad_Name/SKILL.md", text: "---\nname: Bad_Name\n---\nbody" },
+  ] }), (e) => {
+    assert.equal(e.name, "PackTreeRejected");
+    assert.match(e.message, /lowercase letters, numbers and hyphens/);
+    assert.match(e.message, /no `description`/);
+    return true;
+  });
+});
+
+test("a skill directory with no SKILL.md is refused", async () => {
+  const { orgId } = await org();
+  await assert.rejects(Auth.importPack({ orgId, files: [
+    { path: "agent.md", text: `---\nname: NoSkillMd\nslug: noskillmd-${++n}\n---\nmethod` },
+    { path: "skills/orphan/notes.md", text: "detail" },
+  ] }), /no SKILL.md/);
+});
+
+test("warnings are reported without blocking the upload", async () => {
+  const { orgId } = await org();
+  const slug = `warn-${++n}`;
+  const out = await Auth.importPack({ orgId, files: [
+    { path: "agent.md", text: `---\nname: Warner\nslug: ${slug}\n---\nmethod` },
+    { path: "skills/thing/SKILL.md",
+      text: "---\nname: thing\ndescription: Processes files.\n---\nbody" },
+    { path: "skills/thing/unlinked.md", text: "nobody links to me" },
+  ] });
+  assert.equal(out.pack.slug, slug, "it still landed");
+  assert.ok(out.warnings.some((w) => /not when to use it/.test(w.message)));
+  assert.ok(out.warnings.some((w) => /nothing in SKILL.md links to this file/.test(w.message)));
 });
 
 test("importing over someone else's pack is refused", async () => {
