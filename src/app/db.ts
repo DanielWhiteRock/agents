@@ -389,6 +389,37 @@ CREATE TABLE IF NOT EXISTS pack_saves (
   created_at TEXT NOT NULL,
   PRIMARY KEY (pack_id, org_id)
 );
+
+-- A private conversation between one buyer organisation (org_id) and one
+-- creator (creator_id), scoped to a pack where it started from one —
+-- pack_id is nullable for a thread opened straight from a creator's profile
+-- instead. Never visible to a third organisation: messages.ts checks
+-- membership on every read and write, not just here.
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT REFERENCES packs(id),
+  creator_id TEXT NOT NULL REFERENCES creators(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  subject TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS threads_creator ON threads(creator_id, last_at);
+CREATE INDEX IF NOT EXISTS threads_org ON threads(org_id, last_at);
+
+-- One message in a thread, from either side of it. published_at is stamped
+-- the moment this exact message is quoted into a pack's FAQ, so the same
+-- answer is never appended twice.
+CREATE TABLE IF NOT EXISTS thread_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  body TEXT NOT NULL,
+  published_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS thread_messages_thread ON thread_messages(thread_id, created_at);
 `;
 
 const SUBSTITUTIONS = {

@@ -4,6 +4,7 @@ import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import type { Listing } from "./listing.js";
 import type { CreatorRow } from "./creators.js";
 import type { Rating } from "./social.js";
+import type { InboxThread, MyThread } from "./messages.js";
 
 export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -435,6 +436,7 @@ const ICONS: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="8"/><path d="M12 11v5M12 8h.01"/>',
   warn: '<path d="M12 4l9 16H3zM12 10v4M12 17h.01"/>',
   check: '<path d="M4 12l5 5L20 6"/>',
+  inbox: '<path d="M4 4h16v12H4zM4 4l8 7 8-7M4 20h16"/>',
 };
 
 /** An icon with its name beside it; `only` hides the word but keeps it readable. */
@@ -471,6 +473,7 @@ export function layout(
 <nav>
   ${v ? `<a href="/" title="Catalog">${icon("catalog", "Catalog", true)}</a>
   <a href="/runs" title="Runs">${icon("runs", "Runs", true)}</a>
+  <a href="/inbox" title="Inbox">${icon("inbox", "Inbox", true)}</a>
   <a href="/ledger" title="Points">${icon("points", "Points", true)}</a>
   ${opts.balance !== undefined ? `<a class="bal" href="/ledger" title="${esc(pts(opts.balance))} left">${esc(pts(opts.balance).replace(" points", "").replace(" point", ""))}</a>` : ""}
   <details class="menu"><summary>${esc(v.name)}</summary><div>
@@ -665,7 +668,7 @@ export type PackPageExtras = {
    * `null` for a pack nobody has claimed yet — the byline still shows
    * `p.author`, it just does not go anywhere.
    */
-  creator: { handle: string } | null;
+  creator: { id: string; handle: string } | null;
   /**
    * Average, count and the five-bucket spread, straight off `ratingOf`.
    * `average` stays `null` below `RATING_THRESHOLD`; the page's one rule is
@@ -840,6 +843,17 @@ ${bullets(listing.limitations)}` : ""}
 ${listing && listing.faq.length ? `<h2>Questions people ask</h2>
 ${listing.faq.map((f) => `<details class="repo"><summary>${esc(f.q)}</summary>
   <p class="fine">${esc(f.a)}</p></details>`).join("")}` : ""}
+${creator && !isAuthor ? `<h2>Ask the creator</h2>
+<p class="lede" style="font-size:var(--t2)">A good exchange here is how the FAQ above gets built — from questions a
+buyer actually had, not ones a generator imagined.</p>
+<form method="post" action="/threads" class="card">
+  <input type="hidden" name="creatorId" value="${esc(creator.id)}">
+  <input type="hidden" name="packId" value="${esc(p.id)}">
+  <input type="hidden" name="back" value="/packs/${esc(p.slug)}">
+  <p><label>Subject<br><input type="text" name="subject" style="width:100%" required></label></p>
+  <p><textarea name="body" placeholder="What do you want to know before you run it?" required></textarea></p>
+  <button class="btn" type="submit">Send</button>
+</form>` : ""}
 ${reviews.length > 0 || votes.count > 0 ? `<h2>Reviews</h2>
 ${rating.average !== null ? `<div class="row" style="align-items:flex-start;gap:var(--s6);margin-bottom:var(--s4)">
   <div>
@@ -1655,12 +1669,14 @@ ${c ? `<p class="lede" style="margin-top:var(--s4)"><a href="/creators/${esc(c.h
  * go — proof instead of a promise.
  */
 export function creatorPage(
-  creator: Pick<CreatorRow, "handle" | "display_name" | "bio" | "avatar" | "links" | "verified">,
+  creator: Pick<CreatorRow, "id" | "handle" | "display_name" | "bio" | "avatar" | "links" | "verified">,
   packs: Array<PackRow & { pricePoints: number; stats: { runs: number; buyers: number; version: number } }>,
   stats: { packs: number; runs: number; orgs: number },
   rating: { average: number | null; count: number },
   viewer: Viewer,
   balance: number,
+  /** False for the creator's own organisation looking at its own page — there is no one there to ask. */
+  canAsk = false,
 ): string {
   const bio = creator.bio.trim();
   const links = parseLinks(creator.links);
@@ -1697,7 +1713,92 @@ ${packs.map((p) => `<tr>
   <td class="num">${p.stats.buyers.toLocaleString("en-US")}</td>
   <td class="num">${p.pricePoints === 0 ? "free" : `${p.pricePoints.toLocaleString("en-US")} pts`}</td>
 </tr>`).join("")}
-</table>` : ""}`,
+</table>` : ""}
+${canAsk ? `<h2>Ask ${esc(creator.display_name)} a question</h2>
+<form method="post" action="/threads" class="card">
+  <input type="hidden" name="creatorId" value="${esc(creator.id)}">
+  <input type="hidden" name="back" value="/creators/${esc(creator.handle)}">
+  <p><label>Subject<br><input type="text" name="subject" style="width:100%" required></label></p>
+  <p><textarea name="body" placeholder="Ask about their packs, or anything else" required></textarea></p>
+  <button class="btn" type="submit">Send</button>
+</form>` : ""}`,
+  { balance, viewer });
+}
+
+/** A relative time, coarse on purpose — "when" matters here, not "exactly when". */
+function since(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** One thread, rendered the same way on both sides of `inboxPage` apart from who gets called "You". */
+function threadCard(
+  t: { id: string; subject: string; pack: { slug: string; name: string } | null;
+    messages: Array<{ id: string; org_id: string; body: string; published_at: string | null; created_at: string }> },
+  selfOrgId: string, otherLabel: string, publishable: boolean,
+): string {
+  const asker = t.messages.find((m) => m.org_id !== selfOrgId) ?? t.messages[0];
+  const answers = publishable ? t.messages.filter((m) => m.org_id === selfOrgId) : [];
+  return `<div class="card" style="margin-bottom:var(--s4)">
+  <p class="row" style="justify-content:space-between;margin:0 0 var(--s2)">
+    <strong>${esc(t.subject)}</strong>
+    ${t.pack ? `<a class="tag" href="/packs/${esc(t.pack.slug)}">${esc(t.pack.name)}</a>` : `<span class="tag">general</span>`}
+  </p>
+  ${t.messages.map((m) => `<p style="margin:0 0 var(--s2)">
+    <strong>${m.org_id === selfOrgId ? "You" : esc(otherLabel)}</strong>
+    <span class="tag" style="margin-left:.5em">${esc(since(m.created_at))}</span>
+    ${m.published_at ? `<span class="tag">published</span>` : ""}<br>${esc(m.body)}</p>`).join("")}
+  <form method="post" action="/threads/${esc(t.id)}/reply" class="row">
+    <textarea name="body" placeholder="Reply" required style="flex:1;min-height:3rem"></textarea>
+    <button class="btn ghost" type="submit">Reply</button>
+  </form>
+  ${publishable && t.pack && asker && answers.length
+    ? `<form method="post" action="/threads/${esc(t.id)}/publish" class="row" style="margin-top:var(--s2)">
+    <label>Question
+      <select name="questionId">${t.messages.filter((m) => m.org_id !== selfOrgId).map((m) =>
+        `<option value="${esc(m.id)}"${m.id === asker.id ? " selected" : ""}>${esc(m.body.slice(0, 60))}</option>`).join("")}
+      </select></label>
+    <label>Answer
+      <select name="answerId">${answers.map((m) =>
+        `<option value="${esc(m.id)}"${m.id === answers[answers.length - 1]!.id ? " selected" : ""}>${esc(m.body.slice(0, 60))}</option>`).join("")}
+      </select></label>
+    <button class="btn" type="submit">Publish to FAQ</button>
+  </form>` : ""}
+</div>`;
+}
+
+/**
+ * Every thread this organisation can see — the ones asked of its own
+ * creator profile, if it has one, and the ones it has itself opened with
+ * someone else's. Neither list is ever another organisation's: `threadsFor`
+ * and `threadsForOrg` scope by exact ID, so there is nothing to filter here.
+ *
+ * Follows `packPage`'s own rule: a section with nothing in it gets no
+ * heading. With both lists empty, that leaves only the page title — so one
+ * line says so instead of two headings over blanks.
+ */
+export function inboxPage(args: {
+  asked: InboxThread[];
+  mine: MyThread[];
+  selfOrgId: string;
+  viewer: Viewer;
+  balance: number;
+  err?: string;
+}): string {
+  const { asked, mine, selfOrgId, viewer, balance, err } = args;
+  return layout("Inbox", `
+<h1>Inbox</h1>
+<p class="lede">Questions asked of you, and questions you have asked.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+${asked.length === 0 && mine.length === 0 ? `<p class="lede">No conversations yet.</p>` : ""}
+${asked.length ? `<h2>Asked of you</h2>
+${asked.map((t) => threadCard(t, selfOrgId, t.askerOrgName, true)).join("")}` : ""}
+${mine.length ? `<h2>Your questions</h2>
+${mine.map((t) => threadCard(t, selfOrgId, t.creatorName, false)).join("")}` : ""}`,
   { balance, viewer });
 }
 

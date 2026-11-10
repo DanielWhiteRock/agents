@@ -15,6 +15,7 @@ import * as P from "./platform.js";
 import * as Cr from "./creators.js";
 import * as L from "./listing.js";
 import * as S from "./social.js";
+import * as M from "./messages.js";
 import { permissionSummary } from "../packs/permissions.js";
 import * as V from "./views.js";
 
@@ -236,7 +237,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       updatedAt: v?.created_at ?? null,
       builtOn: p.built_on,
       refundDays: await settingInt("refund_window_days"),
-      creator: creatorHandle ? { handle: creatorHandle } : null,
+      creator: creatorHandle && p.creator_id ? { id: p.creator_id, handle: creatorHandle } : null,
       rating: await S.ratingOf(p.id),
       reviews: await reviewsOf(p.id),
       mayReview: await S.mayReview(ctx.orgId, p.id),
@@ -700,7 +701,70 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       stats: await P.packStats(p.id),
     })));
     return html(res, V.creatorPage(
-      creator, packs, await Cr.creatorStats(creator.id), await S.creatorRating(creator.id), viewer, await bal()));
+      creator, packs, await Cr.creatorStats(creator.id), await S.creatorRating(creator.id), viewer, await bal(),
+      creator.org_id !== ctx.orgId));
+  }
+
+  // ------------------------------------------------------------- messages
+  // A private line between a buyer organisation and a creator. GET /inbox
+  // shows whichever side of that this organisation is on: threads asked of
+  // its own creator profile, if it has one, and threads it has itself
+  // opened with someone else's. Neither `threadsFor` nor `threadsForOrg`
+  // ever returns a thread belonging to a third organisation, so there is
+  // nothing to filter at this layer — the scoping is in the query.
+  if (method === "GET" && path === "/inbox") {
+    const mine = await Cr.creatorForOrg(ctx.orgId);
+    return html(res, V.inboxPage({
+      asked: mine ? await M.threadsFor(mine.id) : [],
+      mine: await M.threadsForOrg(ctx.orgId),
+      selfOrgId: ctx.orgId, viewer, balance: await bal(),
+      err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+
+  if (method === "POST" && path === "/threads") {
+    const f = await body(req);
+    // Only an internal, absolute path is honoured — "//evil.example" parses as
+    // "/" followed by a protocol-relative host, not a path, so it is refused
+    // along with anything else that does not start with a single slash.
+    const backField = f["back"] ?? "";
+    const back = backField.startsWith("/") && !backField.startsWith("//") ? backField : "/inbox";
+    try {
+      await M.openThread({
+        orgId: ctx.orgId, userId: ctx.userId, creatorId: f["creatorId"] ?? "",
+        packId: f["packId"] || null, subject: f["subject"] ?? "", body: f["body"] ?? "",
+      });
+    } catch (e) { return redirect(res, `${back}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, "/inbox");
+  }
+
+  const replyMatch = /^\/threads\/([a-z0-9_]+)\/reply$/.exec(path);
+  if (method === "POST" && replyMatch) {
+    const f = await body(req);
+    try {
+      await M.reply({ threadId: replyMatch[1]!, orgId: ctx.orgId, userId: ctx.userId, body: f["body"] ?? "" });
+    } catch (e) {
+      // A third organisation's reply gets the same 404 a bad thread ID would
+      // — not a redirect-with-error, which would at least confirm the
+      // thread exists.
+      if (statusOf(e) === 404) return html(res, V.layout("Not found", "<h1>No such thread</h1>", { viewer }), 404);
+      return redirect(res, `/inbox?err=${encodeURIComponent(msg(e))}`);
+    }
+    return redirect(res, "/inbox");
+  }
+
+  const faqMatch = /^\/threads\/([a-z0-9_]+)\/publish$/.exec(path);
+  if (method === "POST" && faqMatch) {
+    const f = await body(req);
+    const mine = await Cr.creatorForOrg(ctx.orgId);
+    if (!mine) return html(res, V.layout("Not found", "<h1>No such thread</h1>", { viewer }), 404);
+    try {
+      await M.publishToFaq(mine.id, faqMatch[1]!, f["questionId"] ?? "", f["answerId"] ?? "");
+    } catch (e) {
+      if (statusOf(e) === 404) return html(res, V.layout("Not found", "<h1>No such thread</h1>", { viewer }), 404);
+      return redirect(res, `/inbox?err=${encodeURIComponent(msg(e))}`);
+    }
+    return redirect(res, "/inbox");
   }
 
   // ------------------------------------------------------------- authoring

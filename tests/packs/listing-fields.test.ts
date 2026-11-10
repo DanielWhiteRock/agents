@@ -323,7 +323,7 @@ describe("the pack page", () => {
   });
 
   it("links the byline to the creator's page when the pack has one", () => {
-    const h = render({ extras: { creator: { handle: "typeui" } } });
+    const h = render({ extras: { creator: { id: "cr_1", handle: "typeui" } } });
     expect(h).toContain(`<a href="/creators/typeui">typeui.sh</a>`);
   });
 
