@@ -483,9 +483,9 @@ Perspective's own brief, rendered.
 
 | Section | File | Reads as |
 |---|---|---|
-| 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.webp` | one module lifted glowing out of a row of dormant ones, its slot still lit. Hiring. Left third left empty for the headline. |
+| 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` · `.webm` · poster | a person, eyes closed, a thread of light leaving her temple and arriving in a machine that is now the lit thing. See below. |
 | 4 What's in a worker | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/anatomy.webp` | a solid block exploded into six stacked plates, the top one lit. A folder, not a file. |
-| 6b Somebody wrote this | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | a worn bench, chisels laid out, a lamp still on, an empty stool, one finished thing with a blank face. Made by somebody who has gone home. |
+| 6b Somebody wrote this | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | the same frame, held: the person and what she handed over. |
 | 7 It runs here | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/runs-here.webp` | a sealed enclosure with a glowing core, a measured ribbon unrolling out of it. Hosted, and metered. |
 | 8 Connect over MCP | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/mcp.webp` | five cables converging into one socket. |
 | 9 For authors | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/authors.webp` | one original on a plinth, many faint copies around it, coins returning along a curve. |
@@ -505,3 +505,34 @@ palette by hex code and the model rendered `#F7F8FF` and `118.30` into the
 image as literal text, despite "no text" in the same prompt. Describe colour
 in words — "warm off-white", "emerald" — and say "no written characters of any
 kind". The four that did so came back clean first time.
+
+### The hero is a film, and it has a still
+
+The claim the front page makes is that somebody's expertise runs without them
+standing there. The hero shows exactly that: a person with her eyes closed and
+a thread of light leaving her temple, arriving in a machine that is now the
+thing that is lit.
+
+| File | What it is |
+|---|---|
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` | 4s, 1280×720, h264, no audio, 229KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.webm` | the same in VP9, 216KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero-poster.webp` | first frame, 26KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | the same frame at 1200px, for section 6b |
+
+**It must not autoplay for everyone.** Our own rule, from
+`docs/design/perspective.md` and enforced by the judge: motion is a
+preference. The markup is a `<video>` with `poster`, `muted`, `playsinline`,
+`loop` and `autoplay`, wrapped so that under
+`@media (prefers-reduced-motion: reduce)` the video is hidden and the poster
+shows as a plain `<img>` in its place. Nobody gets a looping human face they
+did not ask for.
+
+It carries real weight too — 229KB against a page that is otherwise about
+40KB — so it loads with `preload="none"` and only on screens wide enough to
+show it at a size worth the bytes. On a phone the poster is the hero.
+
+**A note on the person.** She is generated, and that is fine here and would
+not be on an author's profile. This image makes no claim about a particular
+individual; an avatar on a pack card does, which is why those stay initials
+until somebody uploads their own face.
