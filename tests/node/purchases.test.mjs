@@ -225,3 +225,26 @@ test("a run cannot be started on a pack that was never bought", async () => {
   const v = await P.latestVersion((await P.getPack("campaign-strategist")).id);
   await assert.rejects(P.startRun({ orgId, userId, packVersionId: v.id }), (e) => e.name === "NotEntitledError");
 });
+
+test("a run is refused when the balance is empty, and allowed once topped up", async () => {
+  provider.setPayments(new provider.StubProvider());
+  const s = await sql();
+  const { orgId, userId } = await org();
+  const v = await P.publishPack("guardrails");
+  await Pay.beginPurchase({ orgId, userId, packVersionId: v.id, amountCents: 0, description: "free", ...ARGS });
+  P.setRuntime({
+    publishPack: async () => ({ runtimePackId: "agt_test", version: "1" }),
+    ensureEnvironment: async () => "env_1",
+    createSession: async () => ({ id: "sesn_p", status: "running", stopReason: null,
+      usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
+    deleteSession: async () => {},
+  });
+
+  // Spend the signup grant down to nothing.
+  await s.query("DELETE FROM points_ledger WHERE org_id = $1", [orgId]);
+  await assert.rejects(P.startRun({ orgId, userId, packVersionId: v.id }), (e) => e.name === "OutOfPointsError");
+
+  await Pay.beginPointsPurchase({ orgId, userId, amountCents: 300, ...ARGS });
+  const run = await P.startRun({ orgId, userId, packVersionId: v.id });
+  assert.ok(run.id, "with compute bought, the run starts");
+});

@@ -74,7 +74,7 @@ export function layout(
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
 <nav>
   ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  <a href="/purchases">Purchases</a><a href="/authors">Authors</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
+  <a href="/purchases">Purchases</a><a href="/authors">Authors</a><a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
   ${opts.balance !== undefined ? `<span class="tag">${esc(fmt(opts.balance))}</span>` : ""}
   <span class="tag" title="${esc(v.email)}">${esc(v.orgName)} · ${esc(v.name)}${v.role === "owner" ? " (owner)" : ""}</span>
   <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
@@ -428,4 +428,46 @@ ${args.history.map((h) => `<tr><td>${esc(h.created_at.slice(0, 16).replace("T", 
 <td>${esc(h.name)}</td><td>${esc(h.recipient)}</td><td class="num">${esc(fmtMilli(h.millicents))}</td>
 <td><span class="tag">${esc(h.status)}</span></td></tr>`).join("") || `<tr><td colspan="5">No payouts yet.</td></tr>`}
 </table>`, { balance: args.balance, viewer: args.viewer });
+}
+
+// ------------------------------------------------------------------- tokens
+
+export function tokensPage(
+  tokens: Array<{ token: string; name: string; created_at: string; last_used_at: string | null }>,
+  base: string, justCreated: string | undefined, balance: number, viewer: Viewer = null,
+): string {
+  return layout("MCP access", `
+<h1>Shop from inside your own agent</h1>
+<p class="lede">The catalog is also an MCP server. Add one endpoint to whatever agent you already run, and it can
+search packs, read what you own, and pull up any run's transcript and cost without opening this site.</p>
+
+${justCreated ? `<div class="note" style="border-color:var(--good);background:color-mix(in oklab,var(--good) 10%,transparent)">
+  <strong>Your new token — copy it now, it is not shown again.</strong>
+  <pre style="margin:8px 0;white-space:pre-wrap;word-break:break-all;font-size:13px">${esc(justCreated)}</pre>
+</div>` : ""}
+
+<h2>Connect it</h2>
+<p class="lede" style="font-size:14px">Endpoint and authentication:</p>
+<pre class="card" style="white-space:pre-wrap;word-break:break-all;font-size:13px">${esc(base)}/mcp
+Authorization: Bearer &lt;your token&gt;</pre>
+<p class="lede" style="font-size:14px">Six tools: <code>search_packs</code>, <code>pack_details</code>,
+<code>my_library</code>, <code>install_pack</code>, <code>list_runs</code>, <code>run_trace</code>.
+Nothing here spends money — buying needs a browser, so <code>install_pack</code> hands back a link instead.</p>
+
+<h2>Tokens</h2>
+<table><tr><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
+${tokens.map((t) => `<tr><td>${esc(t.name)}</td>
+<td>${esc(t.created_at.slice(0, 10))}</td>
+<td>${t.last_used_at ? esc(t.last_used_at.slice(0, 16).replace("T", " ")) : "never"}</td>
+<td><form method="post" action="/tokens/revoke" class="inline">
+  <input type="hidden" name="token" value="${esc(t.token)}">
+  <button class="btn ghost" style="padding:5px 10px">Revoke</button></form></td></tr>`).join("")
+  || `<tr><td colspan="4">No tokens yet.</td></tr>`}
+</table>
+<form method="post" action="/tokens" class="row" style="margin-top:14px">
+  <input type="text" name="name" placeholder="What is it for — e.g. my laptop" size="30" required>
+  <button class="btn" type="submit">Create a token</button>
+</form>
+<p class="lede" style="margin-top:10px;font-size:14px">A token acts for this whole organisation. Revoking one takes effect immediately.</p>`,
+  { balance, viewer });
 }

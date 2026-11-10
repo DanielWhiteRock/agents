@@ -4,6 +4,7 @@ import { allSettings, initDb, putSetting, setting, settingInt } from "./db.js";
 import * as A from "./auth.js";
 import * as Pay from "../billing/purchases.js";
 import { payments } from "../billing/provider.js";
+import { handleMcpRequest } from "../mcp/server.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceCents, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
@@ -45,6 +46,18 @@ function body(req: http.IncomingMessage): Promise<Record<string, string>> {
       const out: Record<string, string> = {};
       for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
       resolve(out);
+    });
+    req.on("error", reject);
+  });
+}
+
+function jsonBody(req: http.IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; if (raw.length > 4e6) req.destroy(); });
+    req.on("end", () => {
+      if (!raw) return resolve(undefined);
+      try { resolve(JSON.parse(raw)); } catch { reject(new Error("invalid JSON body")); }
     });
     req.on("error", reject);
   });
@@ -334,18 +347,29 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       rows.map((r) => ({ ...r, runs: Number(r.runs), millicents: Number(r.millicents) })), await bal(), viewer));
   }
 
+  // ---------------------------------------------------------------- tokens
+  if (method === "GET" && path === "/tokens") {
+    return html(res, V.tokensPage(await A.apiTokens(ctx.orgId), baseUrl(req),
+      url.searchParams.get("new") ?? undefined, await bal(), viewer));
+  }
+  if (method === "POST" && path === "/tokens") {
+    const f = await body(req);
+    const token = await A.createApiToken(ctx.orgId, ctx.userId, (f["name"] ?? "").trim());
+    // Shown once, in the URL of the redirect, then never again.
+    return redirect(res, `/tokens?new=${encodeURIComponent(token)}`);
+  }
+  if (method === "POST" && path === "/tokens/revoke") {
+    const f = await body(req);
+    await A.revokeApiToken(ctx.orgId, f["token"] ?? "");
+    return redirect(res, "/tokens");
+  }
+
   if (method === "GET" && path === "/settings") { ownerOnly(); return html(res, V.settingsPage(await allSettings(), await bal(), viewer)); }
   if (method === "POST" && path === "/settings") {
     ownerOnly();
     const f = await body(req);
     if (f["key"]) await putSetting(f["key"], f["value"] ?? "");
     return redirect(res, "/settings");
-  }
-
-  if (method === "GET" && path === "/healthz") {
-    const s = await sql();
-    res.writeHead(200, { "content-type": "application/json" });
-    return void res.end(JSON.stringify({ ok: true, store: s.dialect, balance: fmt(await bal()) }));
   }
 
   return html(res, V.layout("Not found",
@@ -502,6 +526,28 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method ?? "GET";
+
+  if (method === "GET" && path === "/healthz") {
+    // Before the session gate: a health check has no cookie.
+    const s2 = await sql();
+    res.writeHead(200, { "content-type": "application/json" });
+    return void res.end(JSON.stringify({ ok: true, store: s2.dialect, payments: payments().name }));
+  }
+
+  // The MCP endpoint authenticates with a bearer token, not a cookie, so it is
+  // resolved before the session gate.
+  if (path === "/mcp") {
+    const who = await A.orgFromApiToken(req.headers.authorization);
+    if (!who) {
+      res.writeHead(401, { "content-type": "application/json", "www-authenticate": "Bearer" });
+      return void res.end(JSON.stringify({
+        jsonrpc: "2.0", id: null,
+        error: { code: -32001, message: "A bearer token is required. Create one at /tokens." },
+      }));
+    }
+    const body = method === "POST" ? await jsonBody(req) : undefined;
+    return handleMcpRequest(req, res, body, { ...who, baseUrl: baseUrl(req) });
+  }
 
   if (await accountRoutes(req, res)) return;
 

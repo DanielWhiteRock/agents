@@ -1,6 +1,7 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { id, now, settingInt } from "./db.js";
 import { sql } from "./sql.js";
+import { credit } from "../billing/points.js";
 
 /**
  * Passwords, sessions, invitations and roles.
@@ -120,6 +121,11 @@ export async function signUp(args: {
     `INSERT INTO users (id, org_id, email, name, role, password_hash, created_at)
      VALUES ($1,$2,$3,$4,'owner',$5,$6)`,
     [userId, orgId, args.email, args.name, hashPassword(args.password), now()]);
+  // The tier's monthly grant, which expires. Without this a new organisation
+  // had no points at all, so every run came out of the platform's pocket and
+  // the ledger stayed empty.
+  await credit(orgId, "grant", await settingInt(`tier.${tier}.points_cents`), `${tier} monthly grant`,
+    new Date(Date.now() + 30 * 86400_000).toISOString());
   return { userId, orgId, token: await createSession(userId) };
 }
 
@@ -206,4 +212,45 @@ export async function removeMember(orgId: string, userId: string): Promise<void>
   }
   await s.query("DELETE FROM user_sessions WHERE user_id = $1", [userId]);
   await s.query("DELETE FROM users WHERE org_id = $1 AND id = $2", [orgId, userId]);
+}
+
+// ------------------------------------------------------------- api tokens
+
+export type ApiTokenRow = {
+  token: string; org_id: string; user_id: string; name: string;
+  created_at: string; last_used_at: string | null; revoked_at: string | null;
+};
+
+/** Returned once, in full. Only the row remains afterwards. */
+export async function createApiToken(orgId: string, userId: string, name: string): Promise<string> {
+  const s = await sql();
+  const token = `mk_${newToken()}`;
+  await s.query(
+    "INSERT INTO api_tokens (token, org_id, user_id, name, created_at) VALUES ($1,$2,$3,$4,$5)",
+    [token, orgId, userId, name || "unnamed", now()]);
+  return token;
+}
+
+export async function apiTokens(orgId: string): Promise<ApiTokenRow[]> {
+  const s = await sql();
+  return s.query<ApiTokenRow>(
+    "SELECT * FROM api_tokens WHERE org_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC", [orgId]);
+}
+
+export async function revokeApiToken(orgId: string, token: string): Promise<void> {
+  const s = await sql();
+  await s.query("UPDATE api_tokens SET revoked_at = $1 WHERE org_id = $2 AND token = $3", [now(), orgId, token]);
+}
+
+/** Resolve a bearer token to an organisation, and note that it was used. */
+export async function orgFromApiToken(bearer: string | undefined): Promise<{ orgId: string; userId: string } | null> {
+  if (!bearer) return null;
+  const token = bearer.replace(/^Bearer\s+/i, "").trim();
+  if (!token) return null;
+  const s = await sql();
+  const row = await s.one<ApiTokenRow>(
+    "SELECT * FROM api_tokens WHERE token = $1 AND revoked_at IS NULL", [token]);
+  if (!row) return null;
+  await s.query("UPDATE api_tokens SET last_used_at = $1 WHERE token = $2", [now(), token]);
+  return { orgId: row.org_id, userId: row.user_id };
 }

@@ -7,7 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { id, initDb, now, setting, settingInt } from "./db.js";
 import { sql } from "./sql.js";
-import { credit, creditAuthor, debit } from "../billing/points.js";
+import { balanceCents, credit, creditAuthor, debit } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
 import { resumeAfterDecision, runTurn, type TurnResult } from "../runtime/run.js";
 import { cents, fromCents } from "../runtime/money.js";
@@ -171,6 +171,14 @@ export async function entitled(orgId: string, packVersionId: string): Promise<bo
 }
 
 /** Thrown when a run is attempted on a pack the organisation does not own. */
+/** Thrown when an organisation has no compute left to spend. */
+export class OutOfPointsError extends Error {
+  constructor() {
+    super("no points left — buy more compute to keep running agents");
+    this.name = "OutOfPointsError";
+  }
+}
+
 export class NotEntitledError extends Error {
   constructor() {
     super("this organisation does not own that pack version");
@@ -213,6 +221,9 @@ export async function startRun(args: {
   const pack = (await packById(version.pack_id))!;
 
   await assertEntitled(args.orgId, args.packVersionId);
+  // Points are the fuel. Starting a run with an empty balance would make the
+  // subsidy unbounded, so it is refused rather than quietly absorbed.
+  if ((await balanceCents(args.orgId)) <= 0) throw new OutOfPointsError();
 
   const org = await s.one<{ concurrency_limit: number }>("SELECT * FROM orgs WHERE id = $1", [args.orgId]);
   if ((await activeRunCount(args.orgId)) >= Number(org!.concurrency_limit)) {
@@ -367,6 +378,9 @@ async function meter(runId: string, result: TurnResult): Promise<{ billedCents: 
   const costCents = Math.max(Number(cents(session.usage.listCost)), run.list_cost_cents);
   const delta = Math.max(0, costCents - run.billed_up_to_cents);
   const billed = await debit(run.org_id, delta, "agent run", runId);
+  // The author is credited on the work done, not on what we managed to collect:
+  // if a balance ran dry mid-turn the platform ate the difference, which is the
+  // subsidy the owner chose, not the author's problem.
   const authorMilli = await creditAuthor(version.pack_id, runId, delta);
 
   await s.query(
@@ -400,6 +414,7 @@ export async function sendTurn(runId: string, text: string, onEvent?: (e: Runtim
   if (!run) throw new Error("unknown run");
   // A refund revokes the entitlement; the run must not keep working afterwards.
   await assertEntitled(run.org_id, run.pack_version_id);
+  if ((await balanceCents(run.org_id)) <= 0) throw new OutOfPointsError();
   await recordEvent(runId, "user.message", { text });
   draining.add(runId);
   try {

@@ -49,6 +49,20 @@ CREATE TABLE IF NOT EXISTS invites (
 );
 CREATE INDEX IF NOT EXISTS invites_org ON invites(org_id);
 
+-- Bearer tokens for the MCP endpoint, so an agent can shop the catalog from
+-- wherever it already runs. Scoped to one organisation, revocable, never shown
+-- again after creation.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  token TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS api_tokens_org ON api_tokens(org_id);
+
 CREATE TABLE IF NOT EXISTS packs (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,

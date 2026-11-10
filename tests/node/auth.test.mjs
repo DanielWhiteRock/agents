@@ -105,3 +105,12 @@ test("removing a member kills their sessions", async () => {
   await A.removeMember(orgId, session.user.id);
   assert.equal(await A.sessionFromToken(token), null);
 });
+
+test("a new organisation starts with its tier's monthly grant", async () => {
+  const points = await import("../../dist/src/billing/points.js");
+  const { orgId } = await A.signUp({ email: email(), name: "Fresh", password: "correct-horse", orgName: "Fresh" });
+  const buckets = await points.balanceByBucket(orgId);
+  assert.equal(buckets.grant, 120, "the personal tier's grant, in cents of compute");
+  assert.equal(buckets.topup, 0);
+  assert.ok((await points.balanceCents(orgId)) > 0, "a new org can actually run something");
+});
