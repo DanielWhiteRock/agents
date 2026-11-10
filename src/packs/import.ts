@@ -34,6 +34,14 @@ export type ParsedPack = {
   advisorModel?: string;
   /** Where the web tools may look. One list or the other, never both. */
   web?: { allowedDomains?: string[]; blockedDomains?: string[] };
+  /** The long body of the listing — `description` keeps meaning the tagline. */
+  descriptionLong?: string;
+  useCases: string[];
+  limitations: string[];
+  faq: Array<{ q: string; a: string }>;
+  requirements: string[];
+  /** What this pack was written against, e.g. "Claude Opus 5". */
+  builtOn?: string;
   /** Keys present in the file that this reader does not understand. */
   unknownKeys: string[];
 };
@@ -83,6 +91,11 @@ const KNOWN = new Set([
   // browser, which meant a folder was never the whole pack and anybody
   // publishing a set of them had a manual step per pack.
   "price", "tags", "image", "role",
+  // The listing a buyer reads before they buy — a folder's chance to carry
+  // one in, rather than publishing to a blank pack page. `description_long`
+  // is deliberately not `description`: that key already means the tagline,
+  // and every existing agent.md relies on it keeping that meaning.
+  "description_long", "use_cases", "limitations", "faq", "requirements", "built_on",
 ]);
 
 const list = (v: string): string[] =>
@@ -108,7 +121,8 @@ export function splitFrontMatter(text: string): { front: string; body: string } 
 export function parsePackMarkdown(text: string): ParsedPack {
   const { front, body } = splitFrontMatter(text);
   const out: ParsedPack = {
-    instructions: "", mcpServers: [], pinnedModels: [], anthropicSkills: [], unknownKeys: [],
+    instructions: "", mcpServers: [], pinnedModels: [], anthropicSkills: [],
+    useCases: [], limitations: [], faq: [], requirements: [], unknownKeys: [],
   };
 
   const lines = front.split("\n");
@@ -145,6 +159,11 @@ export function parsePackMarkdown(text: string): ParsedPack {
       // `advisor: claude-opus-5` as a scalar, or an object on the lines below.
       if (topKey === "advisor" && value) out.advisorModel = unquote(value);
       if (topKey === "pinned_models" && value) out.pinnedModels = list(value);
+      if (topKey === "description_long" && value) out.descriptionLong = unquote(value);
+      if (topKey === "use_cases" && value) out.useCases = list(value);
+      if (topKey === "limitations" && value) out.limitations = list(value);
+      if (topKey === "requirements" && value) out.requirements = list(value);
+      if (topKey === "built_on" && value) out.builtOn = unquote(value);
       continue;
     }
 
@@ -159,6 +178,10 @@ export function parsePackMarkdown(text: string): ParsedPack {
     if (topKey === "mcp_servers") {
       if (key === "name") out.mcpServers.push({ name: value, url: "" });
       if (key === "url" && out.mcpServers.length) out.mcpServers[out.mcpServers.length - 1]!.url = value;
+    }
+    if (topKey === "faq") {
+      if (key === "q") out.faq.push({ q: value, a: "" });
+      if (key === "a" && out.faq.length) out.faq[out.faq.length - 1]!.a = value;
     }
     if (topKey === "skills") {
       // Anthropic's prebuilt skills are referenced by short name. A pack's own

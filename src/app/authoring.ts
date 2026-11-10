@@ -47,6 +47,15 @@ export type PackInput = {
   mcpServers?: Array<{ name: string; url: string }>;
   payoutEmail?: string;
   extras?: P.PackExtras;
+  /** The listing a buyer reads before they buy, carried in from a folder or
+   *  written in the browser. Plain fields rather than `Listing` itself —
+   *  `listing.ts` imports `authoring.ts`, not the other way round. */
+  descriptionLong?: string;
+  useCases?: string[];
+  limitations?: string[];
+  faq?: Array<{ q: string; a: string }>;
+  requirements?: string[];
+  builtOn?: string;
 };
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -79,13 +88,19 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
        model, effort, pinned_models, extras, instructions, tags, image, status,
-       author_payout_email, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,'draft',$14,$15)`,
+       author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,'draft',$14,$15,$19,$20,$21,$22,$23,$24)`,
     [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, now(),
-      input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? ""]);
+      // `role` ($18) has never been referenced by the VALUES clause above —
+      // pre-existing and out of this task's scope to fix. New fields start at
+      // $19, right after it, so as not to collide with its array slot.
+      input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? "",
+      input.descriptionLong?.trim() ?? "", JSON.stringify(input.useCases ?? []),
+      JSON.stringify(input.limitations ?? []), JSON.stringify(input.faq ?? []),
+      JSON.stringify(input.requirements ?? []), input.builtOn?.trim() || null]);
   return (await P.getPack(slug))!;
 }
 
@@ -99,13 +114,24 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
   await s.query(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
-       author_payout_email = $11, tags = $13, image = $14, role = $15 WHERE id = $12`,
+       author_payout_email = $11, tags = $13, image = $14, role = $15,
+       description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21
+     WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id,
       input.tags?.trim() ?? pack.tags, input.image?.trim() || pack.image,
-      input.role?.trim() || pack.role]);
+      input.role?.trim() || pack.role,
+      // A caller that never mentions the listing (the plain pack-details form,
+      // for instance) must not wipe one set through the import or listing
+      // flows — so an absent field keeps the row's current value.
+      input.descriptionLong?.trim() ?? pack.description,
+      input.useCases ? JSON.stringify(input.useCases) : pack.use_cases,
+      input.limitations ? JSON.stringify(input.limitations) : pack.limitations,
+      input.faq ? JSON.stringify(input.faq) : pack.faq,
+      input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
+      input.builtOn?.trim() || pack.built_on]);
   return (await P.getPack(slug))!;
 }
 
@@ -223,6 +249,24 @@ export async function importPack(args: {
       : existing ? JSON.parse(existing.pinned_models) : args.defaults?.pinnedModels ?? [],
     mcpServers: parsed.mcpServers,
     payoutEmail: args.defaults?.payoutEmail ?? existing?.author_payout_email ?? undefined,
+    // Same precedence as above: the folder wins when it says something, an
+    // approved listing already on the pack survives otherwise, so a re-import
+    // of just the instructions does not wipe a listing an author wrote in
+    // the browser.
+    descriptionLong: parsed.descriptionLong ?? existing?.description ?? "",
+    useCases: parsed.useCases.length
+      ? parsed.useCases
+      : existing ? JSON.parse(existing.use_cases || "[]") : [],
+    limitations: parsed.limitations.length
+      ? parsed.limitations
+      : existing ? JSON.parse(existing.limitations || "[]") : [],
+    faq: parsed.faq.length
+      ? parsed.faq
+      : existing ? JSON.parse(existing.faq || "[]") : [],
+    requirements: parsed.requirements.length
+      ? parsed.requirements
+      : existing ? JSON.parse(existing.requirements || "[]") : [],
+    builtOn: parsed.builtOn ?? existing?.built_on ?? undefined,
     extras: {
       ...(parsed.anthropicSkills.length ? { anthropicSkills: parsed.anthropicSkills } : {}),
       ...(parsed.advisorModel ? { advisorModel: parsed.advisorModel } : {}),
