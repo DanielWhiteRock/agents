@@ -170,6 +170,23 @@ export async function entitled(orgId: string, packVersionId: string): Promise<bo
   return Boolean(row);
 }
 
+/** Thrown when a run is attempted on a pack the organisation does not own. */
+export class NotEntitledError extends Error {
+  constructor() {
+    super("this organisation does not own that pack version");
+    this.name = "NotEntitledError";
+  }
+}
+
+/**
+ * Checked here rather than only at the route, so a refund, a revoked
+ * entitlement or a new code path cannot quietly let a run continue on a pack
+ * nobody owns.
+ */
+export async function assertEntitled(orgId: string, packVersionId: string): Promise<void> {
+  if (!(await entitled(orgId, packVersionId))) throw new NotEntitledError();
+}
+
 export async function grantEntitlement(orgId: string, packVersionId: string): Promise<void> {
   const s = await sql();
   await s.query(
@@ -194,6 +211,8 @@ export async function startRun(args: {
   const version = await getVersion(args.packVersionId);
   if (!version) throw new Error("unknown pack version");
   const pack = (await packById(version.pack_id))!;
+
+  await assertEntitled(args.orgId, args.packVersionId);
 
   const org = await s.one<{ concurrency_limit: number }>("SELECT * FROM orgs WHERE id = $1", [args.orgId]);
   if ((await activeRunCount(args.orgId)) >= Number(org!.concurrency_limit)) {
@@ -379,6 +398,8 @@ export async function sendTurn(runId: string, text: string, onEvent?: (e: Runtim
 }> {
   const run = await getRun(runId);
   if (!run) throw new Error("unknown run");
+  // A refund revokes the entitlement; the run must not keep working afterwards.
+  await assertEntitled(run.org_id, run.pack_version_id);
   await recordEvent(runId, "user.message", { text });
   draining.add(runId);
   try {
@@ -407,6 +428,7 @@ export async function decide(
 ): Promise<RunRow> {
   const run = await getRun(runId);
   if (!run) throw new Error("unknown run");
+  await assertEntitled(run.org_id, run.pack_version_id);
   const s = await sql();
   const ask = await s.one<AskRow>("SELECT * FROM pending_asks WHERE event_id = $1 AND run_id = $2", [eventId, runId]);
   if (!ask) throw new Error("no such pending approval");
@@ -443,6 +465,7 @@ export async function decide(
 export async function topUp(runId: string): Promise<RunRow> {
   const run = await getRun(runId);
   if (!run) throw new Error("unknown run");
+  await assertEntitled(run.org_id, run.pack_version_id);
   const headroom = BigInt(await settingInt("topup_headroom_cents"));
   const session = await runtime().raiseBudgetTo(run.session_id, headroom);
   const s = await sql();
@@ -450,6 +473,16 @@ export async function topUp(runId: string): Promise<RunRow> {
     [run.list_cost_cents + Number(headroom), session.status, runId]);
   await recordEvent(runId, "run.topped_up", { headroom_cents: Number(headroom) });
   return (await getRun(runId))!;
+}
+
+/** Every run on a pack version that is still open. Used when a refund lands. */
+export async function endRunsFor(orgId: string, packVersionId: string): Promise<number> {
+  const s = await sql();
+  const rows = await s.query<{ id: string }>(
+    "SELECT id FROM runs WHERE org_id = $1 AND pack_version_id = $2 AND ended_at IS NULL",
+    [orgId, packVersionId]);
+  for (const r of rows) await endRun(r.id);
+  return rows.length;
 }
 
 export async function endRun(runId: string): Promise<void> {

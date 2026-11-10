@@ -74,6 +74,7 @@ test("writes the platform's snapshot onto the run, absolute not additive", async
   P.setRuntime(fakeRuntime([{ snapshot: 4, finalCost: 4, out: 1129 }]));
   const { orgId, userId } = await P.ensureDemoOrg();
   const version = await P.latestVersion((await P.getPack("guardrails")).id);
+  await P.grantEntitlement(orgId, version.id);
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
   await P.sendTurn(run.id, "review this");
   const after = await P.getRun(run.id);
@@ -88,6 +89,7 @@ test("credits the author in millicents so a sub-cent share survives", async () =
   const pack = await P.getPack("guardrails");
   const version = await P.latestVersion(pack.id);
   const before = await points.authorEarningsTotal(pack.id);
+  await P.grantEntitlement(orgId, version.id);
   const run = await P.startRun({ orgId, userId, packVersionId: version.id });
   // 20% of 2c is 0.4c = 400 millicents, which whole cents would floor away.
   assert.equal((await P.sendTurn(run.id, "x")).authorCents, 400);
@@ -99,6 +101,7 @@ test("refuses a run beyond the tier's concurrency limit", async () => {
   const { orgId, userId } = await P.ensureDemoOrg();
   const version = await P.latestVersion((await P.getPack("guardrails")).id);
   const before = await P.activeRunCount(orgId);
+  await P.grantEntitlement(orgId, version.id);
   await assert.rejects(
     (async () => { for (let i = 0; i <= 20; i += 1) await P.startRun({ orgId, userId, packVersionId: version.id }); })(),
     /concurrency limit reached/,

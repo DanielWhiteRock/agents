@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS packs (
   pinned_models TEXT NOT NULL DEFAULT '[]',
   instructions TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'listed',
+  author_payout_email TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -149,6 +150,38 @@ CREATE TABLE IF NOT EXISTS pending_asks (
 );
 CREATE INDEX IF NOT EXISTS pending_asks_run ON pending_asks(run_id);
 
+CREATE TABLE IF NOT EXISTS purchases (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  -- 'pack' buys an entitlement; 'points' buys compute. Null version for points.
+  kind TEXT NOT NULL DEFAULT 'pack' CHECK (kind IN ('pack','points')),
+  pack_version_id TEXT REFERENCES pack_versions(id),
+  amount_cents INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  provider_ref TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending','paid','failed','refunded')),
+  -- The refund window. The author's share is held until it closes, because a
+  -- clawback after a payout is operationally painful.
+  refundable_until TEXT,
+  created_at TEXT NOT NULL,
+  paid_at TEXT,
+  refunded_at TEXT
+);
+CREATE INDEX IF NOT EXISTS purchases_org ON purchases(org_id, created_at);
+
+CREATE TABLE IF NOT EXISTS payouts (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  recipient TEXT NOT NULL,
+  millicents INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  provider_ref TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  paid_at TEXT
+);
+
 -- Stored in MILLICENTS. A 20% share of a two-cent turn is 0.4 of a cent; in
 -- whole cents that floors to nothing and the author is paid zero for real work.
 CREATE TABLE IF NOT EXISTS author_earnings (
@@ -156,8 +189,11 @@ CREATE TABLE IF NOT EXISTS author_earnings (
   pack_id TEXT NOT NULL REFERENCES packs(id),
   run_id TEXT NOT NULL REFERENCES runs(id),
   points_millicents INTEGER NOT NULL,
+  -- Set once the earning has been paid out, so nothing is ever paid twice.
+  payout_id TEXT,
   created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS author_earnings_unpaid ON author_earnings(pack_id, payout_id);
 `;
 
 const SUBSTITUTIONS = {
@@ -184,6 +220,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",
+  // Days a buyer may ask for their money back. The author's share is held for
+  // the same period, then becomes payable.
+  refund_window_days: "14",
 };
 
 /**
@@ -195,6 +234,9 @@ const MIGRATIONS = [
   "ALTER TABLE users ADD COLUMN password_hash TEXT",
   "ALTER TABLE runs ADD COLUMN billed_up_to_cents INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE packs ADD COLUMN author_org_id TEXT",
+  "ALTER TABLE author_earnings ADD COLUMN payout_id TEXT",
+  "ALTER TABLE packs ADD COLUMN author_payout_email TEXT",
+  "ALTER TABLE purchases ADD COLUMN kind TEXT NOT NULL DEFAULT 'pack'",
 ];
 
 let ready: Promise<void> | null = null;

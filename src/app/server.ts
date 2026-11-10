@@ -2,6 +2,8 @@ import http from "node:http";
 import { URL } from "node:url";
 import { allSettings, initDb, putSetting, setting, settingInt } from "./db.js";
 import * as A from "./auth.js";
+import * as Pay from "../billing/purchases.js";
+import { payments } from "../billing/provider.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceCents, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
@@ -58,6 +60,13 @@ const redirect = (res: http.ServerResponse, to: string): void => {
 };
 const msg = (e: unknown): string => String((e as Error)?.message ?? e);
 
+/** Where the provider should send a buyer back to. Honours a reverse proxy. */
+function baseUrl(req: http.IncomingMessage): string {
+  const proto = String(req.headers["x-forwarded-proto"] ?? (SECURE_COOKIES ? "https" : "http")).split(",")[0];
+  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? `localhost:${PORT}`).split(",")[0];
+  return `${proto}://${host}`;
+}
+
 async function models(): Promise<string[]> {
   return (await setting("allowed_models")).split(",").map((s) => s.trim()).filter(Boolean);
 }
@@ -113,7 +122,14 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       const versionId = f["packVersionId"]
         ?? (await P.latestVersion(pack.id))?.id
         ?? (await P.publishPack(slug)).id;
-      await P.grantEntitlement(ctx.orgId, versionId);
+      if (!(await P.entitled(ctx.orgId, versionId))) {
+        const out = await Pay.beginPurchase({
+          orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId,
+          amountCents: pack.price_cents, description: pack.name, baseUrl: baseUrl(req),
+        });
+        // An entitlement comes from a paid purchase, never from asking.
+        if (out.status === "redirect" && out.approveUrl) return redirect(res, out.approveUrl);
+      }
       const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"] });
       return redirect(res, `/runs/${run.id}`);
     } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
@@ -235,8 +251,75 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   if (method === "POST" && path === "/ledger/topup") {
     const f = await body(req);
     const c = Math.floor(Number(f["cents"] ?? 0));
-    if (Number.isFinite(c) && c > 0) await credit(ctx.orgId, "topup", c, "points purchase");
+    if (!Number.isFinite(c) || c <= 0) return redirect(res, "/ledger");
+    const out = await Pay.beginPointsPurchase({
+      orgId: ctx.orgId, userId: ctx.userId, amountCents: c, baseUrl: baseUrl(req),
+    });
+    if (out.status === "redirect" && out.approveUrl) return redirect(res, out.approveUrl);
     return redirect(res, "/ledger");
+  }
+
+  // ------------------------------------------------------------- purchases
+  if (method === "GET" && path === "/purchases") {
+    const s2 = await sql();
+    const rows = await s2.query<{
+      id: string; kind: string; amount_cents: number; status: string; provider: string;
+      refundable_until: string | null; created_at: string; what: string | null;
+    }>(`SELECT pu.id, pu.kind, pu.amount_cents, pu.status, pu.provider, pu.refundable_until, pu.created_at,
+               pk.name AS what
+        FROM purchases pu
+        LEFT JOIN pack_versions pv ON pv.id = pu.pack_version_id
+        LEFT JOIN packs pk ON pk.id = pv.pack_id
+        WHERE pu.org_id = $1 ORDER BY pu.created_at DESC`, [ctx.orgId]);
+    const prov = payments();
+    return html(res, V.purchasesPage(
+      rows.map((r) => ({ ...r, amount_cents: Number(r.amount_cents), what: r.what ?? "Agent compute" })),
+      prov.name, prov.real, await bal(), viewer));
+  }
+
+  const retMatch = /^\/purchases\/([a-z0-9_]+)\/return$/.exec(path);
+  if (method === "GET" && retMatch) {
+    const p = await Pay.getPurchase(retMatch[1]!);
+    if (!p || p.org_id !== ctx.orgId) return html(res, V.layout("Not found", "<h1>No such purchase</h1>", { viewer }), 404);
+    try {
+      await Pay.completePurchase(p.id);
+      if (p.kind === "points") return redirect(res, "/ledger");
+      const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: p.pack_version_id! });
+      return redirect(res, `/runs/${run.id}`);
+    } catch (e) { return redirect(res, `/purchases?err=${encodeURIComponent(msg(e))}`); }
+  }
+
+  const canMatch = /^\/purchases\/([a-z0-9_]+)\/cancel$/.exec(path);
+  if (canMatch) { await Pay.cancelPurchase(canMatch[1]!); return redirect(res, "/purchases"); }
+
+  const refMatch = /^\/purchases\/([a-z0-9_]+)\/refund$/.exec(path);
+  if (method === "POST" && refMatch) {
+    try { await Pay.refundPurchase(refMatch[1]!, ctx.orgId); return redirect(res, "/purchases"); }
+    catch (e) { return redirect(res, `/purchases?err=${encodeURIComponent(msg(e))}`); }
+  }
+
+  // --------------------------------------------------------------- payouts
+  if (method === "GET" && path === "/payouts") {
+    ownerOnly();
+    const s2 = await sql();
+    const history = await s2.query<{ name: string; recipient: string; millicents: unknown; status: string; created_at: string }>(
+      `SELECT pk.name AS name, po.recipient, po.millicents, po.status, po.created_at
+       FROM payouts po JOIN packs pk ON pk.id = po.pack_id ORDER BY po.created_at DESC LIMIT 50`);
+    const prov = payments();
+    return html(res, V.payoutsPage({
+      due: await Pay.payoutsDue(),
+      history: history.map((h) => ({ ...h, millicents: Number(h.millicents) })),
+      windowDays: await settingInt("refund_window_days"),
+      providerName: prov.name, providerReal: prov.real,
+      balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+  if (method === "POST" && path === "/payouts/pay") {
+    ownerOnly();
+    const f = await body(req);
+    try { await Pay.payAuthor(f["packId"] ?? ""); return redirect(res, "/payouts"); }
+    catch (e) { return redirect(res, `/payouts?err=${encodeURIComponent(msg(e))}`); }
   }
 
   if (method === "GET" && path === "/authors") {

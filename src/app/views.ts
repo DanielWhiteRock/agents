@@ -74,7 +74,7 @@ export function layout(
 <span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
 <nav>
   ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  <a href="/authors">Authors</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/settings">Limits</a>` : ""}
+  <a href="/purchases">Purchases</a><a href="/authors">Authors</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
   ${opts.balance !== undefined ? `<span class="tag">${esc(fmt(opts.balance))}</span>` : ""}
   <span class="tag" title="${esc(v.email)}">${esc(v.orgName)} · ${esc(v.name)}${v.role === "owner" ? " (owner)" : ""}</span>
   <form method="post" action="/logout" class="inline"><button class="btn ghost" style="padding:4px 10px;font-size:13px">Sign out</button></form>`
@@ -120,7 +120,7 @@ ${v ? `
   <input type="hidden" name="packVersionId" value="${esc(v.id)}">
   <div class="row">
     <label>Model <select name="model">${choices.map((m) => `<option value="${esc(m)}"${m === p.model ? " selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
-    <button class="btn" type="submit">${owned ? "Start a run" : `Acquire for ${p.price_cents === 0 ? "free" : fmt(p.price_cents)}`}</button>
+    <button class="btn" type="submit">${owned ? "Start a run" : p.price_cents === 0 ? "Get it free and run" : `Buy for ${fmt(p.price_cents)} and run`}</button>
   </div>
   ${pinned.length ? `<p class="lede" style="margin-top:10px;font-size:14px">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
 </form>` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
@@ -371,4 +371,61 @@ ${isOwner ? `<h2>Invite someone</h2>
 <p class="lede" style="margin-top:10px;font-size:14px">There is no email delivery yet — the invitation link appears above for you to pass on.</p>`
   : `<p class="lede">Only an owner can invite or change roles.</p>`}`,
   { balance: args.balance, viewer: args.viewer });
+}
+
+// ---------------------------------------------------------------- purchases
+
+export function purchasesPage(rows: Array<{
+  id: string; kind: string; what: string; amount_cents: number; status: string;
+  provider: string; refundable_until: string | null; created_at: string;
+}>, providerName: string, providerReal: boolean, balance: number, viewer: Viewer = null): string {
+  const nowIso = new Date().toISOString();
+  return layout("Purchases", `
+<h1>Purchases</h1>
+<p class="lede">What this organisation has bought. A pack's entitlement comes from a paid purchase and nothing else.</p>
+${providerReal ? "" : `<div class="note">Payments are running on the <strong>${esc(providerName)}</strong> provider: records are written and entitlements granted, but <strong>no money moves</strong>. Set <code>PAYPAL_CLIENT_ID</code> and <code>PAYPAL_CLIENT_SECRET</code> to charge for real.</div>`}
+<table><tr><th>When</th><th>What</th><th class="num">Amount</th><th>Status</th><th>Refundable</th><th></th></tr>
+${rows.map((r) => {
+  const open = r.status === "paid" && r.kind === "pack" && r.refundable_until !== null && r.refundable_until > nowIso;
+  return `<tr>
+  <td>${esc(r.created_at.slice(0, 16).replace("T", " "))}</td>
+  <td>${esc(r.what)} <span class="tag">${esc(r.kind)}</span></td>
+  <td class="num">${esc(fmt(r.amount_cents))}</td>
+  <td><span class="tag" style="color:${r.status === "paid" ? "var(--good)" : r.status === "refunded" ? "var(--warn)" : "var(--muted)"}">${esc(r.status)}</span></td>
+  <td>${r.kind === "points" ? "—" : open ? esc(r.refundable_until!.slice(0, 10)) : "closed"}</td>
+  <td>${open ? `<form method="post" action="/purchases/${esc(r.id)}/refund" class="inline">
+      <button class="btn ghost" style="padding:5px 10px">Refund</button></form>` : ""}</td>
+</tr>`;
+}).join("") || `<tr><td colspan="6">Nothing bought yet.</td></tr>`}
+</table>`, { balance, viewer });
+}
+
+export function payoutsPage(args: {
+  due: Array<{ pack_id: string; name: string; recipient: string | null; millicents: number }>;
+  history: Array<{ name: string; recipient: string; millicents: number; status: string; created_at: string }>;
+  windowDays: number; providerName: string; providerReal: boolean;
+  balance: number; viewer: Viewer; err?: string;
+}): string {
+  return layout("Payouts", `
+<h1>Author payouts</h1>
+<p class="lede">An author's share is held until the buyer's ${args.windowDays}-day refund window closes, then becomes payable. Paying sooner would mean clawing money back from an author because a buyer changed their mind.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+${args.providerReal ? "" : `<div class="note">Provider is <strong>${esc(args.providerName)}</strong> — payouts are recorded, no money moves.</div>`}
+<h2>Due now</h2>
+<table><tr><th>Pack</th><th>Payout address</th><th class="num">Owed</th><th></th></tr>
+${args.due.map((d) => `<tr>
+  <td>${esc(d.name)}</td>
+  <td>${d.recipient ? esc(d.recipient) : `<span class="tag" style="color:var(--warn)">none on file</span>`}</td>
+  <td class="num">${esc(fmtMilli(d.millicents))}</td>
+  <td>${d.recipient ? `<form method="post" action="/payouts/pay" class="inline">
+      <input type="hidden" name="packId" value="${esc(d.pack_id)}">
+      <button class="btn" style="padding:5px 12px">Pay</button></form>` : ""}</td>
+</tr>`).join("") || `<tr><td colspan="4">Nothing has cleared the refund window yet.</td></tr>`}
+</table>
+<h2>Paid</h2>
+<table><tr><th>When</th><th>Pack</th><th>To</th><th class="num">Amount</th><th>Status</th></tr>
+${args.history.map((h) => `<tr><td>${esc(h.created_at.slice(0, 16).replace("T", " "))}</td>
+<td>${esc(h.name)}</td><td>${esc(h.recipient)}</td><td class="num">${esc(fmtMilli(h.millicents))}</td>
+<td><span class="tag">${esc(h.status)}</span></td></tr>`).join("") || `<tr><td colspan="5">No payouts yet.</td></tr>`}
+</table>`, { balance: args.balance, viewer: args.viewer });
 }
