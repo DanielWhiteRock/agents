@@ -108,7 +108,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const q = (url.searchParams.get("q") ?? "").trim();
     const packs = await Promise.all((await P.listPacks(q)).map(async (p) => {
       const v = await P.latestVersion(p.id);
-      return { ...p, published: Boolean(v), owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))) };
+      return {
+        ...p,
+        published: Boolean(v),
+        owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
+        pricePoints: await Pay.pricePoints(p.price_cents),
+        stats: await P.packStats(p.id),
+      };
     }));
     return html(res, V.catalogPage(packs, await bal(), viewer, q));
   }
@@ -188,13 +194,13 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       const versionId = f["packVersionId"]
         ?? (await P.latestVersion(pack.id))?.id
         ?? (await P.publishPack(slug)).id;
+      // One currency: a pack is bought with points, like everything else the
+      // buyer spends. An entitlement still comes from a settled purchase.
       if (!(await P.entitled(ctx.orgId, versionId))) {
-        const out = await Pay.beginPurchase({
+        await Pay.buyWithPoints({
           orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId,
-          amountCents: pack.price_cents, description: pack.name, baseUrl: baseUrl(req),
+          packId: pack.id, priceCents: pack.price_cents, description: pack.name,
         });
-        // An entitlement comes from a paid purchase, never from asking.
-        if (out.status === "redirect" && out.approveUrl) return redirect(res, out.approveUrl);
       }
       const run = await P.startRun({ orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId, model: f["model"] });
       return redirect(res, `/runs/${run.id}`);

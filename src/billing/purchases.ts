@@ -1,7 +1,7 @@
 import { id, now, setting, settingInt } from "../app/db.js";
 import { sql } from "../app/sql.js";
 import { payments, type Money } from "./provider.js";
-import { credit } from "./points.js";
+import { balanceCents, credit, debit } from "./points.js";
 import { endRunsFor } from "../app/platform.js";
 
 /**
@@ -121,6 +121,62 @@ export async function beginPointsPurchase(args: {
     return { purchaseId, status: "granted" };
   }
   return { purchaseId, status: "redirect", approveUrl: result.approveUrl };
+}
+
+/**
+ * What a pack costs, in the only currency a buyer holds.
+ *
+ * The shelf used to be priced in dollars and run on points, which meant a
+ * buyer read two units and had to convert between them to know what anything
+ * cost. One currency: dollars now appear only where money actually moves —
+ * the subscription, a top-up, an author cashing out.
+ */
+export async function pricePoints(priceCents: number): Promise<number> {
+  if (priceCents <= 0) return 0;
+  return Math.round((priceCents / 100) * (await settingInt("points_per_dollar")));
+}
+
+/**
+ * Buy a pack with points, crediting the author their share in points too.
+ *
+ * §8.1 split a one-off purchase 70/30 as money. Paying the author in points
+ * keeps that split while removing the second currency, and §8.6 already made
+ * earned points cashable — so the author can still take it as money, they
+ * just do it at cash-out rather than at every sale.
+ */
+export async function buyWithPoints(args: {
+  orgId: string; userId: string; packVersionId: string; packId: string;
+  priceCents: number; description: string;
+}): Promise<{ purchaseId: string | null; points: number }> {
+  const points = await pricePoints(args.priceCents);
+  if (points <= 0) {
+    await grant(args.orgId, args.packVersionId);
+    return { purchaseId: null, points: 0 };
+  }
+  const balance = await balanceCents(args.orgId);
+  if (balance < points) {
+    throw new Error(`${args.description} costs ${points} points; you have ${balance}`);
+  }
+  const s = await sql();
+  const purchaseId = id("pur");
+  await debit(args.orgId, points, `bought ${args.description}`);
+
+  // The author's share, in points, to whoever owns the pack. A pack the
+  // platform curates has no outside author, so nothing is credited.
+  const share = await settingInt("author_share_bps");
+  const pack = await s.one<{ author_org_id: string | null }>(
+    "SELECT author_org_id FROM packs WHERE id = $1", [args.packId]);
+  const authorPoints = Math.round((points * share) / 10_000);
+  if (pack?.author_org_id && pack.author_org_id !== args.orgId && authorPoints > 0) {
+    await credit(pack.author_org_id, "earning", authorPoints, `sold ${args.description}`);
+  }
+
+  await s.query(
+    `INSERT INTO purchases (id, org_id, user_id, kind, pack_version_id, amount_cents, provider, status, created_at)
+     VALUES ($1,$2,$3,'pack',$4,$5,'points','paid',$6)`,
+    [purchaseId, args.orgId, args.userId, args.packVersionId, points, now()]);
+  await grant(args.orgId, args.packVersionId);
+  return { purchaseId, points };
 }
 
 async function grant(orgId: string, packVersionId: string): Promise<void> {

@@ -137,6 +137,32 @@ export async function listPacks(query = ""): Promise<PackRow[]> {
        AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1)
      ORDER BY price_cents DESC`, [like]);
 }
+/**
+ * What the shelf can honestly say about a pack.
+ *
+ * Marketplaces sell on social proof, and the temptation is to show stars
+ * before anybody has given any. These are counted from our own tables: runs
+ * actually completed, organisations that actually bought, the version it is
+ * on. A pack nobody has used says so by showing nothing, which is the honest
+ * version of a new listing and the thing a rating out of five would hide.
+ */
+export async function packStats(packId: string): Promise<{ runs: number; buyers: number; version: number }> {
+  const s = await sql();
+  const row = await s.one<{ runs: string | number; buyers: string | number; version: string | number }>(
+    `SELECT
+       (SELECT COUNT(*) FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+         WHERE v.pack_id = $1 AND r.is_trial = 0) AS runs,
+       (SELECT COUNT(DISTINCT e.org_id) FROM entitlements e JOIN pack_versions v ON v.id = e.pack_version_id
+         WHERE v.pack_id = $1) AS buyers,
+       (SELECT COALESCE(MAX(version), 0) FROM pack_versions WHERE pack_id = $1) AS version`,
+    [packId]);
+  return {
+    runs: Number(row?.runs ?? 0),
+    buyers: Number(row?.buyers ?? 0),
+    version: Number(row?.version ?? 0),
+  };
+}
+
 export async function getPack(slug: string): Promise<PackRow | undefined> {
   const s = await sql();
   return s.one<PackRow>("SELECT * FROM packs WHERE slug = $1", [slug]);

@@ -323,6 +323,11 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // policy of forever — which is not one anybody chose. 0 keeps them forever,
   // deliberately rather than by default.
   transcript_retention_days: "90",
+  // Points per dollar, taken from the Personal tier: 120 points for $5. It is
+  // the rate at which points are sold, not the rate at which they are spent —
+  // a point buys a cent of compute, so the gap between 24 and 100 is the
+  // subsidy §8.3 says we are choosing to pay. Adjustable like every limit.
+  points_per_dollar: "24",
   // Models that reject the `effort` field outright with a 400.
   models_without_effort: "claude-haiku-4-5,claude-sonnet-4-5-20250929",
   environment_name: "alphaceo-agents",

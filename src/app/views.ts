@@ -145,6 +145,36 @@ border-bottom:1px solid var(--line);padding-bottom:.4375rem}
 .menu>div form{margin-top:.25rem;border-top:1px solid var(--line);padding-top:.375rem}
 .menu>div .btn{width:100%;text-align:left}
 
+/* ------------------------------------------------------------- the shelf
+   A listing is a face, a name, one line and a price — the shape a marketplace
+   card has had since marketplaces had cards. The band of colour is generated
+   from the slug: a card should be recognisable before it is read, and a stock
+   photograph of somebody who did not write the pack would be worse than
+   nothing. */
+.gig{padding:0;overflow:hidden;text-decoration:none;color:inherit}
+.gig:hover{text-decoration:none}
+.thumb{height:5.5rem;background:
+linear-gradient(135deg,hsl(var(--h) 46% 62%),hsl(calc(var(--h) + 42) 52% 46%));
+position:relative;flex:none}
+.thumb::after{content:"";position:absolute;inset:0;
+background:radial-gradient(120% 90% at 18% 0%,rgba(255,255,255,.34),transparent 62%)}
+.gig .meta{padding:.875rem 1rem 1rem;display:flex;flex-direction:column;flex:1;gap:.375rem}
+.gig .who{display:flex;align-items:center;gap:.4375rem;margin:0;font-size:.8125rem;color:var(--muted)}
+.av{width:1.375rem;height:1.375rem;border-radius:999px;flex:none;
+background:hsl(var(--h) 44% 52%);color:#fff;font-size:.625rem;font-weight:620;
+display:inline-flex;align-items:center;justify-content:center;letter-spacing:.01em}
+.gig h3{margin:0;font-size:1rem;line-height:1.3}
+.gig .line{margin:0;color:var(--ink);font-size:.875rem;line-height:1.45}
+.gig .foot{margin:auto 0 0;padding-top:.5rem;display:flex;align-items:center;
+justify-content:space-between;gap:.75rem}
+.gig .proof{font-size:.8125rem;color:var(--muted)}
+.gig .proof .ic svg{width:.9375rem;height:.9375rem}
+.gig .proof.new{font-family:var(--mono);font-size:.6875rem;border:1px solid var(--line);
+border-radius:999px;padding:.0625rem .4375rem}
+.gig .price{font-family:var(--mono);font-size:1rem;font-weight:600;color:var(--ink);
+font-variant-numeric:tabular-nums}
+.gig .price small{font-size:.6875rem;color:var(--muted);font-weight:400}
+
 /* ------------------------------------------------------------- surfaces */
 .grid{display:grid;gap:.875rem;grid-template-columns:repeat(auto-fill,minmax(18.125rem,1fr))}
 /* Column, so the action sits on the baseline across cards of different
@@ -416,16 +446,48 @@ if(d)d.querySelector('summary').textContent=best.textContent;}})();
 </div></body></html>`;
 }
 
-export function catalogPage(packs: Array<PackRow & { published: boolean; owned: boolean }>, balance: number, viewer: Viewer = null, query = ""): string {
-  const cards = packs.map((p) => `<div class="card">
-  <div class="spread"><h3>${esc(p.name)}</h3><span class="price">${p.price_cents === 0 ? "free" : esc(fmt(p.price_cents))}</span></div>
-  <p class="by">by ${esc(p.author)}</p>
-  <p class="row" style="gap:6px;margin:0 0 10px"><span class="tag">${esc(p.model)}</span><span class="tag">effort ${esc(p.effort)}</span></p>
-  <p>${esc(p.tagline)}</p>
-  <div class="row">
-    <a class="btn" href="/packs/${esc(p.slug)}">${p.owned ? "Open" : "View"}</a>
-    ${p.published ? "" : `<span class="tag">not yet published</span>`}
-  </div></div>`).join("");
+
+/**
+ * An author's face, drawn from their name.
+ *
+ * A marketplace card needs a person on it, and the alternative to initials is
+ * a stock photograph of somebody who did not write the pack. The hue is taken
+ * from the name so the same author is the same colour everywhere, which is
+ * what makes it recognisable rather than decorative.
+ */
+export function avatar(name: string): string {
+  const initials = name.trim().split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("").toUpperCase() || "?";
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `<span class="av" style="--h:${h}" aria-hidden="true">${esc(initials)}</span>`;
+}
+
+/** A band of colour per pack, so a card is recognisable before it is read. */
+export function thumb(slug: string): string {
+  let h = 0;
+  for (const ch of slug) h = (h * 17 + ch.charCodeAt(0)) % 360;
+  return `<div class="thumb" style="--h:${h}" aria-hidden="true"></div>`;
+}
+
+export function catalogPage(
+  packs: Array<PackRow & { published: boolean; owned: boolean; pricePoints: number;
+    stats: { runs: number; buyers: number; version: number } }>,
+  balance: number, viewer: Viewer = null, query = "",
+): string {
+  // Name, face, one line, price. Everything else is on the pack's own page.
+  const cards = packs.map((p) => `<a class="card gig" href="/packs/${esc(p.slug)}">
+  ${thumb(p.slug)}
+  <div class="meta">
+    <p class="who">${avatar(p.author)}<span>${esc(p.author.split(" — ")[0] ?? p.author)}</span></p>
+    <h3>${esc(p.name)}</h3>
+    <p class="line">${esc(p.tagline)}</p>
+    <p class="foot">
+      ${p.stats.runs > 0
+        ? `<span class="proof" title="${p.stats.runs} runs, ${p.stats.buyers} buyers">${icon("runs", `${p.stats.runs} runs`)}</span>`
+        : `<span class="proof new">new</span>`}
+      <span class="price">${p.pricePoints === 0 ? "free" : `${p.pricePoints.toLocaleString("en-US")}<small> pts</small>`}</span>
+    </p>
+  </div></a>`).join("");
   const found = packs.length;
   return layout("Catalog", `<h1>Hire a worker</h1>
 <p class="lede">Buy once. It runs here. You see what every run cost.</p>
