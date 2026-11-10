@@ -81,6 +81,35 @@ nav a:active{background:color-mix(in oklab,var(--ink) 12%,transparent)}
 /* Where am I: the current section is stated, not left to be inferred. */
 nav a[aria-current=page]{color:var(--ink);background:color-mix(in oklab,var(--ink) 9%,transparent);font-weight:560}
 
+/* ----------------------------------------------------------------- icons
+   One stroke weight, sized in em so an icon grows with the text beside it.
+   A label marked "only" is hidden visually and left for a screen reader — the
+   label is never deleted, only unshown. */
+/* Relative, so a hidden label is positioned against its own icon. Without it
+   the label escapes any scroll box it sits in — overflow does not make an
+   ancestor a containing block — and stretches the page to the width of the
+   table it was supposed to be inside. */
+.ic{display:inline-flex;align-items:center;gap:.4375rem;position:relative}
+.ic svg{width:1.25em;height:1.25em;flex:none;fill:none;stroke:currentColor;
+stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.ic.only .lbl{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
+overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+.brand{display:inline-flex;align-items:center;gap:.5rem;color:var(--ink);text-decoration:none;
+min-height:2.25rem;padding:0 .25rem;margin-left:-.25rem;border-radius:.5rem}
+.brand .logo{width:1.75rem;height:1.75rem;flex:none}
+.brand b{font-weight:640;letter-spacing:-.02em;font-size:1.0625rem}
+.brand:hover{text-decoration:none}
+nav a{display:inline-flex;align-items:center;justify-content:center;min-width:2.25rem;min-height:2.25rem}
+/* The balance is a number, not a sentence: the unit lives in the tooltip. */
+.bal{font-family:var(--mono);font-size:.875rem;color:var(--ink);
+border:1px solid var(--line);border-radius:999px;padding:.25rem .625rem;
+font-variant-numeric:tabular-nums;min-width:auto}
+.bal:hover{background:color-mix(in oklab,var(--accent) 12%,transparent);text-decoration:none}
+footer details summary{list-style:none;cursor:pointer;color:var(--muted);
+display:inline-flex;min-height:2rem;align-items:center}
+footer details summary::-webkit-details-marker{display:none}
+footer details p{margin:.5rem 0 0}
+
 /* ---------------------------------------------------------------- search
    The first thing on the shelf, because finding the right worker is the whole
    job and a curated catalog still has to be searchable to be a catalog.      */
@@ -258,6 +287,11 @@ margin:0 0 .5rem;flex-wrap:wrap}
 /* ---------------------------------------------------------------- notes */
 .note{border-left:3px solid var(--warn);background:color-mix(in oklab,var(--warn) 9%,transparent);
 padding:.625rem .875rem;border-radius:0 .5rem .5rem 0;font-size:.875rem;margin:0 0 1.125rem;line-height:1.5}
+/* A meter's label is a mark; the number is the thing being read. */
+.meter .k .ic svg{width:1rem;height:1rem;opacity:.75}
+.meter .k{display:flex;align-items:center}
+/* An icon-only button stays square rather than collapsing to its glyph. */
+.btn .ic.only{min-width:1.25em;justify-content:center}
 .note.bad{border-color:var(--bad);background:color-mix(in oklab,var(--bad) 9%,transparent)}
 footer{color:var(--muted);font-size:.8125rem;margin-top:2.5rem;border-top:1px solid var(--line);
 padding-top:1rem;line-height:1.5}
@@ -291,6 +325,49 @@ header.top{background:var(--panel);-webkit-backdrop-filter:none;backdrop-filter:
 const scrollable = (html: string): string =>
   html.replace(/<table>/g, '<div class="scroller"><table>').replace(/<\/table>/g, "</table></div>");
 
+
+/**
+ * One stroke weight, one grid, drawn not downloaded.
+ *
+ * Icons carry a name every time. An icon alone is a guess the viewer has to
+ * make, so the label is always in the markup — shown where there is room,
+ * read aloud where there is not, and surfaced as a tooltip on hover. Hiding
+ * the word is a layout decision; removing it is an accessibility bug.
+ */
+const ICONS: Record<string, string> = {
+  catalog: '<path d="M3 7h7v7H3zM14 7h7v7h-7zM3 17h7v4H3zM14 17h7v4h-7z"/>',
+  runs: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  points: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5h5M9.5 13.5h5"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+  download: '<path d="M12 4v11M8 11l4 4 4-4M5 20h14"/>',
+  trash: '<path d="M4 7h16M10 7V5h4v2M6 7l1 13h10l1-13"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+  send: '<path d="M4 12l16-8-6 16-2-6-8-2z"/>',
+  trace: '<path d="M4 6h16M4 12h10M4 18h7"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+  tokens: '<path d="M4 8h16M4 16h16M9 4v16M15 4v16"/>',
+  cost: '<path d="M12 4v16M8 8a3 3 0 013-3h2a3 3 0 010 6h-2a3 3 0 000 6h2a3 3 0 003-3"/>',
+  file: '<path d="M6 3h8l4 4v14H6zM14 3v4h4"/>',
+  info: '<circle cx="12" cy="12" r="8"/><path d="M12 11v5M12 8h.01"/>',
+  warn: '<path d="M12 4l9 16H3zM12 10v4M12 17h.01"/>',
+  check: '<path d="M4 12l5 5L20 6"/>',
+};
+
+/** An icon with its name beside it; `only` hides the word but keeps it readable. */
+export function icon(name: string, label: string, only = false): string {
+  const d = ICONS[name] ?? ICONS["info"]!;
+  return `<span class="ic${only ? " only" : ""}"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${d}</svg>`
+    + `<span class="lbl">${esc(label)}</span></span>`;
+}
+
+/** The mark. Two arcs and a dot: a worker, and the thing it is working on. */
+const LOGO = `<svg class="logo" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+<rect width="32" height="32" rx="8" fill="var(--accent)"/>
+<circle cx="16" cy="16" r="7.5" fill="none" stroke="var(--accent-ink)" stroke-width="2.25" opacity=".55"/>
+<circle cx="16" cy="16" r="3" fill="var(--accent-ink)"/>
+<path d="M16 4.5v4M16 23.5v4" stroke="var(--accent-ink)" stroke-width="2.25" stroke-linecap="round"/>
+</svg>`;
+
 export type Viewer = { name: string; email: string; role: string; orgName: string } | null;
 
 export function layout(
@@ -303,10 +380,12 @@ export function layout(
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 <title>${esc(title)} · agents.alphaceo.ai</title><style>${CSS}</style></head><body>
 <header class="top"><div class="wrap">
-<span class="brand">agents.alphaceo.ai<small>hire a worker</small></span>
+<a class="brand" href="/" aria-label="agents.alphaceo.ai, home">${LOGO}<b>agents</b></a>
 <nav>
-  ${v ? `<a href="/">Catalog</a><a href="/runs">Runs</a><a href="/ledger">Points</a>
-  ${opts.balance !== undefined ? `<span class="tag">${esc(pts(opts.balance))}</span>` : ""}
+  ${v ? `<a href="/" title="Catalog">${icon("catalog", "Catalog", true)}</a>
+  <a href="/runs" title="Runs">${icon("runs", "Runs", true)}</a>
+  <a href="/ledger" title="Points">${icon("points", "Points", true)}</a>
+  ${opts.balance !== undefined ? `<a class="bal" href="/ledger" title="${esc(pts(opts.balance))} left">${opts.balance.toLocaleString("en-US")}</a>` : ""}
   <details class="menu"><summary>${esc(v.name)}</summary><div>
     <p class="who" title="${esc(v.email)}">${esc(v.orgName)}${v.role === "owner" ? " · owner" : ""}</p>
     <a href="/authors">Authoring</a><a href="/schedules">Schedules</a><a href="/purchases">Purchases</a>
@@ -332,7 +411,8 @@ var d=best.closest('details.menu');
 if(d)d.querySelector('summary').textContent=best.textContent;}})();
 </script>
 <div class="wrap">${scrollable(body)}
-<footer>Runs on Anthropic Managed Agents. Seed packs are placeholder text, not an expert's work.</footer>
+<footer><details><summary aria-label="About this platform">${icon("info", "About", true)}</summary>
+<p>Runs on Anthropic Managed Agents. Seed packs are placeholder text, not an expert's work.</p></details></footer>
 </div></body></html>`;
 }
 
@@ -352,8 +432,8 @@ export function catalogPage(packs: Array<PackRow & { published: boolean; owned: 
 <form method="get" action="/" class="search" role="search">
   <input type="search" name="q" value="${esc(query)}" autofocus
          placeholder="Search by what you need done, or who wrote it" aria-label="Search packs">
-  <button class="btn" type="submit">Search</button>
-  ${query ? `<a class="btn ghost" href="/">Clear</a>` : ""}
+  <button class="btn" type="submit" title="Search">${icon("search", "Search", true)}</button>
+  ${query ? `<a class="btn ghost" href="/" title="Clear the search">${icon("stop", "Clear", true)}</a>` : ""}
 </form>
 ${query
   ? `<p class="lede" style="font-size:.875rem">${found === 0
@@ -403,7 +483,7 @@ ${!owned && trial ? (trial.used
 </form>`) : ""}` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
 ${owned ? `<h2>Take it with you</h2>
 <p class="lede" style="font-size:14px">An agent definition <code>ant apply</code> takes directly. The author's instructions are inside it.</p>
-<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export">Download ${esc(p.slug)}.md</a></p>` : ""}
+<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export" title="Download ${esc(p.slug)}.md">${icon("download", `Download ${p.slug}.md`)}</a></p>` : ""}
 `, { balance, viewer });
 }
 
@@ -417,7 +497,7 @@ ${runs.map((r) => `<tr>
 <td>${esc(r.stop_reason ?? r.status)}</td>
 <td class="num">${r.input_tokens}</td><td class="num">${r.output_tokens}</td>
 <td class="num">${r.active_seconds.toFixed(1)}s</td><td class="num">${esc(pts(r.list_cost_cents))}</td>
-<td><a href="/runs/${esc(r.id)}">trace</a></td></tr>`).join("") || `<tr><td colspan="9">No runs yet.</td></tr>`}
+<td><a href="/runs/${esc(r.id)}" title="Open the trace">${icon("trace", "Trace", true)}</a></td></tr>`).join("") || `<tr><td colspan="9">No runs yet.</td></tr>`}
 </table>`, { balance, viewer });
 }
 
@@ -512,19 +592,19 @@ ${run.is_trial && trial ? `<div class="note">
 ${exhausted ? `<div class="note" id="capnote">This run hit its budget. The platform refuses further messages until the cap is raised — top up and it resumes in the same session.
 <form method="post" action="/runs/${esc(run.id)}/topup" class="inline"><button class="btn" style="margin-left:10px">Top up and resume</button></form></div>` : ""}
 <div class="meters">
-  <div class="meter"><div class="k">Cost so far</div><div class="v" id="m-cost">${esc(pts(run.list_cost_cents))}</div>
+  <div class="meter"><div class="k">${icon("cost", "Cost so far")}</div><div class="v" id="m-cost">${esc(pts(run.list_cost_cents))}</div>
     <div class="bar"><i id="m-bar" style="transform:scaleX(${Math.min(1, run.list_cost_cents / Math.max(1, run.budget_cents)).toFixed(4)})"></i></div></div>
-  <div class="meter"><div class="k">Budget</div><div class="v">${esc(pts(run.budget_cents))}</div></div>
-  <div class="meter"><div class="k">Input tokens</div><div class="v" id="m-in">${run.input_tokens}</div></div>
-  <div class="meter"><div class="k">Output tokens</div><div class="v" id="m-out">${run.output_tokens}</div></div>
-  <div class="meter"><div class="k">Active</div><div class="v" id="m-sec">${run.active_seconds.toFixed(1)}s</div></div>
-  <div class="meter"><div class="k">Billed to you</div><div class="v" id="m-billed">${esc(pts(run.billed_cents))}</div></div>
+  <div class="meter"><div class="k">${icon("points", "Budget")}</div><div class="v">${esc(pts(run.budget_cents))}</div></div>
+  <div class="meter"><div class="k">${icon("tokens", "In")}</div><div class="v" id="m-in">${run.input_tokens}</div></div>
+  <div class="meter"><div class="k">${icon("tokens", "Out")}</div><div class="v" id="m-out">${run.output_tokens}</div></div>
+  <div class="meter"><div class="k">${icon("clock", "Active")}</div><div class="v" id="m-sec">${run.active_seconds.toFixed(1)}s</div></div>
+  <div class="meter"><div class="k">${icon("check", "Billed")}</div><div class="v" id="m-billed">${esc(pts(run.billed_cents))}</div></div>
 </div>
 <form method="post" action="/runs/${esc(run.id)}/message">
   <textarea name="text" placeholder="Give the worker a brief…" required></textarea>
   <div class="row" style="margin-top:10px">
-    <button class="btn" type="submit">Send</button>
-    <form method="post" action="/runs/${esc(run.id)}/end" class="inline"><button class="btn ghost">End run</button></form>
+    <button class="btn" type="submit" title="Send">${icon("send", "Send")}</button>
+    <form method="post" action="/runs/${esc(run.id)}/end" class="inline"><button class="btn ghost" title="End run">${icon("stop", "End run", true)}</button></form>
     <span class="tag" id="live">connecting…</span>
   </div>
 </form>
@@ -544,7 +624,7 @@ ${run.transcript_purged_at
      <p class="lede" style="font-size:.875rem">Deleted ${retentionDays > 0 ? `${retentionDays} days after a run finishes` : "only when you ask"}, here and at the provider. The cost record survives.</p>
      <form method="post" action="/runs/${esc(run.id)}/forget"
            onsubmit="return confirm('Delete this transcript here and at the provider? This cannot be undone.')">
-       <button class="btn ghost" type="submit">Delete this transcript</button>
+       <button class="btn ghost" type="submit" title="Delete this transcript">${icon("trash", "Delete this transcript")}</button>
      </form>`}
 <h2>Trace</h2>
 <div class="tracebar">
