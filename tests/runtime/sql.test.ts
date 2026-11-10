@@ -62,3 +62,33 @@ describe("sslFor", () => {
     expect(sslFor("host=localhost port=5433 dbname=agents", {})).toEqual({});
   });
 });
+
+describe("PostgresSql.connect", () => {
+  it("retries a database that is not up yet, rather than crash-looping", async () => {
+    // The first Render deploy died here: the container started seconds after
+    // the database said it was available but before its private route was. A
+    // refused connection at that moment is a blip, not a failure.
+    const { PostgresSql } = await import("../../src/app/sql.js");
+    let calls = 0;
+    const fakePool = {
+      query: async () => { calls += 1; if (calls < 3) throw new Error("ECONNREFUSED"); return { rows: [] }; },
+      end: async () => {},
+    };
+    const sql = await (PostgresSql as never as {
+      fromPool(p: unknown, attempts: number): Promise<unknown>;
+    }).fromPool(fakePool, 6);
+    expect(calls).toBe(3);
+    expect(sql).toBeTruthy();
+  });
+
+  it("gives up with the real error rather than hiding it", async () => {
+    const { PostgresSql } = await import("../../src/app/sql.js");
+    const fakePool = {
+      query: async () => { throw new Error("password authentication failed"); },
+      end: async () => {},
+    };
+    await expect((PostgresSql as never as {
+      fromPool(p: unknown, attempts: number): Promise<unknown>;
+    }).fromPool(fakePool, 2)).rejects.toThrow("password authentication failed");
+  });
+});

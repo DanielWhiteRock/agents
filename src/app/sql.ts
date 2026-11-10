@@ -21,17 +21,52 @@ export interface Sql {
 
 // ----------------------------------------------------------------- postgres
 
-class PostgresSql implements Sql {
+export class PostgresSql implements Sql {
   readonly dialect = "postgres" as const;
   // Typed loosely: pg's own types are imported lazily so SQLite-only runs do
   // not need the dependency resolved at startup.
   private constructor(private readonly pool: { query: (t: string, p?: unknown[]) => Promise<{ rows: Row[] }>; end: () => Promise<void> }) {}
 
-  static async connect(url: string): Promise<PostgresSql> {
+  /**
+   * Connect, with patience.
+   *
+   * A managed database is not always there the moment a container is. It can
+   * be finishing provisioning, failing over, or having its private route set
+   * up — the first deploy of this app died on exactly that, seconds after the
+   * database reported itself available. Crashing on the first refused
+   * connection turns a blip into a crash loop, and leaves the logs blaming
+   * the database for what is really impatience.
+   *
+   * So: a handful of tries with widening gaps, each one announced, and the
+   * real error if it never comes up. Roughly half a minute of tolerance,
+   * which covers a restart without hiding a genuine misconfiguration.
+   */
+  static async connect(url: string, attempts = 6): Promise<PostgresSql> {
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: url, max: 8, ...sslFor(url) });
-    await pool.query("SELECT 1");
-    return new PostgresSql(pool as never);
+    return PostgresSql.fromPool(new Pool({ connectionString: url, max: 8, ...sslFor(url) }) as never, attempts);
+  }
+
+  /** The waiting, separated from the pool, so it can be tested without one. */
+  static async fromPool(
+    pool: { query: (t: string, p?: unknown[]) => Promise<{ rows: Row[] }>; end: () => Promise<void> },
+    attempts = 6,
+    sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
+  ): Promise<PostgresSql> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await pool.query("SELECT 1");
+        if (attempt > 1) console.log(`[db] connected on attempt ${attempt}`);
+        return new PostgresSql(pool);
+      } catch (e) {
+        if (attempt >= attempts) {
+          await pool.end().catch(() => {});
+          throw e;
+        }
+        const wait = Math.min(8000, 500 * 2 ** (attempt - 1));
+        console.log(`[db] not reachable yet (${(e as Error).message}); retrying in ${wait}ms`);
+        await sleep(wait);
+      }
+    }
   }
 
   async query<T = Row>(text: string, params: unknown[] = []): Promise<T[]> {
