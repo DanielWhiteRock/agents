@@ -24,9 +24,46 @@ export type ParsedPack = {
   instructions: string;
   mcpServers: Array<{ name: string; url: string }>;
   pinnedModels: string[];
+  /** Anthropic's prebuilt skills a pack asks for: pptx, xlsx, docx, pdf. */
+  anthropicSkills: string[];
+  /** A model the agent may consult mid-turn. */
+  advisorModel?: string;
+  /** Where the web tools may look. One list or the other, never both. */
+  web?: { allowedDomains?: string[]; blockedDomains?: string[] };
   /** Keys present in the file that this reader does not understand. */
   unknownKeys: string[];
 };
+
+const PREBUILT = new Set(["pptx", "xlsx", "docx", "pdf"]);
+
+/**
+ * Public suffixes an author is likely to mistake for a domain.
+ *
+ * The API wants a registrable hostname and refuses `gov.uk` or `com`. This is
+ * not the full public suffix list — it is the handful that get typed by
+ * accident, caught at upload so the author is not told at publish time. The API
+ * remains the authority for anything subtler.
+ */
+const PUBLIC_SUFFIXES = new Set([
+  "co.uk", "gov.uk", "ac.uk", "org.uk", "me.uk", "net.uk", "sch.uk",
+  "com.au", "net.au", "org.au", "gov.au", "co.nz", "co.za", "co.il", "org.il",
+  "co.jp", "or.jp", "ne.jp", "com.br", "com.cn", "com.mx", "com.tr", "co.in",
+]);
+
+function checkDomains(label: string, domains: string[]): void {
+  for (const d of domains) {
+    const host = d.toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!host.includes(".")) {
+      throw new PackParseError(
+        `web.${label}: "${d}" is a single label. Give a plain hostname like "example.com".`);
+    }
+    if (PUBLIC_SUFFIXES.has(host)) {
+      throw new PackParseError(
+        `web.${label}: "${d}" is a public suffix, not a registrable domain — the API refuses it. `
+        + `Use a hostname under it, such as "www.${host}".`);
+    }
+  }
+}
 
 export class PackParseError extends Error {
   constructor(message: string) {
@@ -37,8 +74,11 @@ export class PackParseError extends Error {
 
 const KNOWN = new Set([
   "name", "model", "description", "tagline", "tools", "mcp_servers", "metadata",
-  "skills", "slug", "author", "pinned_models", "multiagent",
+  "skills", "slug", "author", "pinned_models", "multiagent", "advisor", "web",
 ]);
+
+const list = (v: string): string[] =>
+  v.replace(/^\[|\]$/g, "").split(",").map((x) => x.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
 
 function unquote(v: string): string {
   const t = v.trim();
@@ -59,7 +99,9 @@ export function splitFrontMatter(text: string): { front: string; body: string } 
 
 export function parsePackMarkdown(text: string): ParsedPack {
   const { front, body } = splitFrontMatter(text);
-  const out: ParsedPack = { instructions: "", mcpServers: [], pinnedModels: [], unknownKeys: [] };
+  const out: ParsedPack = {
+    instructions: "", mcpServers: [], pinnedModels: [], anthropicSkills: [], unknownKeys: [],
+  };
 
   const lines = front.split("\n");
   let topKey = "";
@@ -80,6 +122,9 @@ export function parsePackMarkdown(text: string): ParsedPack {
       if (topKey === "author" && value) out.author = unquote(value);
       // `model: claude-opus-5` as a scalar, or an object on the lines below.
       if (topKey === "model" && value) out.model = unquote(value);
+      // `advisor: claude-opus-5` as a scalar, or an object on the lines below.
+      if (topKey === "advisor" && value) out.advisorModel = unquote(value);
+      if (topKey === "pinned_models" && value) out.pinnedModels = list(value);
       continue;
     }
 
@@ -94,6 +139,19 @@ export function parsePackMarkdown(text: string): ParsedPack {
     if (topKey === "mcp_servers") {
       if (key === "name") out.mcpServers.push({ name: value, url: "" });
       if (key === "url" && out.mcpServers.length) out.mcpServers[out.mcpServers.length - 1]!.url = value;
+    }
+    if (topKey === "skills") {
+      // Anthropic's prebuilt skills are referenced by short name. A pack's own
+      // skills are directories, not front matter, so a custom entry here is a
+      // mistake worth naming rather than ignoring.
+      if (key === "skill_id" && value) out.anthropicSkills.push(value);
+    }
+    if (topKey === "advisor" && key === "model" && value) out.advisorModel = value;
+    if (topKey === "web") {
+      // Accumulated rather than replaced: assigning a fresh object for each key
+      // would drop the first list and hide an author declaring both.
+      if (key === "allowed_domains") out.web = { ...out.web, allowedDomains: list(value) };
+      if (key === "blocked_domains") out.web = { ...out.web, blockedDomains: list(value) };
     }
     if (topKey === "metadata") {
       if (key === "pack_slug" && value) out.slug ??= value;
@@ -116,6 +174,17 @@ export function parsePackMarkdown(text: string): ParsedPack {
 
   if (!out.instructions) {
     throw new PackParseError("there are no instructions in that file — the body below the front matter is empty");
+  }
+  if (out.web?.allowedDomains?.length && out.web?.blockedDomains?.length) {
+    throw new PackParseError("web: give allowed_domains or blocked_domains, not both — the API rejects the pair");
+  }
+  if (out.web?.allowedDomains) checkDomains("allowed_domains", out.web.allowedDomains);
+  if (out.web?.blockedDomains) checkDomains("blocked_domains", out.web.blockedDomains);
+  const unknownSkills = out.anthropicSkills.filter((id) => !PREBUILT.has(id));
+  if (unknownSkills.length > 0) {
+    throw new PackParseError(
+      `skills: "${unknownSkills.join(", ")}" is not one of Anthropic's prebuilt skills `
+      + `(${[...PREBUILT].join(", ")}). A pack's own skills are directories under skills/, not front matter.`);
   }
   return out;
 }

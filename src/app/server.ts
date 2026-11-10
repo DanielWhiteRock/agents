@@ -278,7 +278,32 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       if (pack) trial = { turns: await settingInt("trial_turns"), slug: pack.slug, priceCents: pack.price_cents };
     }
     return html(res, V.runPage(run, await packNameOf(run.pack_version_id), await bal(),
-      run.stop_reason === "budget_reached", asks, viewer, trial));
+      run.stop_reason === "budget_reached", asks, viewer, trial,
+      (await P.runOutputs(run.id)).map((o) => ({ file_id: o.file_id, filename: o.filename, size_bytes: Number(o.size_bytes) }))));
+  }
+
+  // Deliverables the agent wrote
+  const outMatch = /^\/runs\/([a-z0-9_]+)\/outputs\/([A-Za-z0-9_-]+)$/.exec(path);
+  if (method === "GET" && outMatch) {
+    try {
+      const file = await P.downloadOutput(outMatch[1]!, outMatch[2]!, ctx.orgId);
+      const ext = file.filename.split(".").pop()?.toLowerCase() ?? "";
+      const types: Record<string, string> = {
+        html: "text/html; charset=utf-8", md: "text/markdown; charset=utf-8",
+        json: "application/json", csv: "text/csv", txt: "text/plain; charset=utf-8",
+        pdf: "application/pdf", svg: "image/svg+xml", png: "image/png",
+        xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      };
+      res.writeHead(200, {
+        "content-type": types[ext] ?? "application/octet-stream",
+        // Shown in the browser when we can render it, downloaded otherwise.
+        "content-disposition": `${ext === "html" || ext === "pdf" || ext === "svg" || ext === "png" ? "inline" : "attachment"}; filename="${file.filename}"`,
+        "content-length": String(file.bytes.length),
+      });
+      return void res.end(file.bytes);
+    } catch (e) { return html(res, V.layout("Not found", `<h1>${V.esc(msg(e))}</h1>`, { viewer }), 404); }
   }
 
   // Fire-and-forget: the trace shows the turn arriving live.
@@ -567,6 +592,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         name: out.pack.name, unknownKeys: out.parsed.unknownKeys,
         skills: out.skills, subagents: out.subagents, carriedNotRun: out.inert,
         commands: out.commands, hooks: out.hooks, workflows: out.workflows,
+        anthropicSkills: out.anthropicSkills, advisorModel: out.advisorModel,
         warnings: out.warnings.map((w) => `${w.skill}/${w.file}: ${w.message}`),
       }));
     } catch (e) {

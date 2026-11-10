@@ -40,6 +40,7 @@ export type PackInput = {
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
   payoutEmail?: string;
+  extras?: P.PackExtras;
 };
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -71,12 +72,12 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const s = await sql();
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_cents, upgrade_points,
-       model, effort, pinned_models, instructions, status, author_payout_email, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'draft',$13,$14)`,
+       model, effort, pinned_models, extras, instructions, status, author_payout_email, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'draft',$14,$15)`,
     [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.priceCents, input.upgradePoints, input.model.trim(), input.effort ?? "",
-      JSON.stringify(input.pinnedModels ?? []), input.instructions.trim(),
-      input.payoutEmail?.trim() || null, now()]);
+      JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
+      input.instructions.trim(), input.payoutEmail?.trim() || null, now()]);
   return (await P.getPack(slug))!;
 }
 
@@ -89,12 +90,12 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
   const s = await sql();
   await s.query(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_cents = $4, upgrade_points = $5,
-       model = $6, effort = $7, pinned_models = $8, instructions = $9, author_payout_email = $10
-     WHERE id = $11`,
+       model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
+       author_payout_email = $11 WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.priceCents, input.upgradePoints, input.model.trim(), input.effort ?? "",
-      JSON.stringify(input.pinnedModels ?? []), input.instructions.trim(),
-      input.payoutEmail?.trim() || null, pack.id]);
+      JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
+      input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id]);
   return (await P.getPack(slug))!;
 }
 
@@ -180,6 +181,7 @@ export async function importPack(args: {
   pack: P.PackRow; created: boolean; parsed: ParsedPack;
   skills: string[]; subagents: string[]; inert: string[];
   commands: string[]; hooks: string[]; workflows: string[];
+  anthropicSkills: string[]; advisorModel?: string;
   warnings: Array<{ skill: string; file: string; message: string }>;
 }> {
   // The folder is stored as a folder. Only agent.md's body becomes the system
@@ -206,6 +208,11 @@ export async function importPack(args: {
       : existing ? JSON.parse(existing.pinned_models) : args.defaults?.pinnedModels ?? [],
     mcpServers: parsed.mcpServers,
     payoutEmail: args.defaults?.payoutEmail ?? existing?.author_payout_email ?? undefined,
+    extras: {
+      ...(parsed.anthropicSkills.length ? { anthropicSkills: parsed.anthropicSkills } : {}),
+      ...(parsed.advisorModel ? { advisorModel: parsed.advisorModel } : {}),
+      ...(parsed.web ? { web: parsed.web } : {}),
+    },
   };
 
   const created = !existing;
@@ -222,6 +229,8 @@ export async function importPack(args: {
     commands: findCommands(tree).map((c) => c.name),
     hooks: findHooks(tree),
     workflows: findWorkflows(tree),
+    anthropicSkills: parsed.anthropicSkills,
+    ...(parsed.advisorModel ? { advisorModel: parsed.advisorModel } : {}),
     inert, warnings,
   };
 }

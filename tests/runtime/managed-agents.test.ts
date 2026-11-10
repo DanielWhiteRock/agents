@@ -12,7 +12,11 @@ function makeFake() {
       environments: { create: vi.fn().mockResolvedValue({ id: "env_1" }) },
       agents: { create: vi.fn().mockResolvedValue({ id: "agt_1", version: 1 }) },
       skills: { create: vi.fn().mockResolvedValue({ id: "skill_1", latest_version_id: "sv_1" }) },
-      files: { upload: vi.fn().mockResolvedValue({ id: "file_1" }) },
+      files: {
+        upload: vi.fn().mockResolvedValue({ id: "file_1" }),
+        list: vi.fn().mockResolvedValue({ data: [] }),
+        download: vi.fn().mockResolvedValue({ arrayBuffer: async () => new ArrayBuffer(0) }),
+      },
       sessions: {
         create: vi.fn().mockResolvedValue({ id: "s1", status: "running", stop_reason: null, usage: undefined }),
         retrieve: vi.fn().mockResolvedValue({
@@ -412,5 +416,79 @@ describe("workflow run events", () => {
     const out = [];
     for await (const e of await runtime.streamEvents("s1")) out.push(e);
     expect(out[0]).toEqual({ type: "thread.created", threadId: "sthr_9", agentName: null, runId: null });
+  });
+});
+
+describe("capabilities a pack asks for", () => {
+  it("attaches Anthropic's prebuilt skills alongside the pack's own", async () => {
+    await runtime.publishPack(
+      { ...PACK_ZERO, anthropicSkills: ["xlsx", "pdf"] },
+      [{ name: "thing", files: [{ path: "SKILL.md", content: "---\nname: thing\ndescription: d. Use when x.\n---\nb" }] }]);
+    expect(fake.beta.agents.create.mock.calls[0]![0].skills).toEqual([
+      { type: "anthropic", skill_id: "xlsx" },
+      { type: "anthropic", skill_id: "pdf" },
+      { type: "custom", skill_id: "skill_1", version: "latest" },
+    ]);
+  });
+
+  it("enables an advisor only when the pack asks", async () => {
+    await runtime.publishPack(PACK_ZERO);
+    expect(fake.beta.agents.create.mock.calls[0]![0].multiagent.advisor).toBeUndefined();
+    await runtime.publishPack({ ...PACK_ZERO, advisorModel: "claude-opus-5" });
+    expect(fake.beta.agents.create.mock.calls[1]![0].multiagent.advisor)
+      .toEqual({ type: "enabled", model: "claude-opus-5" });
+  });
+
+  it("pins the web tools to allowed domains", async () => {
+    await runtime.publishPack({ ...PACK_ZERO, web: { allowedDomains: ["gov.uk"] } });
+    const configs = fake.beta.agents.create.mock.calls[0]![0].tools[0].configs;
+    const web = configs.filter((c: { name: string }) => c.name.startsWith("web_"));
+    expect(web).toEqual([
+      { name: "web_search", allowed_domains: ["gov.uk"] },
+      { name: "web_fetch", allowed_domains: ["gov.uk"] },
+    ]);
+  });
+
+  it("sends one domain list or the other, never both", async () => {
+    await runtime.publishPack({
+      ...PACK_ZERO, web: { allowedDomains: ["gov.uk"], blockedDomains: ["reddit.com"] },
+    });
+    const web = fake.beta.agents.create.mock.calls[0]![0].tools[0].configs
+      .find((c: { name: string }) => c.name === "web_search");
+    expect(web.allowed_domains).toEqual(["gov.uk"]);
+    expect(web.blocked_domains).toBeUndefined();
+  });
+
+  it("leaves the web tools unrestricted by default", async () => {
+    await runtime.publishPack(PACK_ZERO);
+    expect(fake.beta.agents.create.mock.calls[0]![0].tools[0].configs
+      .some((c: { name: string }) => c.name.startsWith("web_"))).toBe(false);
+  });
+});
+
+describe("listing deliverables", () => {
+  it("keeps only what the platform says is downloadable", async () => {
+    // Shape captured live: mounted pack files come back in the same listing
+    // with fresh ids and downloadable: false.
+    fake.beta.files.list.mockResolvedValue({ data: [
+      { id: "file_a", filename: "agent.md", size_bytes: 478, downloadable: false },
+      { id: "file_b", filename: "capabilities.html", size_bytes: 17676, downloadable: true },
+      { id: "file_c", filename: "notes.md", size_bytes: 24, downloadable: false },
+    ] });
+    expect(await runtime.listOutputs("sesn_1"))
+      .toEqual([{ fileId: "file_b", filename: "capabilities.html", sizeBytes: 17676 }]);
+  });
+
+  it("keeps a file that does not say, rather than discarding it", async () => {
+    fake.beta.files.list.mockResolvedValue({ data: [{ id: "file_x", filename: "out.csv", size_bytes: 10 }] });
+    expect(await runtime.listOutputs("sesn_1")).toHaveLength(1);
+  });
+
+  it("retries an empty listing, because indexing lags the session going idle", async () => {
+    fake.beta.files.list
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({ data: [{ id: "file_b", filename: "late.html", downloadable: true }] });
+    expect(await runtime.listOutputs("sesn_1")).toHaveLength(1);
+    expect(fake.beta.files.list).toHaveBeenCalledTimes(2);
   });
 });

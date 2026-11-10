@@ -42,6 +42,8 @@ function fakeRuntime(script) {
     raiseBudgetTo: async () => {},
     confirmTool: async () => {},
     deleteSession: async () => {},
+  listOutputs: async () => [],
+  downloadOutput: async () => ({ bytes: Buffer.alloc(0), filename: "f" }),
   };
 }
 
@@ -126,6 +128,8 @@ test("a budget_reached recorded from the stream is not wiped by the session's nu
     readSession: async () => ({ id: "sesn_b", status: "idle", stopReason: null,
       usage: { inputTokens: 1, outputTokens: 9, activeSeconds: 1, listCost: { amount: "16", currency: "USD" } } }),
     raiseBudgetTo: async () => ({}), confirmTool: async () => {}, deleteSession: async () => {},
+  listOutputs: async () => [],
+  downloadOutput: async () => ({ bytes: Buffer.alloc(0), filename: "f" }),
   });
   // A fresh organisation: an earlier test in this file deliberately fills its
   // concurrency limit, and reusing that one would fail for the wrong reason.
@@ -141,5 +145,49 @@ test("a budget_reached recorded from the stream is not wiped by the session's nu
   const after = await P.getRun(run.id);
   assert.equal(after.stop_reason, "budget_reached",
     "the UI needs this to offer a top-up; the session object would have said null");
+  void s;
+});
+
+test("only what the platform marks downloadable is reported as a deliverable", async () => {
+  const sql = (await import("../../dist/src/app/sql.js")).sql;
+  const s = await sql();
+  const A = await import("../../dist/src/app/auth.js");
+  const Auth = await import("../../dist/src/app/authoring.js");
+
+  const { orgId, userId } = await A.signUp({
+    email: `out-${Date.now()}@example.com`, name: "Out", password: "correct-horse", orgName: "Out Co",
+  });
+  const slug = `outputs-${Date.now()}`;
+
+  // The live listing returns mounted pack files alongside real deliverables,
+  // with fresh ids, so only the downloadable flag separates them. The adapter
+  // does that filtering; here the runtime is faked past it.
+  P.setRuntime({
+    ensureEnvironment: async () => "env_1",
+    publishPack: async () => ({
+      runtimePackId: "agt_o", version: "1", skills: [], subagents: [],
+      mounts: [{ path: "agent.md", fileId: "file_mounted", mountPath: "pack/agent.md" }],
+    }),
+    createSession: async () => ({ id: "sesn_o", status: "running", stopReason: null,
+      usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
+    sendMessage: async () => {},
+    streamEvents: async () => (async function* () { yield { type: "status", status: "idle", stopReason: null }; })(),
+    readSession: async () => ({ id: "sesn_o", status: "idle", stopReason: null,
+      usage: { inputTokens: 1, outputTokens: 5, activeSeconds: 1, listCost: { amount: "1", currency: "USD" } } }),
+    listOutputs: async () => [{ fileId: "file_real", filename: "report.html", sizeBytes: 2048 }],
+    downloadOutput: async () => ({ bytes: Buffer.from("<html>"), filename: "report.html" }),
+    raiseBudgetTo: async () => ({}), confirmTool: async () => {}, deleteSession: async () => {},
+  });
+
+  await Auth.importPack({ orgId, files: [{ path: "agent.md", text: `---\nname: Out\nslug: ${slug}\n---\nmethod` }] });
+  const v = await P.publishPack(slug);
+  await P.grantEntitlement(orgId, v.id);
+  const run = await P.startRun({ orgId, userId, packVersionId: v.id });
+  await P.sendTurn(run.id, "make me a report");
+
+  const outputs = await P.runOutputs(run.id);
+  assert.deepEqual(outputs.map((o) => o.filename), ["report.html"],
+    "only what the agent produced, not what we mounted for it");
+  assert.equal(Number(outputs[0].size_bytes), 2048);
   void s;
 });

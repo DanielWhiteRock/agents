@@ -108,3 +108,58 @@ describe("parsePackFolder", () => {
     expect(out.instructions).toBe("Step 1: the outcome.");
   });
 });
+
+describe("runtime capabilities a pack asks for", () => {
+  it("reads Anthropic's prebuilt skills by short name", () => {
+    const p = parsePackMarkdown(
+      "---\nname: X\nskills:\n  - type: anthropic\n    skill_id: xlsx\n  - type: anthropic\n    skill_id: pdf\n---\nbody");
+    expect(p.anthropicSkills).toEqual(["xlsx", "pdf"]);
+  });
+  it("refuses a skill name that is not one of the prebuilt four, and says where pack skills go", () => {
+    expect(() => parsePackMarkdown("---\nskills:\n  - skill_id: wibble\n---\nbody"))
+      .toThrow(/not one of Anthropic's prebuilt skills.*directories under skills\//s);
+  });
+  it("reads an advisor as a scalar or an object", () => {
+    expect(parsePackMarkdown("---\nadvisor: claude-opus-5\n---\nbody").advisorModel).toBe("claude-opus-5");
+    expect(parsePackMarkdown("---\nadvisor:\n  model: claude-opus-5\n---\nbody").advisorModel).toBe("claude-opus-5");
+  });
+  it("reads web domain pinning", () => {
+    expect(parsePackMarkdown("---\nweb:\n  allowed_domains: www.gov.uk, www.ons.gov.uk\n---\nbody").web)
+      .toEqual({ allowedDomains: ["www.gov.uk", "www.ons.gov.uk"] });
+    expect(parsePackMarkdown("---\nweb:\n  blocked_domains: [reddit.com]\n---\nbody").web)
+      .toEqual({ blockedDomains: ["reddit.com"] });
+  });
+  it("refuses both domain lists, because the API rejects the pair", () => {
+    expect(() => parsePackMarkdown(
+      "---\nweb:\n  allowed_domains: a.com\n  blocked_domains: b.com\n---\nbody"))
+      .toThrow(/not both/);
+  });
+  it("leaves them absent when a pack asks for nothing", () => {
+    const p = parsePackMarkdown("---\nname: X\n---\nbody");
+    expect(p.anthropicSkills).toEqual([]);
+    expect(p.advisorModel).toBeUndefined();
+    expect(p.web).toBeUndefined();
+  });
+});
+
+describe("web domain validation", () => {
+  const web = (line: string) => () => parsePackMarkdown(`---\nweb:\n  ${line}\n---\nbody`);
+
+  it("refuses a public suffix, which the API itself rejects", () => {
+    expect(web("allowed_domains: gov.uk")).toThrow(/public suffix.*Use a hostname under it, such as "www.gov.uk"/s);
+    expect(web("allowed_domains: co.uk")).toThrow(/public suffix/);
+  });
+  it("refuses a single label", () => {
+    expect(web("allowed_domains: localhost")).toThrow(/single label/);
+  });
+  it("accepts a registrable hostname", () => {
+    expect(web("allowed_domains: www.gov.uk, ons.gov.uk")()).toBeTruthy();
+    expect(web("allowed_domains: example.com")()).toBeTruthy();
+  });
+  it("strips a scheme and a path rather than refusing them", () => {
+    expect(web("allowed_domains: https://www.gov.uk/vat")()).toBeTruthy();
+  });
+  it("checks a blocked list the same way", () => {
+    expect(web("blocked_domains: com")).toThrow(/single label/);
+  });
+});

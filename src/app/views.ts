@@ -168,6 +168,7 @@ export type Ask = { event_id: string; name: string; input: string };
 export function runPage(
   run: RunRow, packName: string, balance: number, exhausted: boolean, asks: Ask[] = [], viewer: Viewer = null,
   trial: { turns: number; slug: string; priceCents: number } | null = null,
+  outputs: Array<{ file_id: string; filename: string; size_bytes: number }> = [],
 ): string {
   return layout(`Run · ${packName}`, `
 <h1>${esc(packName)}</h1>
@@ -206,6 +207,13 @@ ${exhausted ? `<div class="note" id="capnote">This run hit its budget. The platf
     <span class="tag" id="live">connecting…</span>
   </div>
 </form>
+${outputs.length ? `<h2>What it produced</h2>
+<p class="lede" style="font-size:14px">Files the agent wrote to <code>/mnt/session/outputs</code>. Yours to keep.</p>
+<table><tr><th>File</th><th class="num">Size</th><th></th></tr>
+${outputs.map((o) => `<tr><td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file_id)}">${esc(o.filename)}</a></td>
+<td class="num">${(o.size_bytes / 1024).toFixed(1)} KB</td>
+<td><a href="/runs/${esc(run.id)}/outputs/${esc(o.file_id)}" download>download</a></td></tr>`).join("")}
+</table>` : ""}
 <h2>Trace</h2>
 <div id="trace"></div>
 <script>
@@ -221,6 +229,7 @@ function render(e){
     const p = JSON.parse(e.payload);
     if (e.kind === 'user.message') body = p.text;
     else if (e.kind === 'agent.text') body = p.text;
+    else if (e.kind === 'run.outputs') body = 'produced ' + p.files.map((f) => f.name + ' (' + (f.bytes/1024).toFixed(1) + 'KB)').join(', ');
     else if (e.kind === 'run.metered') body = 'cost ' + (p.list_cost_cents/100).toFixed(2) + ' (+' + (p.delta_cents/100).toFixed(2) + ') · in ' + p.input_tokens + ' · out ' + p.output_tokens + ' · ' + p.active_seconds.toFixed(1) + 's · author earned ' + (p.author_cents/100).toFixed(2);
     else if (e.kind === 'tool.use') body = p.name + ' [' + p.permission + '] ' + JSON.stringify(p.input);
     else if (e.kind === 'tool.result') body = p.name + (p.isError ? ' FAILED ' : ' ok ') + (p.preview||'').slice(0,400);

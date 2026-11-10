@@ -23,6 +23,8 @@ const stubRuntime = () => ({
   readSession: async () => ({ id: "sesn_a", status: "idle", stopReason: null,
     usage: { inputTokens: 1, outputTokens: 5, activeSeconds: 1, listCost: { amount: "1", currency: "USD" } } }),
   deleteSession: async () => {},
+  listOutputs: async () => [],
+  downloadOutput: async () => ({ bytes: Buffer.alloc(0), filename: "f" }),
 });
 
 const INPUT = {

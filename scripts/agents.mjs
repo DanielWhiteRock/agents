@@ -105,6 +105,8 @@ async function sync() {
   if (out.commands?.length) console.log(`  commands:  ${out.commands.map((c) => "/" + c).join(" ")}`);
   if (out.hooks?.length) console.log(`  hooks:     ${out.hooks.join(", ")}`);
   if (out.workflows?.length) console.log(`  workflows: ${out.workflows.join(", ")}`);
+  if (out.anthropicSkills?.length) console.log(`  anthropic: ${out.anthropicSkills.join(", ")}`);
+  if (out.advisorModel) console.log(`  advisor:   ${out.advisorModel}`);
   if (out.warnings?.length) {
     console.log("\n  worth fixing:");
     for (const w of out.warnings) console.log(`    - ${w}`);

@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS packs (
   model TEXT NOT NULL,
   effort TEXT NOT NULL DEFAULT '',
   pinned_models TEXT NOT NULL DEFAULT '[]',
+  -- Prebuilt skills, an advisor model and web domain pinning: things the
+  -- runtime supports that a pack has to be able to ask for.
+  extras TEXT NOT NULL DEFAULT '{}',
   instructions TEXT NOT NULL,
   -- draft: only the author sees it. review: submitted for curation.
   -- listed: in the catalog. unlisted: withdrawn, existing buyers unaffected.
@@ -195,6 +198,17 @@ CREATE TABLE IF NOT EXISTS run_events (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id, id);
+
+-- Deliverables a run produced, so a pack whose output is a file has somewhere
+-- to put it that the buyer can actually reach.
+CREATE TABLE IF NOT EXISTS run_outputs (
+  run_id TEXT NOT NULL REFERENCES runs(id),
+  file_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, file_id)
+);
 
 -- A tool call that paused for a human. The platform default is always_allow,
 -- so these exist only because a pack asked for them.
@@ -333,6 +347,7 @@ const MIGRATIONS = [
   "ALTER TABLE purchases ADD COLUMN kind TEXT NOT NULL DEFAULT 'pack'",
   "ALTER TABLE runs ADD COLUMN is_trial INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE runs ADD COLUMN turn_count INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE packs ADD COLUMN extras TEXT NOT NULL DEFAULT '{}'",
 ];
 
 /**

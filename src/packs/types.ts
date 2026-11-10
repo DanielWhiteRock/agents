@@ -49,6 +49,21 @@ export type PackDefinition = {
    */
   folder?: import("./wrapper.js").FolderBrief | undefined;
   /**
+   * Anthropic's own prebuilt skills, by short name: pptx, xlsx, docx, pdf.
+   * A pack that delivers a spreadsheet needs to be able to ask for one.
+   */
+  anthropicSkills?: string[];
+  /**
+   * A model the agent may consult mid-turn for strategic guidance. Off unless
+   * a pack asks, because it is a second model on every consultation.
+   */
+  advisorModel?: string;
+  /**
+   * Pin where the web tools may look. Exactly one of these, never both — the
+   * API rejects a request carrying the pair.
+   */
+  web?: { allowedDomains?: string[]; blockedDomains?: string[] };
+  /**
    * Models this pack is allowed to run on. Empty means any.
    * Exists because every extraction refusal measured in the spikes came from
    * claude-opus-5; a weaker model may simply comply.

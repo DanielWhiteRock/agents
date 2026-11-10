@@ -8,7 +8,7 @@ import { parseUsage } from "./usage.js";
 import {
   type AgentRuntime, type CreateSessionOptions, type PublishedPack,
   type RuntimeEvent, type RuntimeSession, type SessionStatus, type SkillUpload, type ToolDecision,
-  type MountedFile, type PublishedSkill, type PublishedSubagent, type SubagentUpload,
+  type MountedFile, type OutputFile, type PublishedSkill, type PublishedSubagent, type SubagentUpload,
   BudgetExhaustedError, BudgetRemovalForbiddenError, BudgetRequiredError,
 } from "./types.js";
 import type { PackDefinition } from "../packs/types.js";
@@ -19,7 +19,13 @@ export type ManagedAgentsClient = {
   /** Skills are out of beta: client.skills, not client.beta.skills. */
   skills: { create(body: any): Promise<{ id: string; latest_version_id?: string }> };
   beta: {
-    files: { upload(body: any): Promise<{ id: string }> };
+    files: {
+      upload(body: any): Promise<{ id: string }>;
+      list(body: any): Promise<{ data: Array<{
+        id: string; filename: string; size_bytes?: number; downloadable?: boolean; mime_type?: string;
+      }> }>;
+      download(id: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> }>;
+    };
     environments: { create(body: any): Promise<{ id: string }> };
     agents: { create(body: any): Promise<{ id: string; version: number }> };
     sessions: {
@@ -37,6 +43,12 @@ export type ManagedAgentsClient = {
 
 /** Built-ins that change the world, so they ask before running. */
 const DESTRUCTIVE = ["bash", "write", "edit"] as const;
+
+/** The tools a domain restriction applies to. */
+const WEB_TOOLS = ["web_search", "web_fetch"] as const;
+
+/** Anthropic's prebuilt skills, referenced by short name rather than an id. */
+export const ANTHROPIC_SKILLS = ["pptx", "xlsx", "docx", "pdf"] as const;
 
 /** The platform caps a subagents.predefined_agents list at 20. */
 export const MAX_SUBAGENTS = 20;
@@ -79,7 +91,7 @@ const requestedMount = (path: string): string => `pack/${path}`;
  * Every agent in a run spends tokens, which is why every session is created
  * with a hard budget.
  */
-function multiagentBlock(subagents: PublishedSubagent[]): Record<string, unknown> {
+function multiagentBlock(subagents: PublishedSubagent[], advisorModel?: string): Record<string, unknown> {
   const predefined = subagents.map((s) => ({ type: "agent", id: s.agentId, version: Number(s.version) }));
   return {
     type: "multiagent_20261001",
@@ -87,6 +99,9 @@ function multiagentBlock(subagents: PublishedSubagent[]): Record<string, unknown
       ? { type: "enabled", inline_agents: { type: "disabled" }, predefined_agents: predefined }
       : { type: "disabled" },
     workflows: { type: "enabled", predefined_agents: [...predefined, { type: "self" }] },
+    // Disabled unless the pack asks: an advisor is a second model consulted
+    // mid-turn, and the buyer pays for both.
+    ...(advisorModel ? { advisor: { type: "enabled", model: advisorModel } } : {}),
   };
 }
 
@@ -211,10 +226,21 @@ export class ManagedAgentsRuntime implements AgentRuntime {
     // The platform's own default is always_allow, so whatever posture we want
     // has to be stated explicitly on every publish.
     const policy = pack.destructivePolicy ?? "always_ask";
+    // Web restrictions ride on the web tools' own config entries. The API
+    // rejects allowed_domains and blocked_domains together, so one wins.
+    const webConfig = pack.web?.allowedDomains?.length
+      ? { allowed_domains: pack.web.allowedDomains }
+      : pack.web?.blockedDomains?.length
+        ? { blocked_domains: pack.web.blockedDomains }
+        : null;
+
     const tools: any[] = [{
       type: "agent_toolset_20260401",
       default_config: { enabled: true },
-      configs: DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: policy } })),
+      configs: [
+        ...DESTRUCTIVE.map((name) => ({ name, permission_policy: { type: policy } })),
+        ...(webConfig ? WEB_TOOLS.map((name) => ({ name, ...webConfig })) : []),
+      ],
     }];
     for (const t of pack.tools ?? []) {
       tools.push({
@@ -246,10 +272,16 @@ export class ManagedAgentsRuntime implements AgentRuntime {
       ...(pack.mcpServers?.length
         ? { mcp_servers: pack.mcpServers.map((m) => ({ type: "url", name: m.name, url: m.url })) }
         : {}),
-      ...(published.length
-        ? { skills: published.map((s) => ({ type: "custom", skill_id: s.skillId, version: "latest" })) }
-        : {}),
-      multiagent: multiagentBlock(publishedSubagents),
+      ...(() => {
+        const attached = [
+          // Anthropic's own first, so a document skill is found before a
+          // pack's narrower one when both could apply.
+          ...(pack.anthropicSkills ?? []).map((id) => ({ type: "anthropic", skill_id: id })),
+          ...published.map((s) => ({ type: "custom", skill_id: s.skillId, version: "latest" })),
+        ];
+        return attached.length > 0 ? { skills: attached } : {};
+      })(),
+      multiagent: multiagentBlock(publishedSubagents, pack.advisorModel),
       metadata: { pack_slug: pack.slug },
     });
     return {
@@ -457,6 +489,37 @@ export class ManagedAgentsRuntime implements AgentRuntime {
         ...(result === "deny" && denyMessage ? { deny_message: denyMessage } : {}),
       }],
     });
+  }
+
+  /**
+   * What the agent produced.
+   *
+   * The listing covers the whole session scope, so the pack files we mounted
+   * come back too — with fresh ids, so they cannot be filtered by the id we
+   * uploaded. The platform marks them `downloadable: false` while a genuine
+   * deliverable is `true`, which is the distinction to use.
+   *
+   * Files written to /mnt/session/outputs are indexed a beat after the session
+   * goes idle, so a single empty listing is not evidence of no output — it is
+   * retried before being believed.
+   */
+  async listOutputs(sessionId: string): Promise<OutputFile[]> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const res = await this.client.beta.files.list({
+        scope_id: sessionId, betas: ["managed-agents-2026-04-01"],
+      });
+      const files = (res.data ?? [])
+        .filter((f) => f.downloadable !== false)
+        .map((f) => ({ fileId: f.id, filename: f.filename, sizeBytes: Number(f.size_bytes ?? 0) }));
+      if (files.length > 0 || attempt === 2) return files;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return [];
+  }
+
+  async downloadOutput(fileId: string): Promise<{ bytes: Buffer; filename: string }> {
+    const res = await this.client.beta.files.download(fileId);
+    return { bytes: Buffer.from(await res.arrayBuffer()), filename: fileId };
   }
 
   async deleteSession(sessionId: string): Promise<void> {

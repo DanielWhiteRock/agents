@@ -30,7 +30,7 @@ export type PackRow = {
   id: string; slug: string; name: string; tagline: string; author: string; author_org_id: string | null;
   price_cents: number; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string;
-  author_payout_email: string | null; created_at: string;
+  author_payout_email: string | null; extras: string; created_at: string;
 };
 export type PackVersionRow = {
   id: string; pack_id: string; version: number; runtime_pack_id: string;
@@ -131,6 +131,20 @@ export async function getVersion(versionId: string): Promise<PackVersionRow | un
   return s.one<PackVersionRow>("SELECT * FROM pack_versions WHERE id = $1", [versionId]);
 }
 
+export type PackExtras = {
+  anthropicSkills?: string[];
+  advisorModel?: string;
+  web?: { allowedDomains?: string[]; blockedDomains?: string[] };
+};
+
+/** Runtime capabilities a pack asked for in its front matter. */
+export function packExtras(pack: Pick<PackRow, "extras">): PackExtras {
+  try {
+    const parsed = JSON.parse(pack.extras || "{}") as PackExtras;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch { return {}; }
+}
+
 /** Some models reject `effort` entirely, so it is a capability, not a default. */
 export type DestructivePolicy = "always_ask" | "always_allow" | "auto";
 
@@ -172,6 +186,7 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
     priceCents: pack.price_cents, upgradePoints: pack.upgrade_points,
     instructions: pack.instructions, pinnedModels: JSON.parse(pack.pinned_models),
     destructivePolicy: await destructivePolicy(),
+    ...packExtras(pack),
   };
 
   // The folder, if the author uploaded one. Its skills/ become real platform
@@ -579,6 +594,7 @@ async function meter(runId: string, result: TurnResult): Promise<{ billedCents: 
       session.usage.activeSeconds, costCents, costCents, billed, runId]);
 
   for (const a of result.pendingAsks) await recordAsk(runId, a);
+  await collectOutputs(runId, run.session_id);
   await recordEvent(runId, "run.metered", {
     list_cost_cents: costCents, delta_cents: delta, billed_cents: billed,
     author_millicents: authorMilli, input_tokens: session.usage.inputTokens,
@@ -613,6 +629,50 @@ function interception(runId: string, hooks: Hook[]): {
       });
     },
   };
+}
+
+export type OutputRow = { run_id: string; file_id: string; filename: string; size_bytes: number; created_at: string };
+
+export async function runOutputs(runId: string): Promise<OutputRow[]> {
+  const s = await sql();
+  return s.query<OutputRow>(
+    "SELECT * FROM run_outputs WHERE run_id = $1 ORDER BY created_at, filename", [runId]);
+}
+
+/**
+ * Record what a turn produced.
+ *
+ * Deliverables are listed after each turn rather than at the end of a run,
+ * because a run can go on for hours and a file nobody knows about is the same
+ * as no file.
+ */
+async function collectOutputs(runId: string, sessionId: string): Promise<void> {
+  let files: Awaited<ReturnType<AgentRuntime["listOutputs"]>>;
+  try { files = await runtime().listOutputs(sessionId); }
+  catch { return; }
+  if (files.length === 0) return;
+
+  const s = await sql();
+  for (const f of files) {
+    await s.query(
+      `INSERT INTO run_outputs (run_id, file_id, filename, size_bytes, created_at)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (run_id, file_id) DO NOTHING`,
+      [runId, f.fileId, f.filename, f.sizeBytes, now()]);
+  }
+  await recordEvent(runId, "run.outputs", { files: files.map((f) => ({ name: f.filename, bytes: f.sizeBytes })) });
+}
+
+export async function downloadOutput(runId: string, fileId: string, orgId: string): Promise<{
+  bytes: Buffer; filename: string;
+}> {
+  const run = await getRun(runId);
+  if (!run || run.org_id !== orgId) throw new Error("no such run");
+  const s = await sql();
+  const row = await s.one<OutputRow>(
+    "SELECT * FROM run_outputs WHERE run_id = $1 AND file_id = $2", [runId, fileId]);
+  if (!row) throw new Error("no such output");
+  const out = await runtime().downloadOutput(fileId);
+  return { bytes: out.bytes, filename: row.filename };
 }
 
 async function onBudgetExhausted(runId: string, err: unknown): Promise<boolean> {

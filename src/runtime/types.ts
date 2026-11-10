@@ -43,6 +43,9 @@ export type PublishedSkill = { name: string; skillId: string; skillVersion: stri
  */
 export type MountedFile = { path: string; fileId: string; mountPath: string };
 
+/** A file the agent produced, waiting in the session for whoever asked for it. */
+export type OutputFile = { fileId: string; filename: string; sizeBytes: number };
+
 export type CreateSessionOptions = {
   /** A session only needs to know which agent version to pin to. */
   pack: Pick<PublishedPack, "runtimePackId" | "version">;
@@ -105,6 +108,9 @@ export interface AgentRuntime {
   readSession(sessionId: string): Promise<RuntimeSession>;
   raiseBudgetTo(sessionId: string, headroomCents: bigint): Promise<RuntimeSession>;
   confirmTool(sessionId: string, eventId: string, result: "allow" | "deny", denyMessage?: string): Promise<void>;
+  /** Deliverables the agent wrote. A pack whose output is a file needs these. */
+  listOutputs(sessionId: string): Promise<OutputFile[]>;
+  downloadOutput(fileId: string): Promise<{ bytes: Buffer; filename: string }>;
   deleteSession(sessionId: string): Promise<void>;
 }
 

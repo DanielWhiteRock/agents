@@ -209,6 +209,8 @@ test("a refund stops the run, and the pack cannot be run again", async () => {
     createSession: async () => ({ id: "sesn_r", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
     deleteSession: async () => {},
+  listOutputs: async () => [],
+  downloadOutput: async () => ({ bytes: Buffer.alloc(0), filename: "f" }),
   });
   const run = await P.startRun({ orgId, userId, packVersionId: v.id });
   assert.equal((await P.getRun(run.id)).ended_at, null);
@@ -239,6 +241,8 @@ test("a run is refused when the balance is empty, and allowed once topped up", a
     createSession: async () => ({ id: "sesn_p", status: "running", stopReason: null,
       usage: { inputTokens: 0, outputTokens: 0, activeSeconds: 0, listCost: { amount: "0", currency: "USD" } } }),
     deleteSession: async () => {},
+  listOutputs: async () => [],
+  downloadOutput: async () => ({ bytes: Buffer.alloc(0), filename: "f" }),
   });
 
   // Spend the signup grant down to nothing.
