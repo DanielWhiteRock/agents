@@ -351,3 +351,111 @@ test("creatorRating applies the same threshold across all of a creator's packs",
   assert.equal(rating.count, 5);
   assert.equal(rating.average, (4 * 4 + 5) / 5);
 });
+
+// ----------------------------------------------------------------- seeding
+//
+// scripts/seed-social.mjs makes the social layer above visible in a
+// development database with no runs, ratings or threads yet. Its one safety
+// mechanism is a refusal to run anywhere but a local SQLite database — no
+// `is_seed` filter anywhere in packStats, ratingOf, the distribution, the
+// vote count, creator totals or the shelf order, on purpose.
+
+let Seed;
+test("seed-social: setup", async () => {
+  Seed = await import("../../scripts/seed-social.mjs");
+});
+
+test("the seed refuses a Postgres target: DATABASE_URL set means a non-zero exit before any connection is attempted", async () => {
+  // A deliberately unreachable host. If the guard did not fire before the
+  // database layer ever saw this value, this call would hang retrying a
+  // connection for ~30s (see PostgresSql.connect) instead of returning fast.
+  assert.throws(
+    () => Seed.guardEnvironment({ DATABASE_URL: "postgres://unreachable.invalid/db" }),
+    (e) => e.name === "SeedGuardError",
+    "DATABASE_URL set must refuse immediately, before a connection attempt",
+  );
+});
+
+test("the seed does not refuse when DATABASE_URL is absent", async () => {
+  assert.doesNotThrow(() => Seed.guardEnvironment({}));
+});
+
+test("guardDialect refuses anything that is not sqlite, independent of what selected it", async () => {
+  assert.throws(() => Seed.guardDialect({ dialect: "postgres" }), (e) => e.name === "SeedGuardError");
+  assert.doesNotThrow(() => Seed.guardDialect({ dialect: "sqlite" }));
+});
+
+test("main() refuses a Postgres target end to end: non-zero exit, nothing written", async () => {
+  const s = await sql();
+  const before = await s.one("SELECT COUNT(*) AS n FROM orgs");
+  const code = await Seed.main([], { DATABASE_URL: "postgres://unreachable.invalid/db" });
+  assert.notEqual(code, 0, "a refused run must exit non-zero");
+  const after = await s.one("SELECT COUNT(*) AS n FROM orgs");
+  assert.equal(Number(after.n), Number(before.n), "a refused run must write nothing");
+});
+
+test("seeding: one pack crosses the rating threshold, one sits deliberately at four, votes and saves and threads all land", async () => {
+  const s = await sql();
+  const code = await Seed.main([]);
+  assert.equal(code, 0);
+
+  const guardrails = await P.getPack("guardrails");
+  const campaign = await P.getPack("campaign-strategist");
+
+  const above = await S.ratingOf(guardrails.id);
+  assert.equal(above.count, 7);
+  assert.ok(above.average !== null, "seven ratings clears RATING_THRESHOLD — the average must render");
+  assert.equal(above.distribution.reduce((a, b) => a + b, 0), 7);
+
+  const atFour = await S.ratingOf(campaign.id);
+  assert.equal(atFour.count, 4);
+  assert.equal(atFour.average, null, "four ratings is deliberately below RATING_THRESHOLD — no average");
+
+  // Only positive votes are "useful" — the seeded downvote must not inflate it.
+  const useful = await s.query("SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND value > 0", [guardrails.id]);
+  assert.equal(useful.length, 3, "three upvotes, and the downvote must not count toward 'useful'");
+  const downvotes = await s.query("SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND value < 0", [guardrails.id]);
+  assert.equal(downvotes.length, 1, "the downvote is still a real stored row — just not a useful one");
+
+  const saves = await s.query("SELECT 1 AS ok FROM pack_saves WHERE pack_id = $1", [guardrails.id]);
+  assert.equal(saves.length, 2);
+
+  const threads = await s.query(
+    "SELECT t.* FROM threads t JOIN creators c ON c.id = t.creator_id WHERE c.handle LIKE 'seed-studio-%'");
+  assert.equal(threads.length, 2, "two threads were opened against the seeded creator's profile");
+  const messages = await s.query(
+    "SELECT m.* FROM thread_messages m WHERE m.thread_id IN (SELECT id FROM threads WHERE creator_id IN (SELECT id FROM creators WHERE handle LIKE 'seed-studio-%'))");
+  assert.ok(messages.length >= 3, "the question and at least one reply landed");
+});
+
+test("--wipe removes every seeded row and nothing else: the catalog packs stay published", async () => {
+  const s = await sql();
+  // Seed again so this test is independent of ordering/execution of the one above.
+  await Seed.main([]);
+
+  const guardrails = await P.getPack("guardrails");
+  const beforeWipe = await S.ratingOf(guardrails.id);
+  assert.ok(beforeWipe.count > 0, "there is something seeded to remove");
+
+  const code = await Seed.main(["--wipe"]);
+  assert.equal(code, 0);
+
+  const afterWipe = await S.ratingOf(guardrails.id);
+  assert.deepEqual(afterWipe, { average: null, count: 0, distribution: [0, 0, 0, 0, 0] },
+    "every seeded review on this pack is gone");
+
+  const seedOrgsLeft = await s.one("SELECT COUNT(*) AS n FROM orgs WHERE is_seed = 1");
+  assert.equal(Number(seedOrgsLeft.n), 0, "no org marked is_seed survives a wipe");
+
+  const threadsLeft = await s.query(
+    "SELECT 1 AS ok FROM threads t JOIN creators c ON c.id = t.creator_id WHERE c.handle LIKE 'seed-studio-%'");
+  assert.equal(threadsLeft.length, 0, "the seeded threads are gone too");
+
+  // The pack itself, and the version seeding published, must survive: wipe
+  // removes the fake social proof, never the real catalog.
+  const stillThere = await P.getPack("guardrails");
+  assert.ok(stillThere, "the catalog pack itself is untouched by --wipe");
+  assert.equal(stillThere.status, "listed");
+  const version = await P.latestVersion(stillThere.id);
+  assert.ok(version, "the published version seeding created (or reused) is left in place");
+});

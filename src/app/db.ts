@@ -564,6 +564,19 @@ const MIGRATIONS = [
   // ahead of everything else, so this is the only honest ordering signal a
   // freshly curated shelf actually has.
   "ALTER TABLE packs ADD COLUMN featured_rank INTEGER",
+  // Seed data's one safety mechanism is `scripts/seed-social.mjs` refusing to
+  // run anywhere but a local SQLite database — not a filter here. Every
+  // aggregate (packStats, ratingOf, the distribution, the vote count, creator
+  // totals, the shelf order) counts a seeded row exactly like a real one, on
+  // purpose: a seed that aggregates quietly excluded would render nothing,
+  // which defeats the reason it exists. `is_seed` marks the rows that script
+  // wrote, on the four tables whose own identity it invents — an org, a run,
+  // a review, a vote — so `--wipe` can find and remove precisely those rows
+  // and never a real buyer's. No query outside that script ever reads it.
+  "ALTER TABLE orgs ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE runs ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE pack_reviews ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE pack_votes ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
 ];
 
 /**
