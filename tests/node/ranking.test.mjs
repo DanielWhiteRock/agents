@@ -180,3 +180,77 @@ test("only the curator may set a pack's featured_rank", async () => {
   const stranger = await org("Stranger Co");
   await assert.rejects(Auth.setFeaturedRank(stranger.orgId, pack.slug, 1), (e) => e.name === "NotTheCuratorError");
 });
+
+// --------------------------------------------------- the shelf in one query
+//
+// The landing page used to do four sequential round trips per pack —
+// `latestVersion`, `entitled`, `packStats` (three subqueries itself) and the
+// creator's handle — about 280 queries for seventy packs, through a pool
+// capped at eight connections. `catalogFor` answers all of it in one, so
+// these tests pin the facts that used to come from those four calls.
+
+test("catalogFor carries the version, the owning-org count and the creator handle in one query", async () => {
+  const pack = await listedPack("2026-03-01T00:00:00.000Z");
+  const version = await P.latestVersion(pack.id);
+  const viewer = await org("Catalog Viewer Co");
+  const buyer = await org("Catalog Buyer Co");
+  const s = await sql();
+  await P.grantEntitlement(buyer.orgId, version.id);
+
+  // A creator for the pack's own author org, the way re-attribution makes
+  // one creator the byline on everything on the shelf.
+  const Cr = await import("../../dist/src/app/creators.js");
+  const creator = await Cr.upsertCreator({
+    orgId: pack.author_org_id, userId: (await s.one("SELECT id FROM users WHERE org_id = $1", [pack.author_org_id])).id,
+    handle: `catalog-creator-${++n}`, displayName: "Catalog Creator",
+  });
+  await s.query("UPDATE packs SET creator_id = $1 WHERE id = $2", [creator.id, pack.id]);
+
+  const row = (await P.catalogFor(viewer.orgId)).find((r) => r.slug === pack.slug);
+  assert.ok(row, "a listed pack is on the shelf");
+  assert.equal(row.version, version.version, "the latest version number");
+  assert.equal(row.latestVersionId, version.id, "and the version itself, so the card knows it is published");
+  assert.equal(row.buyers, 1, "the same count packStats returns");
+  assert.equal(row.creatorHandle, creator.handle, "one join, not one query per pack");
+  assert.equal(row.owned, false, "this viewer owns nothing");
+
+  const asBuyer = (await P.catalogFor(buyer.orgId)).find((r) => r.slug === pack.slug);
+  assert.equal(asBuyer.owned, true, "and the buyer's own row says so");
+});
+
+test("owning an older version does not show as owning the current one", async () => {
+  // The same question `entitled(orgId, latest.id)` asked: an org that bought
+  // v1 does not own v2, and the card must not say otherwise.
+  const pack = await listedPack("2026-03-01T00:00:00.000Z");
+  const first = await P.latestVersion(pack.id);
+  const buyer = await org("Older Version Co");
+  await P.grantEntitlement(buyer.orgId, first.id);
+  assert.equal((await P.catalogFor(buyer.orgId)).find((r) => r.slug === pack.slug).owned, true);
+
+  await P.publishPack(pack.slug);
+  const second = await P.latestVersion(pack.id);
+  assert.notEqual(second.id, first.id);
+  const row = (await P.catalogFor(buyer.orgId)).find((r) => r.slug === pack.slug);
+  assert.equal(row.owned, false, "an entitlement to v1 is not an entitlement to v2");
+  assert.equal(row.version, second.version);
+});
+
+test("catalogFor counts runs the way packStats does, and ranks the same way listPacks does", async () => {
+  const quiet = await listedPack("2026-04-01T00:00:00.000Z");
+  const busy = await listedPack("2020-04-01T00:00:00.000Z");
+  const busyVersion = await P.latestVersion(busy.id);
+  const runner = await org("Runner Co");
+  await insertRun(runner.orgId, runner.userId, busyVersion.id);
+
+  const viewer = await org("Ranking Viewer Co");
+  const rows = await P.catalogFor(viewer.orgId);
+  const mine = rows.filter((r) => [quiet.slug, busy.slug].includes(r.slug)).map((r) => r.slug);
+  assert.deepEqual(mine, [busy.slug, quiet.slug], "a run outranks mere recency, as rankPacks says");
+  assert.equal(rows.find((r) => r.slug === busy.slug).runs, 1);
+  assert.equal(rows.find((r) => r.slug === quiet.slug).runs, 0);
+
+  // And the same filter the shelf's search box uses still narrows it.
+  const found = await P.catalogFor(viewer.orgId, busy.name);
+  assert.ok(found.some((r) => r.slug === busy.slug));
+  assert.equal(found.some((r) => r.slug === quiet.slug), false);
+});

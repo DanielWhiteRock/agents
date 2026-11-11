@@ -193,11 +193,12 @@ type RankedPackRow = PackRow & { runs: number | string; rating: number | string 
 // ratings exist — the same gate `ratingOf` applies, so a rating the page
 // would hide cannot move a pack on the shelf either — and `votes` summing
 // only positive values, because a downvote is not usefulness.
-const RANKING_SELECT = `
-  SELECT p.*,
+const RANKING_COLUMNS = `p.*,
     COALESCE(rc.runs, 0) AS runs,
     CASE WHEN COALESCE(rt.cnt, 0) >= $1 THEN rt.avg_rating ELSE NULL END AS rating,
-    COALESCE(vt.votes, 0) AS votes
+    COALESCE(vt.votes, 0) AS votes`;
+
+const RANKING_JOINS = `
   FROM packs p
   LEFT JOIN (
     SELECT v.pack_id, COUNT(*) AS runs
@@ -214,8 +215,95 @@ const RANKING_SELECT = `
     SELECT pack_id, SUM(CASE WHEN value > 0 THEN value ELSE 0 END) AS votes
     FROM pack_votes
     GROUP BY pack_id
-  ) vt ON vt.pack_id = p.id
+  ) vt ON vt.pack_id = p.id`;
+
+const RANKING_SELECT = `
+  SELECT ${RANKING_COLUMNS}
+  ${RANKING_JOINS}
   WHERE p.status = 'listed'`;
+
+/**
+ * The shelf as the landing page needs it, in one query.
+ *
+ * `listPacks` ranks rows and stops there, which left the route doing four
+ * sequential round trips per pack — `latestVersion`, `entitled`, `packStats`
+ * (itself three subqueries) and the creator's handle — about 280 queries for
+ * seventy packs, through a pool capped at eight connections, on the first
+ * page a signed-in buyer sees. After re-attribution every listed pack shares
+ * one creator, so 68 of those were fetching the same string.
+ *
+ * So the four extra facts join here: the latest version (and therefore
+ * whether the pack is published at all), whether *this* organisation is
+ * entitled to that exact version — the same question `entitled` asks, so an
+ * org holding only an older version is not shown as owning the current one —
+ * the owning-organisation count, and the creator's handle.
+ */
+const CATALOG_SELECT = `
+  SELECT ${RANKING_COLUMNS},
+    COALESCE(ent.buyers, 0) AS buyers,
+    COALESCE(lv.version, 0) AS version,
+    lv.id AS latest_version_id,
+    CASE WHEN mine.org_id IS NULL THEN 0 ELSE 1 END AS owned,
+    c.handle AS creator_handle
+  ${RANKING_JOINS}
+  LEFT JOIN (
+    SELECT v.pack_id, COUNT(DISTINCT e.org_id) AS buyers
+    FROM entitlements e JOIN pack_versions v ON v.id = e.pack_version_id
+    GROUP BY v.pack_id
+  ) ent ON ent.pack_id = p.id
+  LEFT JOIN (
+    SELECT pack_id, MAX(version) AS version FROM pack_versions GROUP BY pack_id
+  ) mv ON mv.pack_id = p.id
+  LEFT JOIN pack_versions lv ON lv.pack_id = p.id AND lv.version = mv.version
+  LEFT JOIN entitlements mine ON mine.pack_version_id = lv.id AND mine.org_id = $2
+  LEFT JOIN creators c ON c.id = p.creator_id
+  WHERE p.status = 'listed'`;
+
+/** The text filter, shared by both queries so the shelf and a search agree. */
+const matchClause = (packParam: number, roleParam: number): string =>
+  ` AND (LOWER(p.name) LIKE $${packParam} OR LOWER(p.tagline) LIKE $${packParam}`
+  + ` OR LOWER(p.author) LIKE $${packParam} OR LOWER(p.tags) LIKE $${packParam}`
+  + ` OR LOWER(p.role) = $${roleParam})`;
+
+/** A listed pack with everything the shelf's card says about it. */
+export type CatalogPack = PackRow & RankingInputs & {
+  /** Organisations that own some version of this pack — `packStats().buyers`. */
+  buyers: number;
+  /** The latest published version number, or 0 for a pack with none. */
+  version: number;
+  /** The latest version's id, or null for a pack that has never been published. */
+  latestVersionId: string | null;
+  /** Whether the viewing organisation is entitled to that latest version. */
+  owned: boolean;
+  /** The handle behind `creator_id`, or null for a pack nobody has claimed. */
+  creatorHandle: string | null;
+};
+
+type CatalogSqlRow = RankedPackRow & {
+  buyers: number | string; version: number | string;
+  latest_version_id: string | null; owned: number | string; creator_handle: string | null;
+};
+
+export async function catalogFor(orgId: string, query = ""): Promise<CatalogPack[]> {
+  const s = await sql();
+  const q = query.trim();
+  const rows = q
+    ? await s.query<CatalogSqlRow>(
+      `${CATALOG_SELECT}${matchClause(3, 4)}`,
+      [RATING_THRESHOLD, orgId, `%${q.toLowerCase()}%`, q.toLowerCase()])
+    : await s.query<CatalogSqlRow>(CATALOG_SELECT, [RATING_THRESHOLD, orgId]);
+  return rankPacks(rows.map((r) => ({
+    ...r,
+    runs: Number(r.runs),
+    rating: r.rating == null ? null : Number(r.rating),
+    votes: Number(r.votes),
+    buyers: Number(r.buyers),
+    version: Number(r.version),
+    latestVersionId: r.latest_version_id,
+    owned: Boolean(Number(r.owned)),
+    creatorHandle: r.creator_handle,
+  })));
+}
 
 export async function listPacks(query = ""): Promise<PackRow[]> {
   const s = await sql();
@@ -224,12 +312,9 @@ export async function listPacks(query = ""): Promise<PackRow[]> {
   if (!q) {
     rows = await s.query<RankedPackRow>(RANKING_SELECT, [RATING_THRESHOLD]);
   } else {
-    const like = `%${q.toLowerCase()}%`;
     rows = await s.query<RankedPackRow>(
-      `${RANKING_SELECT}
-         AND (LOWER(p.name) LIKE $2 OR LOWER(p.tagline) LIKE $2 OR LOWER(p.author) LIKE $2
-              OR LOWER(p.tags) LIKE $2 OR LOWER(p.role) = $3)`,
-      [RATING_THRESHOLD, like, q.toLowerCase()]);
+      `${RANKING_SELECT}${matchClause(2, 3)}`,
+      [RATING_THRESHOLD, `%${q.toLowerCase()}%`, q.toLowerCase()]);
   }
   return rankPacks(rows.map((r) => ({
     ...r,

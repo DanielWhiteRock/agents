@@ -399,3 +399,18 @@ test("a stranger cannot edit another organisation's draft", async () => {
   assert.ok(res.status === 403 || res.status === 404, `got ${res.status}`);
   assert.equal((await L.draftFor(pack.id)).description, DRAFT.description, "the draft is untouched");
 });
+
+test("the shelf still renders every listed pack now that it comes from one query", async () => {
+  // The route was four sequential queries per pack; it is now one for the
+  // whole shelf. What a buyer sees must not have changed: a card per listed
+  // pack, linking to it.
+  const { cookie } = await authorWithPack();
+  const res = await fetch(`${server.baseUrl}/`, { headers: { cookie } });
+  assert.equal(res.status, 200);
+  const page = await res.text();
+  const listed = await P.listPacks();
+  assert.ok(listed.length > 0, "the built-in catalog is listed");
+  for (const pack of listed) {
+    assert.ok(page.includes(`/packs/${pack.slug}"`), `${pack.slug} has a card on the shelf`);
+  }
+});

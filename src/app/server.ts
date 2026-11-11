@@ -196,16 +196,18 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
 
   if (method === "GET" && path === "/") {
     const q = (url.searchParams.get("q") ?? "").trim();
-    const packs = await Promise.all((await P.listPacks(q)).map(async (p) => {
-      const v = await P.latestVersion(p.id);
-      return {
-        ...p,
-        published: Boolean(v),
-        owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
-        pricePoints: Pay.pricePoints(p),
-        stats: await P.packStats(p.id),
-        creatorHandle: await creatorHandleOf(p.creator_id),
-      };
+    // One query for the whole shelf. This used to be four sequential round
+    // trips per pack — the latest version, this organisation's entitlement to
+    // it, `packStats` (three subqueries of its own) and the creator's handle —
+    // which is ~280 queries for seventy packs on the first page a signed-in
+    // buyer sees, through a pool capped at eight connections. And since
+    // re-attribution gave every listed pack the same creator, 68 of those
+    // were fetching one string.
+    const packs = (await P.catalogFor(ctx.orgId, q)).map((p) => ({
+      ...p,
+      published: p.latestVersionId !== null,
+      pricePoints: Pay.pricePoints(p),
+      stats: { runs: p.runs, buyers: p.buyers, version: p.version },
     }));
     return html(res, V.catalogPage(packs, await bal(), viewer, q, P.tagsOf(packs), await P.roles()));
   }
@@ -215,11 +217,38 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const p = await P.getPack(packMatch[1]!);
     if (!p) return html(res, V.layout("Not found", "<h1>No such pack</h1>"), 404);
     const v = await P.latestVersion(p.id);
-    const owned = Boolean(v && (await P.entitled(ctx.orgId, v.id)));
-    const trial = v && !owned
-      ? { turns: await settingInt("trial_turns"), budgetCents: await settingInt("trial_budget_cents"),
-          used: await P.hasTriedPack(ctx.orgId, p.id) }
-      : null;
+    // Everything below depends on the pack and its latest version and on
+    // nothing else, so it is fetched at once rather than in a chain of
+    // fourteen awaits: the page renders in one round trip's worth of latency
+    // instead of fourteen, which matters most on the pool-capped deployment
+    // where each one also holds a connection.
+    const [
+      owned, turns, budgetCents, tried, tools, mcpServers, policy, creatorHandle,
+      stats, files, refundDays, rating, reviews, mayReview, myReview, votes, saved, changelog,
+      modelList, balance,
+    ] = await Promise.all([
+      v ? P.entitled(ctx.orgId, v.id) : Promise.resolve(false),
+      settingInt("trial_turns"),
+      settingInt("trial_budget_cents"),
+      P.hasTriedPack(ctx.orgId, p.id),
+      P.packTools(p.id),
+      P.packMcpServers(p.id),
+      P.effectivePolicy(v?.id ?? null),
+      creatorHandleOf(p.creator_id),
+      P.packStats(p.id),
+      P.packFileSummary(p.id),
+      settingInt("refund_window_days"),
+      S.ratingOf(p.id),
+      reviewsOf(p.id),
+      S.mayReview(ctx.orgId, p.id),
+      myReviewOf(p.id, ctx.orgId),
+      votesOf(p.id, ctx.orgId),
+      isSaved(p.id, ctx.orgId),
+      P.changelogOf(p.id),
+      models(),
+      bal(),
+    ]);
+    const trial = v && !owned ? { turns, budgetCents, used: tried } : null;
     // The permissions rail is derived from what the run is configured with,
     // not from what the author declared: `pack_tools` supplies the tool names
     // and `effectivePolicy` the posture — the platform setting, forced to
@@ -227,30 +256,29 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     // A pack with no tools recorded (every pack published before they were
     // persisted) gets the platform-level statement instead.
     const permissions = permissionSummary({
-      tools: (await P.packTools(p.id)).map((t) => t.name),
-      mcpServers: await P.packMcpServers(p.id),
+      tools: tools.map((t) => t.name),
+      mcpServers,
       web: P.packExtras(p).web ?? {},
-      policy: await P.effectivePolicy(v?.id ?? null),
+      policy,
     }).lines;
-    const creatorHandle = await creatorHandleOf(p.creator_id);
     const extras: V.PackPageExtras = {
       listing: L.hasListing(p) ? L.listingOf(p) : null,
-      stats: await P.packStats(p.id),
+      stats,
       permissions,
-      files: await P.packFileSummary(p.id),
+      files,
       updatedAt: v?.created_at ?? null,
       builtOn: p.built_on,
-      refundDays: await settingInt("refund_window_days"),
+      refundDays,
       creator: creatorHandle && p.creator_id ? { id: p.creator_id, handle: creatorHandle } : null,
-      rating: await S.ratingOf(p.id),
-      reviews: await reviewsOf(p.id),
-      mayReview: await S.mayReview(ctx.orgId, p.id),
-      myReview: await myReviewOf(p.id, ctx.orgId),
-      votes: await votesOf(p.id, ctx.orgId),
-      saved: await isSaved(p.id, ctx.orgId),
-      changelog: await P.changelogOf(p.id),
+      rating,
+      reviews,
+      mayReview,
+      myReview,
+      votes,
+      saved,
+      changelog,
     };
-    return html(res, V.packPage(p, v, owned, await models(), await bal(),
+    return html(res, V.packPage(p, v, owned, modelList, balance,
       url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));
   }
 
