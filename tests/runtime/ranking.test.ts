@@ -86,3 +86,54 @@ describe("rankPacks", () => {
     expect(rankPacks([c, a, b]).map((p) => p.id)).toEqual(expected);
   });
 });
+
+/**
+ * Two of the five ordering keys used to fail the deletion test: delete
+ * `if (a.runs !== b.runs) return b.runs - a.runs;` and the whole suite stayed
+ * green, because every case above has `runs: 0` on both sides. The `votes`
+ * key was nearly as thin — deleting it dropped two rows through to the `id`
+ * key, which on generated ids is a coin flip rather than a reliable failure.
+ *
+ * So each of these pins the ids such that the `id` fallback would produce the
+ * *opposite* order, and the `created_at` key cannot decide it either: the
+ * expected order is reachable only through the key under test. Delete that
+ * key and the test goes red every time, not half the time.
+ */
+describe("rankPacks, one key at a time", () => {
+  const SAME_INSTANT = "2026-05-05T00:00:00.000Z";
+
+  it("puts a pack with more runs first, even when every other key says otherwise", () => {
+    // `zzz` sorts last by id and both carry the same created_at, so runs is
+    // the only thing that can put it first.
+    const busy = row({ id: "zzz-busy", runs: 7, created_at: SAME_INSTANT });
+    const quiet = row({ id: "aaa-quiet", runs: 1, created_at: SAME_INSTANT });
+    expect(rankPacks([quiet, busy]).map((p) => p.id)).toEqual(["zzz-busy", "aaa-quiet"]);
+    expect(rankPacks([busy, quiet]).map((p) => p.id)).toEqual(["zzz-busy", "aaa-quiet"]);
+  });
+
+  it("counts runs before a rating, because a run is the stronger signal", () => {
+    // Runs is the spec's primary composite signal after the curator's rank.
+    const busyUnrated = row({ id: "zzz-busy", runs: 20, rating: null, created_at: SAME_INSTANT });
+    const idleAndAdored = row({ id: "aaa-adored", runs: 0, rating: 5, created_at: SAME_INSTANT });
+    expect(rankPacks([idleAndAdored, busyUnrated]).map((p) => p.id)).toEqual(["zzz-busy", "aaa-adored"]);
+  });
+
+  it("puts a pack with more votes first when runs and rating are level", () => {
+    const liked = row({ id: "zzz-liked", runs: 3, rating: 4, votes: 9, created_at: SAME_INSTANT });
+    const unliked = row({ id: "aaa-unliked", runs: 3, rating: 4, votes: 1, created_at: SAME_INSTANT });
+    expect(rankPacks([unliked, liked]).map((p) => p.id)).toEqual(["zzz-liked", "aaa-unliked"]);
+    expect(rankPacks([liked, unliked]).map((p) => p.id)).toEqual(["zzz-liked", "aaa-unliked"]);
+  });
+
+  it("lets votes decide only after runs, not instead of them", () => {
+    const busyUnloved = row({ id: "zzz-busy", runs: 5, votes: 0, created_at: SAME_INSTANT });
+    const quietAndLiked = row({ id: "aaa-liked", runs: 4, votes: 99, created_at: SAME_INSTANT });
+    expect(rankPacks([quietAndLiked, busyUnloved]).map((p) => p.id)).toEqual(["zzz-busy", "aaa-liked"]);
+  });
+
+  it("ignores votes and runs where a curator has placed a pack by hand", () => {
+    const featured = row({ id: "aaa-featured", featured_rank: 2, runs: 0, votes: 0 });
+    const busyAndLiked = row({ id: "zzz-busy", featured_rank: null, runs: 50, votes: 50 });
+    expect(rankPacks([busyAndLiked, featured]).map((p) => p.id)).toEqual(["aaa-featured", "zzz-busy"]);
+  });
+});
