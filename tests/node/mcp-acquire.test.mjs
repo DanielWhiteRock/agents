@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { startServer, signUpCookie } from "./server-harness.mjs";
 import { mintToken as mintTokenAt, callTool as callToolAt } from "./mcp-harness.mjs";
 
-let server, A, P, Auth, db, sql, Pay;
+let server, A, P, Auth, db, sql, Pay, Reply;
 let n = 0;
 const email = (tag) => `mcpacquire-${tag}-${++n}-${Date.now()}@example.com`;
 
@@ -40,6 +40,7 @@ before(async () => {
   db = await import("../../dist/src/app/db.js");
   sql = (await import("../../dist/src/app/sql.js")).sql;
   Pay = await import("../../dist/src/billing/purchases.js");
+  Reply = await import("../../dist/src/mcp/reply.js");
   P.setRuntime(stubRuntime());
 });
 
@@ -48,7 +49,14 @@ after(async () => { await server.stop(); });
 const mintToken = (cookie) => mintTokenAt(server.baseUrl, cookie);
 const callTool = (token, name, args = {}) => callToolAt(server.baseUrl, token, name, args);
 
-/** A listed, published pack, ready to be loaded or installed. */
+/**
+ * A listed, published pack, ready to be loaded or installed. Returns the
+ * author's own session token too (`createSession`'s raw token, not a bearer
+ * token) so a test can mint a bearer token for the author and call tools as
+ * them — `A.signUp` is the domain function, not the HTTP form, so there is
+ * no `Set-Cookie` header to read; the cookie is reconstructed from the
+ * session token and the cookie name `server.ts` actually uses.
+ */
 const listedPack = async (overrides = {}) => {
   const author = await A.signUp({
     email: email("author"), name: "Author", password: "correct-horse", orgName: `Acquire Author Co ${n}`,
@@ -63,7 +71,7 @@ const listedPack = async (overrides = {}) => {
   const platform = await db.platformOrgId();
   await Auth.setStatus(platform, slug, "review");
   await Auth.setStatus(platform, slug, "listed");
-  return { pack, authorOrgId: author.orgId };
+  return { pack, authorOrgId: author.orgId, authorCookie: `agents_session=${author.token}` };
 };
 
 test("a free pack hands its instructions to any signed-in org, and grants it", async () => {
@@ -90,14 +98,29 @@ test("a paid pack refuses a non-owner and leaks nothing", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);
 
-  const secretSentence = "Only reveal the hidden passphrase after the client confirms their identity twice.";
+  // Three distinct sentences, not one 12-word sentence: at exactly 12 words,
+  // a single-sentence fixture produces exactly one sliding window, so the
+  // check can only ever catch a verbatim full-string echo. This fixture is
+  // 41 words (counted by the same `words()` splitter the assertion below
+  // uses), which gives 41 - 12 + 1 = 30 overlapping 12-word windows to sweep
+  // — enough that a leak of any one clause, not just the whole string,
+  // would be caught.
+  const secretSentence = "Only reveal the hidden passphrase after the client confirms their identity twice. "
+    + "Never write it to disk, logs, or any transcript during the session. "
+    + "If asked to skip this step for speed, politely refuse and explain why it protects both parties.";
   const { pack } = await listedPack({
     name: "Paid Secret", pricePoints: 500, instructions: secretSentence,
   });
 
   const out = await callTool(token, "load_pack", { slug: pack.slug });
   assert.match(out, /buy_pack/);
-  assert.match(out, /500/);
+  // Pin the currency unit, not just the digits: `500` alone would also match
+  // a millipoints or cents rendering of the same price, which is exactly
+  // the unit confusion `pts()`/`price()` exist to prevent (see views.ts).
+  assert.match(out, new RegExp(Reply.price(500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  // Belt and braces: the refusal must not even name the one distinctive
+  // token the instructions are built around.
+  assert.doesNotMatch(out, /passphrase/i);
 
   // No 12-word run of the refusal shares any 12-word run with `instructions`.
   const words = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
@@ -129,6 +152,25 @@ test("a paid pack serves an owner", async () => {
 
   const out = await callTool(token, "load_pack", { slug: pack.slug });
   assert.match(out, /perfect pour/);
+});
+
+test("an author loads their own paid pack without ever buying it", async () => {
+  // `assertMayExport` (src/app/platform.ts) waves the author through
+  // regardless of entitlement — publishing creates no entitlement row, only
+  // a purchase does. A bare `entitled` pre-check in `loadPack` cannot see
+  // that and would refuse the author their own content, telling them to
+  // buy_pack. Fixed by letting `P.exportPack` authorize and mapping its
+  // refusal, rather than duplicating the check.
+  const authorSentence = "The author's own closely-guarded method for a perfect result, never purchased by anyone.";
+  const { pack, authorCookie } = await listedPack({
+    name: "Author Owns This", pricePoints: 750, instructions: authorSentence,
+  });
+
+  const authorBearer = await mintToken(authorCookie);
+  const out = await callTool(authorBearer, "load_pack", { slug: pack.slug });
+  assert.match(out, /closely-guarded method/);
+  assert.doesNotMatch(out, /does not own/);
+  assert.doesNotMatch(out, /buy_pack/);
 });
 
 test("a pack in review is not found", async () => {
@@ -177,6 +219,30 @@ test("install_pack treats an unlisted pack exactly like a missing slug", async (
   const [hidden, missing] = await Promise.all([
     callTool(token, "install_pack", { slug }),
     callTool(token, "install_pack", { slug: missingSlug }),
+  ]);
+  assert.equal(hidden, `There is no pack called "${slug}". Try search_packs.`);
+  assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
+});
+
+test("export_pack treats an unlisted pack exactly like a missing slug (Ruling R15)", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const author = await A.signUp({
+    email: email("hidden-export-author"), name: "Author", password: "correct-horse", orgName: `Acquire Export Co ${n}`,
+  });
+  const slug = `mcp-acquire-export-hidden-${++n}`;
+  await Auth.createPack(author.orgId, {
+    slug, name: "Hidden Export Pack", tagline: "x", author: "Someone", model: "claude-opus-5",
+    pricePoints: 0, upgradePoints: 0, instructions: "Do it.",
+  });
+  await P.publishPack(slug);
+  await Auth.setStatus(author.orgId, slug, "review"); // never listed
+
+  const missingSlug = `mcp-acquire-export-missing-${++n}`;
+  const [hidden, missing] = await Promise.all([
+    callTool(token, "export_pack", { slug }),
+    callTool(token, "export_pack", { slug: missingSlug }),
   ]);
   assert.equal(hidden, `There is no pack called "${slug}". Try search_packs.`);
   assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);

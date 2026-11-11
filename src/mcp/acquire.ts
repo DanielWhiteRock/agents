@@ -18,9 +18,19 @@ const notFound = (slug: string): string => `There is no pack called "${slug}". T
  * Hand a pack's instructions into the calling agent's own session.
  *
  * Rules, in order: not `listed` → not found. Free → buy it for zero points
- * (which grants the entitlement) and return it. Paid and already entitled →
- * return it. Paid and not entitled → refuse, naming the price and `buy_pack`,
- * with no fragment of the instructions themselves.
+ * (which grants the entitlement) and return it. Paid → authorize it the one
+ * way the platform ever authorizes an export (`P.exportPack`, via
+ * `assertMayExport`): the author, the platform curator, or an entitled
+ * buyer. Anyone else is refused, naming the price and `buy_pack`, with no
+ * fragment of the instructions themselves.
+ *
+ * This deliberately does *not* pre-check `P.entitled` itself for the paid
+ * branch — `assertMayExport` is the single source of truth for who may read
+ * this content, and it also waves through the author and the platform org,
+ * which a bare `entitled` check does not. A pre-check here previously
+ * refused an author their own paid pack, telling them to buy it. Letting
+ * `exportPack` authorize, and mapping its refusal, keeps that logic in one
+ * place.
  *
  * `P.exportPack` always regenerates against the pack's *latest* published
  * version, and authorizes against that same version — so an organisation
@@ -49,21 +59,37 @@ export async function loadPack(
       orgId: ctx.orgId, userId: ctx.userId, packVersionId: v.id, packId: p.id,
       pricePoints: 0, description: p.name,
     });
-  } else if (!(await P.entitled(ctx.orgId, v.id))) {
-    return {
-      ok: false,
-      message: `${p.name} costs ${price(p.price_points)} and this organisation does not own it. `
-        + "Call buy_pack to buy it — load_pack will hand over its instructions once this organisation owns it.",
-    };
   }
 
-  const markdown = await P.exportPack(ctx.orgId, slug);
-  return {
-    ok: true,
-    // `v` was just re-read as `P.latestVersion`, so this is always the
-    // newest published version — there is no newer one to flag.
-    markdown: `Serving version ${v.version} of ${p.name} — the latest published; no newer version exists.\n\n${markdown}`,
-  };
+  let markdown: string;
+  try {
+    markdown = await P.exportPack(ctx.orgId, slug);
+  } catch (e) {
+    const m = String((e as Error)?.message ?? e);
+    if (m.includes("does not own")) {
+      return {
+        ok: false,
+        message: `${p.name} costs ${price(p.price_points)} and this organisation does not own it. `
+          + "Call buy_pack to buy it — load_pack will hand over its instructions once this organisation owns it.",
+      };
+    }
+    // Anything else (a DB hiccup, a publish racing this call) must not
+    // surface as a raw internal error — a neutral refusal, same as
+    // `export_pack`'s own catch-all a few lines below.
+    return { ok: false, message: `${p.name} could not be loaded right now. Try again shortly.` };
+  }
+
+  // Whether a newer version exists is computed, not assumed — `v` is read
+  // before `exportPack` authorizes and regenerates, so a publish racing
+  // this very call would otherwise make a hardcoded "this is the latest"
+  // into a lie at the exact moment an agent is deciding whether to reload.
+  const latestNow = await P.latestVersion(p.id);
+  const versionLine = latestNow && latestNow.id !== v.id
+    ? `Serving version ${v.version} of ${p.name} — version ${latestNow.version} has since been published; `
+      + "call load_pack again to get it."
+    : `Serving version ${v.version} of ${p.name} — the latest published; no newer version exists.`;
+
+  return { ok: true, markdown: `${versionLine}\n\n${markdown}` };
 }
 
 export function registerAcquire(server: McpServer, ctx: McpContext): void {
@@ -115,6 +141,13 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       + "packs you have bought, because the file contains the author's instructions.",
     inputSchema: { slug: z.string().describe("The pack's slug.") },
   }, async ({ slug }) => {
+    // Ruling R15: `P.getPack` carries no status filter, so without this an
+    // unlisted pack answered "does not own" while a missing slug answered
+    // "no such pack" — two different sentences that hand a stranger the
+    // same existence oracle R8 already closed for `pack_details`,
+    // `load_pack` and `install_pack`.
+    const p = await P.getPack(slug);
+    if (!p || p.status !== "listed") return text(notFound(slug));
     try {
       const md = await P.exportPack(ctx.orgId, slug);
       return text(`Save this as ${slug}.md and apply it with \`ant apply ${slug}.md\`:\n\n${md}`);
