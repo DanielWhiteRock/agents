@@ -623,7 +623,17 @@ export async function publishPack(slug: string, note?: string): Promise<PackVers
   // nothing rather than a row with an empty string in it.
   const trimmedNote = note?.trim();
   if (trimmedNote) {
-    await s.query("INSERT INTO pack_changelog (pack_id, version, note, created_at) VALUES ($1,$2,$3,$4)",
+    // `ON CONFLICT DO NOTHING` on the primary key, as defence in depth: two
+    // publishes racing both compute the same `version`, because the read of
+    // the previous one is not serialised with these inserts. Today the loser
+    // is stopped earlier, by `pack_versions`' own UNIQUE (pack_id, version),
+    // so it never reaches this statement — but that is the only thing
+    // standing between a duplicate key here and a publish that has already
+    // written its version row and then throws. A note describes an immutable
+    // version, so the one already recorded for it is the one that stands.
+    await s.query(
+      `INSERT INTO pack_changelog (pack_id, version, note, created_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (pack_id, version) DO NOTHING`,
       [pack.id, version, trimmedNote, now()]);
   }
   // Snapshot the folder and the uploaded skills, so a buyer exports what they

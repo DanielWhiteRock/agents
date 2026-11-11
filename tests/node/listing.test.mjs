@@ -468,3 +468,21 @@ test("publishing an answer and approving a listing at the same time loses neithe
   assert.ok(questions.includes(question.body), "and so is the answer published out of the inbox");
   assert.equal(await L.draftFor(pack.id), null, "the draft was consumed exactly once");
 });
+
+test("a changelog note is written once per version, and a repeat is ignored rather than thrown", async () => {
+  // The insert used to carry no ON CONFLICT. Today the only racer is stopped
+  // earlier by `pack_versions`' UNIQUE (pack_id, version), so this is defence
+  // in depth — but it is also the one place the clause itself is exercised,
+  // and `ON CONFLICT (a, b)` against a composite primary key is a different
+  // constraint kind from the other upserts in this schema.
+  const { pack } = await makePack();
+  await P.publishPack(pack.slug, "The first note.");
+  const s = await sql();
+  const repeat = await s.query(
+    `INSERT INTO pack_changelog (pack_id, version, note, created_at) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (pack_id, version) DO NOTHING`,
+    [pack.id, 1, "A second note for the same, immutable version.", db.now()]);
+  assert.equal(repeat.length, 0, "nothing inserted, and nothing thrown");
+  const notes = await P.changelogOf(pack.id);
+  assert.deepEqual(notes.map((c) => c.note), ["The first note."], "the note already recorded stands");
+});

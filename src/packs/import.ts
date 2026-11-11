@@ -46,7 +46,9 @@ export type ParsedPack = {
   /** Written examples of a session: the brief, what it touched, what came back. */
   scenarios: Array<{ brief: string; reached: string[]; output: string }>;
   requirements: string[];
-  /** What this pack was written against, e.g. "Claude Opus 5". */
+  /** Upstream credit and licence — whose work this pack rests on, e.g.
+   *  "Dietrich Gebert, Cursor, Poteto — MIT". Not the byline, which says who
+   *  stands behind it running here. */
   builtOn?: string;
   /** Keys present in the file that this reader does not understand. */
   unknownKeys: string[];

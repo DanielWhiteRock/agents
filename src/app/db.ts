@@ -101,9 +101,15 @@ CREATE TABLE IF NOT EXISTS pack_files (
 );
 
 -- The tools a pack's agent.md declares and the permission policy each one
--- carries (always_allow, always_ask, auto). Read, never authored by hand in
--- the browser — this is what the permissions rail derives from, so the rail
--- says what the worker actually does rather than what an author claims.
+-- carries (always_allow, always_ask, auto — checked on the way in by
+-- authoring.ts). Read, never authored by hand in the browser.
+--
+-- The permissions rail renders the NAMES from here and not the policy: a
+-- pack's declared policy never reaches the runtime, because publishPack
+-- builds the agent config from the global destructive_tool_policy setting and
+-- forces always_ask where the pack ships a PreToolUse hook. The policy column
+-- is kept as a record of what the author asked for, which is not the same
+-- fact as what the run does.
 CREATE TABLE IF NOT EXISTS pack_tools (
   pack_id TEXT NOT NULL REFERENCES packs(id),
   name TEXT NOT NULL,
@@ -553,15 +559,19 @@ const MIGRATIONS = [
   // When a curator last signed off on the listing text above, so a later edit
   // can be told apart from the copy that was actually reviewed.
   "ALTER TABLE packs ADD COLUMN listing_approved_at TEXT",
-  // Set the moment the pack is next published after that approval, so an
-  // approved listing can be shown as describing a version that moved on
-  // without the text following it, rather than silently passing as current.
+  // Stamped when the pack's `instructions` are edited — the method a listing
+  // describes having changed under it — so the author's own approval screen
+  // can suggest a regeneration. Nothing a buyer sees changes: stale approved
+  // copy stays live, because blanking a page because somebody fixed a typo
+  // would be worse than a slightly dated description.
   "ALTER TABLE packs ADD COLUMN listing_stale_at TEXT",
   // When the pack first reached the catalog, kept apart from created_at (which
   // is when the draft was started) so a shelf can sort by debut, not by paperwork.
   "ALTER TABLE packs ADD COLUMN listed_at TEXT",
-  // The runtime/model generation this pack's prose was written against, so a
-  // claim like "built for Claude Opus 5" can be checked rather than asserted.
+  // Upstream credit and licence: whose work this pack rests on, kept
+  // deliberately apart from `author`, which says who stands behind it running
+  // here. Re-attribution moves the old byline into this column, so a credit
+  // like "Dietrich Gebert, Cursor, Poteto — MIT" survives a change of owner.
   "ALTER TABLE packs ADD COLUMN built_on TEXT",
   // `setStatus` stamps listed_at from now on, but the packs already on the
   // shelf reached it before the column existed. created_at is the only honest
@@ -592,6 +602,10 @@ const MIGRATIONS = [
   "ALTER TABLE runs ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE pack_reviews ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE pack_votes ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  // Every pack on the shelf shares one creator after re-attribution, and the
+  // creator profile page selects by exactly this column — a sequential scan
+  // of `packs` per profile load, and per catalog join.
+  "CREATE INDEX IF NOT EXISTS packs_creator ON packs(creator_id)",
 ];
 
 /**

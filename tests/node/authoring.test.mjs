@@ -512,3 +512,33 @@ test("a listing column holding junk does not make an import throw", async () => 
   assert.deepEqual(JSON.parse(again.pack.use_cases), []);
   assert.deepEqual(JSON.parse(again.pack.faq), []);
 });
+
+test("a tool declaring a permission policy the runtime has never heard of is refused", async () => {
+  // `policy` is author-supplied text out of their own agent.md, and the one
+  // field of the tools: block with a closed set of values. Unchecked, a typo
+  // became a stored fact about what a worker may do.
+  const { orgId } = await org();
+  const slug = `badpolicy-${++n}`;
+  const agent = (policy) => `---\nname: Bad Policy\nslug: ${slug}\nmodel: claude-opus-5\ntools:\n`
+    + `  - type: agent_toolset_20260401\n    configs:\n      - name: bash\n`
+    + `        permission_policy:\n          type: ${policy}\n---\nThe method.`;
+
+  await assert.rejects(
+    Auth.importPack({ orgId, files: [{ path: "agent.md", text: agent("always_alow") }] }),
+    (e) => {
+      assert.equal(e.name, "PackConflictError");
+      assert.match(e.message, /always_alow/, "the author's own spelling is in the message");
+      assert.match(e.message, /always_allow, always_ask, auto/);
+      return true;
+    });
+  assert.equal(await P.getPack(slug), undefined, "and nothing was created");
+
+  // The three real ones still land.
+  for (const policy of ["always_allow", "always_ask", "auto"]) {
+    const ok = `goodpolicy-${++n}`;
+    const out = await Auth.importPack({ orgId, files: [{ path: "agent.md",
+      text: agent(policy).replace(`slug: ${slug}`, `slug: ${ok}`) }] });
+    const stored = (await P.packTools(out.pack.id)).map((t) => ({ name: t.name, policy: t.policy }));
+    assert.deepEqual(stored, [{ name: "bash", policy }]);
+  }
+});

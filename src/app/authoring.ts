@@ -89,7 +89,26 @@ function validate(input: PackInput): void {
   if (!Number.isInteger(input.upgradePoints) || input.upgradePoints < 0) {
     throw new PackConflictError("update points must be a whole number, or zero");
   }
+  for (const tool of input.tools ?? []) {
+    if (!TOOL_POLICIES.has(tool.policy)) {
+      throw new PackConflictError(
+        `tools: "${tool.name}" declares permission_policy "${tool.policy}", which is not one of `
+        + `${[...TOOL_POLICIES].join(", ")}`);
+    }
+  }
 }
+
+/**
+ * The three policies the platform's agent config actually has.
+ *
+ * A pack's `tools:` block is author-supplied text parsed out of their own
+ * `agent.md`, and this is the one field of it with a closed set of values —
+ * so it is checked before it becomes a stored fact, alongside every other
+ * reason a pack is refused. A typo reaching `pack_tools` is a word the
+ * runtime has never heard of, recorded as what a worker may do; refusing it
+ * with the author's own spelling in the message is the only useful answer.
+ */
+const TOOL_POLICIES = new Set(["always_allow", "always_ask", "auto"]);
 
 /**
  * Tools and MCP servers are child rows, not columns — written after the pack

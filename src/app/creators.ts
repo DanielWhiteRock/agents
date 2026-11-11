@@ -77,7 +77,19 @@ export async function upsertCreator(input: CreatorInput): Promise<CreatorRow> {
   // The curating org's own creator record is the first moment re-attribution
   // can actually succeed (see claimUnownedPacks below). Every other org's
   // profile save is a no-op here, since no pack is ever unowned for them.
-  if (input.orgId === (await platformOrgId())) await claimUnownedPacks(created.id, input.orgId);
+  //
+  // Logged rather than thrown: this fires on *every* curator profile save,
+  // and the profile itself is already written by the time it runs. A failure
+  // in a bulk UPDATE over rows this save did not create must not turn an
+  // otherwise-valid save into an error page over a change that did land —
+  // re-attribution is idempotent, so the next save simply tries again.
+  if (input.orgId === (await platformOrgId())) {
+    try {
+      await claimUnownedPacks(created.id, input.orgId);
+    } catch (e) {
+      console.error("[creators] claiming unowned packs failed:", (e as Error)?.message ?? e);
+    }
+  }
 
   return created;
 }
