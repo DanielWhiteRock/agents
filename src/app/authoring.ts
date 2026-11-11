@@ -1,6 +1,6 @@
 import { id, now, platformOrgId } from "./db.js";
 import { sql } from "./sql.js";
-import { DomainError } from "./errors.js";
+import { DomainError, FAQ_WRITE_ATTEMPTS, FaqContendedError } from "./errors.js";
 import * as P from "./platform.js";
 import type { PackDefinition } from "../packs/types.js";
 import { parsePackMarkdown, type ParsedPack } from "../packs/import.js";
@@ -8,7 +8,7 @@ import {
   findCommands, findHooks, findWorkflows, normaliseTree, validateTree, type PackTree,
 } from "../packs/tree.js";
 import {
-  faqFromJson, mergeFaq, scenariosFromJson, stringsFromJson,
+  faqFromJson, mergeFaq, scenariosFromJson, stringsFromJson, type FaqEntry,
 } from "../packs/listing-shape.js";
 
 /**
@@ -140,11 +140,15 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const s = await sql();
   const packId = id("pk");
   await s.query(
-    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
-       model, effort, pinned_models, extras, instructions, tags, image, role, status,
+    // `price_cents` is written explicitly, as 0 — it is NOT NULL and has no
+    // DEFAULT on any database that predates the millipoints rename, and
+    // nothing reads it. `seedCatalog` carries the full reasoning for the
+    // value, including why it is not `pricePoints * 400`.
+    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_cents, price_points,
+       upgrade_points, model, effort, pinned_models, extras, instructions, tags, image, role, status,
        author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on,
        scenarios)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24,$25)`,
+     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24,$25)`,
     [packId, slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
@@ -159,20 +163,49 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   return (await P.getPack(slug))!;
 }
 
-/** Only the author's organisation may edit, and a slug never changes. */
-export async function updatePack(orgId: string, slug: string, input: PackInput): Promise<P.PackRow> {
+/**
+ * Only the author's organisation may edit, and a slug never changes.
+ *
+ * Every absent listing field is written back as the value this function just
+ * read, so that a caller which never mentions one cannot wipe it. For five of
+ * the six that is harmless — they are prose only the author writes, so
+ * nobody else's value can be in flight. `faq` is the exception: `publishToFaq`
+ * writes it too, from a creator's inbox, so writing back a value read two
+ * awaits ago erases an answer that landed in between. A plain details-form
+ * save mentions no listing field at all, and that was enough to lose one.
+ *
+ * So `faq` is left out of the SET list entirely unless the caller states it.
+ * Not a guard, not a merge — no write, so there is nothing to race with, and
+ * `packs.faq`'s writers stay the three that mean to write it.
+ *
+ * `expect.faq` is for the caller that does state it: it makes the whole
+ * statement conditional on the column still holding the value that caller
+ * computed from, and raises `FaqContendedError` when it does not. See
+ * `updateFaq` in `listing.ts` for why this is a compare-and-set and not a
+ * transaction.
+ */
+export async function updatePack(
+  orgId: string, slug: string, input: PackInput, expect?: { faq: string },
+): Promise<P.PackRow> {
   const pack = await P.getPack(slug);
   if (!pack) throw new PackConflictError(`no pack at /packs/${slug}`);
   if (pack.author_org_id !== orgId) throw new NotTheAuthorError();
   validate(input);
   const s = await sql();
-  await s.query(
+  // `faq` is the last assignment and the last-but-one parameter precisely so
+  // that leaving it out needs no renumbering of the twenty-one before it. An
+  // unreferenced `$n` is not free: Postgres infers a type per parameter up to
+  // the highest one used, so a gap in the middle is a "could not determine
+  // data type" error rather than an ignored value.
+  const faqSet = input.faq === undefined ? "" : ", faq = $22";
+  const guard = expect ? ` AND COALESCE(faq, '') = $${input.faq === undefined ? 22 : 23}` : "";
+  const written = await s.query<{ id: string }>(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
        author_payout_email = $11, tags = $13, image = $14, role = $15,
-       description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21,
-       scenarios = $22
-     WHERE id = $12`,
+       description = $16, use_cases = $17, limitations = $18, requirements = $19, built_on = $20,
+       scenarios = $21${faqSet}
+     WHERE id = $12${guard} RETURNING id`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
@@ -181,14 +214,23 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
       input.role?.trim() || pack.role,
       // A caller that never mentions the listing (the plain pack-details form,
       // for instance) must not wipe one set through the import or listing
-      // flows — so an absent field keeps the row's current value.
+      // flows — so an absent field keeps the row's current value. `faq` is
+      // the one that does this by not being written at all; see above.
       input.descriptionLong?.trim() ?? pack.description,
       input.useCases ? JSON.stringify(input.useCases) : pack.use_cases,
       input.limitations ? JSON.stringify(input.limitations) : pack.limitations,
-      input.faq ? JSON.stringify(input.faq) : pack.faq,
       input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
       input.builtOn?.trim() ?? pack.built_on,
-      input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios]);
+      input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios,
+      ...(input.faq === undefined ? [] : [JSON.stringify(input.faq)]),
+      ...(expect ? [expect.faq] : [])]);
+  // A conditional write that matched nothing means somebody else wrote the
+  // FAQ between the caller's read and this statement. Nothing here changed,
+  // so the caller can re-read, merge again and run the whole thing — which is
+  // what `importPack` below does. Without `expect` there is no condition to
+  // miss and a zero-row result can only be the row having been deleted
+  // mid-call, which is left as it was rather than made a new failure mode.
+  if (expect && written.length === 0) throw new FaqContendedError();
   // Undefined means this caller never mentioned the field (the plain
   // details-form save, for instance) and the stored set is left alone;
   // an explicit array — including an empty one — replaces it, so re-importing
@@ -293,6 +335,37 @@ export async function submittedPacks(): Promise<P.PackRow[]> {
 export type UploadFile = { path: string; text: string };
 
 /**
+ * `updatePack`, with the folder's FAQ merged over whatever is stored at the
+ * moment of writing rather than whatever was stored when the import started.
+ *
+ * The merge itself is Ruling 12's rule from the other side: a folder's `faq:`
+ * block knows nothing of the answers `publishToFaq` put on the page out of a
+ * real buyer exchange, so the live entries win and a re-import can only add.
+ * But reading the column, merging in memory and writing the whole thing back
+ * is the same lost-update shape `approveDraft` and `publishToFaq` already
+ * guard against: an inbox publish landing in that gap was simply erased by
+ * the import. So the value is recomputed from what is actually stored and the
+ * write is conditional on it, retrying on a miss — the loser re-reads,
+ * re-merges and writes again, and nobody's answer disappears.
+ */
+async function updateMergingFaq(
+  orgId: string, slug: string, input: PackInput, proposed: FaqEntry[],
+): Promise<P.PackRow> {
+  for (let attempt = 1; attempt <= FAQ_WRITE_ATTEMPTS; attempt += 1) {
+    const current = await P.getPack(slug);
+    if (!current) throw new PackConflictError(`no pack at /packs/${slug}`);
+    const was = current.faq ?? "";
+    try {
+      return await updatePack(
+        orgId, slug, { ...input, faq: mergeFaq(faqFromJson(was), proposed) }, { faq: was });
+    } catch (e) {
+      if (!(e instanceof FaqContendedError)) throw e;
+    }
+  }
+  throw new FaqContendedError();
+}
+
+/**
  * Create or update a pack from uploaded files.
  *
  * Fields the file does not carry keep whatever the existing pack has, or take a
@@ -358,6 +431,10 @@ export async function importPack(args: {
     // a `faq:` block has no idea those exist. Replacing wholesale deleted
     // them, with no way back but the thread they came from. The live entries
     // win on a repeated question, same rule `approveDraft` follows.
+    //
+    // This value is the one a *new* pack is created with, where there is
+    // nothing to merge against and nobody to race; on an update it is
+    // recomputed under a compare-and-set by `updateMergingFaq`.
     faq: mergeFaq(faqFromJson(existing?.faq), parsed.faq),
     scenarios: parsed.scenarios.length ? parsed.scenarios : scenariosFromJson(existing?.scenarios),
     requirements: parsed.requirements.length ? parsed.requirements : stringsFromJson(existing?.requirements),
@@ -372,7 +449,7 @@ export async function importPack(args: {
   const created = !existing;
   if (existing && existing.author_org_id !== args.orgId) throw new NotTheAuthorError();
   const pack = existing
-    ? await updatePack(args.orgId, slug, input)
+    ? await updateMergingFaq(args.orgId, slug, input, parsed.faq)
     : await createPack(args.orgId, input);
 
   const { warnings } = await P.savePackTree(pack.id, tree);

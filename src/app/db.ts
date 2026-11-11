@@ -70,7 +70,20 @@ CREATE TABLE IF NOT EXISTS packs (
   tagline TEXT NOT NULL,
   author TEXT NOT NULL,
   author_org_id TEXT,
-  price_cents INTEGER NOT NULL DEFAULT 0,
+  -- No DEFAULT, deliberately. This column predates the millipoints rename, so
+  -- on every database that has been through it price_cents is NOT NULL with
+  -- no default — CREATE TABLE IF NOT EXISTS cannot add one to a table that
+  -- already exists, and there is no migration that can, because SQLite has no
+  -- way to alter a column's default. Declaring a default here that an upgraded
+  -- database does not have is the trap this file fell into: inserts that
+  -- omitted the column worked on a fresh database and failed at boot on a real
+  -- one. Writers pass it explicitly instead.
+  --
+  -- The rule the upgrade test enforces: a DEFAULT in this schema is only
+  -- honest on a column that an ALTER TABLE ... ADD COLUMN migration also
+  -- introduces with the same default, which is where every other one below
+  -- came from.
+  price_cents INTEGER NOT NULL,
   price_points INTEGER NOT NULL DEFAULT 0,
   tags TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL DEFAULT '',
@@ -606,6 +619,15 @@ const MIGRATIONS = [
   // creator profile page selects by exactly this column — a sequential scan
   // of `packs` per profile load, and per catalog join.
   "CREATE INDEX IF NOT EXISTS packs_creator ON packs(creator_id)",
+  // Who wrote the draft, because approval cannot treat the two the same.
+  // A generator knows nothing of the answers a creator published out of a
+  // real buyer exchange, so approving its draft merges the FAQ and the live
+  // entries win. A person editing their own listing is the opposite case:
+  // what they saved is what they meant, deletions included. The default is
+  // 'generator' so every row that predates the column — and every row an
+  // older writer leaves unmarked — keeps exactly the behaviour it has today,
+  // which is the direction that cannot lose an answer.
+  "ALTER TABLE pack_listing_drafts ADD COLUMN authored_by TEXT NOT NULL DEFAULT 'generator'",
 ];
 
 /**
@@ -627,8 +649,19 @@ export async function claimPlatformOrg(orgId: string): Promise<void> {
 
 let ready: Promise<void> | null = null;
 
+/**
+ * Bootstrap once per process — but a *failed* bootstrap is not remembered.
+ *
+ * The success is worth caching: every caller gets the same schema and nothing
+ * races. A rejection is not. The usual reason this throws is a database that
+ * was briefly unreachable, and caching that rejection makes one bad moment
+ * permanent for the life of the process: every later call is handed the same
+ * stale error, and the retry that would have worked never happens. Clearing
+ * the slot costs nothing — a second bootstrap against a database that is
+ * already set up is idempotent, which is the whole design of the function.
+ */
 export async function initDb(): Promise<void> {
-  if (!ready) ready = bootstrap();
+  if (!ready) ready = bootstrap().catch((e) => { ready = null; throw e; });
   return ready;
 }
 

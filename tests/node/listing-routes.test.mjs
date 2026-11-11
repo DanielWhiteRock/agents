@@ -376,6 +376,52 @@ test("an author edits a generated draft and approves what they wrote, not what t
   assert.deepEqual(L.listingOf(after).useCases, ["Review a branch", "Read a dependency bump"]);
 });
 
+// The FAQ is the one field where "publishes the draft as it is saved above"
+// was false: `approveDraft` merged the live entries over the draft's, so an
+// answer already on the page could not be corrected or removed by anybody.
+// Who saved the draft now decides — and the screen says which case it is in.
+
+test("an author corrects and removes a published answer through the form, and the page follows", async () => {
+  const { pack, cookie } = await authorWithPack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([
+    { q: "Does it write?", a: "Not sure, actually." },
+    { q: "Which models?", a: "Opus only." },
+  ]), pack.id]);
+
+  // A generated draft: the screen seeds its FAQ box from what is live, and
+  // says the published answers are kept whatever the box says.
+  await L.saveGeneratedDraft(pack.id, DRAFT, 1);
+  const generated = await (await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, { headers: { cookie } })).text();
+  assert.match(generated, /are kept/i, "a generated draft's FAQ is additive, and the screen says so");
+  assert.match(generated, /Does it write\?/, "the published answers are in the box");
+  assert.match(generated, /Which models\?/);
+
+  // The author rewrites one answer, drops the other, and saves.
+  const saved = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, form(cookie, {
+    description: DRAFT.description,
+    useCases: "Review a branch",
+    limitations: "Needs a real diff",
+    requirements: "A git remote",
+    faq: "Q: Does it write?\nA: No — it reads and reports.",
+    scenarios: "Brief: A noisy refactor\nReached: read\nOutput: three findings",
+  }));
+  assert.equal(saved.status, 303);
+
+  // Now it is theirs, and the screen's promise has changed with it.
+  const mine = await (await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, { headers: { cookie } })).text();
+  assert.match(mine, /whole of the pack's FAQ/i);
+  assert.doesNotMatch(mine, /are kept,\s*\n?whatever/i);
+
+  const approved = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing/approve`, form(cookie));
+  assert.equal(approved.status, 303);
+
+  const page = await (await fetch(`${server.baseUrl}/packs/${pack.slug}`, { headers: { cookie } })).text();
+  assert.match(page, /No — it reads and reports/, "the corrected answer is what a buyer reads");
+  assert.doesNotMatch(page, /Not sure, actually/, "and the answer it replaced is gone");
+  assert.doesNotMatch(page, /Which models\?/, "as is the one the author removed");
+});
+
 test("a hand-written draft that pastes the method back is refused with the reason", async () => {
   // The copy-quality guard lives in `saveDraft`, so it covers a person
   // typing the instructions into the box exactly as it covers a generator.
@@ -386,6 +432,24 @@ test("a hand-written draft that pastes the method back is refused with the reaso
   assert.equal(res.status, 303);
   assert.match(decodeURIComponent(res.headers.get("location")), /verbatim/);
   assert.equal(await L.draftFor(pack.id), null, "nothing was written");
+});
+
+test("a submission with every box empty is refused on the page, and the draft stays", async () => {
+  const { pack, cookie } = await authorWithPack();
+  await L.saveGeneratedDraft(pack.id, DRAFT, 1);
+
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, form(cookie, {
+    description: "", useCases: "", limitations: "", requirements: "", faq: "", scenarios: "",
+  }));
+  assert.equal(res.status, 303);
+  const location = res.headers.get("location");
+  assert.match(decodeURIComponent(location), /every field was blank/, "and not a bare ?saved=1");
+
+  assert.equal((await L.draftFor(pack.id)).description, DRAFT.description, "the draft was not overwritten");
+
+  // The refusal is something the author actually reads, not only a parameter.
+  const page = await (await fetch(`${server.baseUrl}${location}`, { headers: { cookie } })).text();
+  assert.match(page, /every field was blank/);
 });
 
 test("a stranger cannot edit another organisation's draft", async () => {
