@@ -585,3 +585,95 @@ test("my_library leaves a current row unmarked", async () => {
   assert.match(out, /Library Current/);
   assert.doesNotMatch(out, /behind latest/);
 });
+
+// -------------------------------------------------------------- Task 10
+
+/**
+ * A raw `tools/list` call — `mcp-harness.mjs` only exports `callTool`
+ * (`tools/call`), so this mirrors its SSE-unwrapping for the one other
+ * method these tests need.
+ */
+async function listTools(token) {
+  const res = await fetch(`${server.baseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+  });
+  const raw = await res.text();
+  const line = raw.split("\n").find((l) => l.startsWith("data: "));
+  const payload = JSON.parse(line ? line.slice(6) : raw);
+  if (payload.error) throw new Error(`tools/list failed (${res.status}): ${payload.error.message}`);
+  return payload.result.tools;
+}
+
+/**
+ * Minimal, side-effect-free arguments for every registered tool, so the
+ * sweep below can call each one for real rather than merely inspecting its
+ * schema. A slug or handle or run id that does not exist is enough: every
+ * tool answers a "not found"/"not owned" refusal through the same `text()`
+ * helper a successful call would use, so the reason still gets echoed —
+ * and, for slug-taking tools, nothing is charged or granted along the way.
+ * `assert.ok(extra !== undefined, ...)` below means a newly registered tool
+ * with no entry here fails this test immediately, which is the point: it
+ * forces this map (and the tool's own `reason` wiring) to be kept current.
+ */
+const SWEEP_ARGS = {
+  search_packs: {},
+  pack_details: { slug: "mcp-reason-sweep-missing" },
+  list_categories: {},
+  get_popular: {},
+  get_author: { handle: "mcp-reason-sweep-missing" },
+  find_tools: {},
+  my_library: {},
+  install_pack: { slug: "mcp-reason-sweep-missing" },
+  export_pack: { slug: "mcp-reason-sweep-missing" },
+  load_pack: { slug: "mcp-reason-sweep-missing" },
+  buy_pack: { slug: "mcp-reason-sweep-missing", agreed_price_points: 0, confirm: true },
+  my_balance: {},
+  top_up: { amount_points: 100 },
+  list_runs: {},
+  run_trace: { run_id: "mcp-reason-sweep-missing" },
+};
+
+test("every registered tool's schema accepts a reason, and echoes it back", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const tools = await listTools(token);
+  assert.ok(tools.length > 0, "expected at least one registered tool");
+
+  for (const t of tools) {
+    const props = t.inputSchema?.properties ?? {};
+    assert.ok("reason" in props, `${t.name} is missing "reason" from its inputSchema`);
+
+    const extra = SWEEP_ARGS[t.name];
+    assert.ok(extra !== undefined, `no sweep fixture registered for tool "${t.name}" — add one to SWEEP_ARGS`);
+
+    const reason = `sweep check for ${t.name}`;
+    const out = await callTool(token, t.name, { ...extra, reason });
+    assert.equal(out.split("\n")[0], reason, `${t.name} did not echo its reason as the first line of its reply`);
+  }
+
+  // Every fixture above is a fake slug/handle/run id against a freshly
+  // signed-up org with no funding — none of this should have moved points.
+  assert.equal(await Points.balanceMillipoints(orgId), before, "the sweep must not have charged anything");
+});
+
+test("no tool description tells a buyer to finish in a browser, except top_up", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const tools = await listTools(token);
+  assert.ok(tools.length > 0, "expected at least one registered tool");
+
+  for (const t of tools) {
+    if (t.name === "top_up") continue;
+    assert.doesNotMatch(
+      t.description ?? "", /browser/i, `${t.name}'s description points a buyer at a browser`);
+  }
+});

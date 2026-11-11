@@ -336,7 +336,7 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
       "",
       owned
         ? `Start a run at ${ctx.baseUrl}/packs/${p.slug}`
-        : `To buy it, open ${ctx.baseUrl}/packs/${p.slug} — payment needs a browser, so it cannot be completed here.`,
+        : `To buy it, call buy_pack — or open ${ctx.baseUrl}/packs/${p.slug} to buy it in a browser instead.`,
       "Instructions are not shown here, but load_pack returns them — free packs get them immediately, "
       + "paid packs once this organisation owns them.",
     ].join("\n"), reason);

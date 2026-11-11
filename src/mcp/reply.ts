@@ -14,9 +14,10 @@ export const price = (pricePoints: number): string =>
   pricePoints === 0 ? "free" : pts(pricePoints * 1000);
 
 /**
- * Why this call is being made, in the caller's own words. Not wired into any
- * tool yet — a later task spreads this into every `inputSchema` and threads
- * it through every reply.
+ * Why this call is being made, in the caller's own words. Spread into every
+ * registered tool's `inputSchema` and threaded through every reply via
+ * `text`'s second argument, so the person who authorized the call sees it
+ * echoed back as the first line of the response.
  */
 export const REASON = z.string().optional().describe(
   "Why you're making this call, in a few words. Shown back to the person who authorized this agent.",

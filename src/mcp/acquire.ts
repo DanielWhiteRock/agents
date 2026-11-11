@@ -193,8 +193,8 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       "The packs this organisation has bought, with the version each entitlement is pinned to. A pack bought at "
       + "version 2 keeps running version 2 until it is deliberately upgraded — and a row is marked when a newer "
       + "version has since been published, so that staleness is never silent.",
-    inputSchema: {},
-  }, async () => {
+    inputSchema: { reason: REASON },
+  }, async ({ reason }) => {
     const s = await sql();
     const rows = await s.query<{ pack_id: string; name: string; slug: string; version: number; acquired_at: string }>(
       `SELECT pk.id AS pack_id, pk.name, pk.slug, pv.version, e.acquired_at
@@ -202,7 +202,9 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
        JOIN pack_versions pv ON pv.id = e.pack_version_id
        JOIN packs pk ON pk.id = pv.pack_id
        WHERE e.org_id = $1 ORDER BY e.acquired_at DESC`, [ctx.orgId]);
-    if (rows.length === 0) return text("This organisation does not own any packs yet. Use search_packs to look.");
+    if (rows.length === 0) {
+      return text("This organisation does not own any packs yet. Use search_packs to look.", reason);
+    }
     // The entitled version is read from the row itself; the latest is a
     // fresh lookup per pack, never assumed — a publish that happened after
     // the entitlement was granted is exactly what this marker exists to
@@ -212,7 +214,7 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       const behind = latest && latest.version !== r.version ? ` · behind latest (version ${latest.version})` : "";
       return `${r.name} (${r.slug}) · version ${r.version} · since ${r.acquired_at.slice(0, 10)}${behind}`;
     }));
-    return text(lines.join("\n"));
+    return text(lines.join("\n"), reason);
   });
 
   server.registerTool("my_balance", {
@@ -220,8 +222,8 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
     description:
       "This organisation's points balance, with its most recent ledger activity — grants, top-ups, earnings and "
       + "what has been spent, each in points. Call top_up to add more.",
-    inputSchema: {},
-  }, async () => {
+    inputSchema: { reason: REASON },
+  }, async ({ reason }) => {
     const bal = await balanceMillipoints(ctx.orgId);
     const s = await sql();
     const rows = await s.query<{ bucket: string; delta_millipoints: number; reason: string; created_at: string }>(
@@ -233,7 +235,7 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       `Balance: ${pts(bal)}`,
       "",
       ...(lines.length ? ["Recent activity:", ...lines] : ["No ledger activity yet."]),
-    ].join("\n"));
+    ].join("\n"), reason);
   });
 
   server.registerTool("top_up", {
@@ -243,68 +245,72 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       + "browser. Nothing is charged here; this call never moves money or points by itself.",
     inputSchema: {
       amount_points: z.number().int().positive().describe("How many points you intend to add, so the top-up page can be opened pre-filled."),
+      reason: REASON,
     },
-  }, async ({ amount_points }) => {
+  }, async ({ amount_points, reason }) => {
     return text(
       `To add ${price(amount_points)} to this organisation's balance, open ${ctx.baseUrl}/ledger/topup — `
-      + "this server cannot charge a card itself.");
+      + "this server cannot charge a card itself.", reason);
   });
 
   server.registerTool("install_pack", {
     title: "Add a pack to the library",
     description:
-      "Point this organisation's library at a pack's newest published version. It does not buy anything: if the "
-      + "pack is not already owned, this returns the URL to complete the purchase in a browser.",
-    inputSchema: { slug: z.string().describe("The pack's slug.") },
-  }, async ({ slug }) => {
+      "Point this organisation's library at a pack's newest published version. It does not buy anything itself: "
+      + "if the pack is not already owned, the reply says what it costs and that buy_pack can purchase it from "
+      + "this organisation's points balance right here, in this session.",
+    inputSchema: { slug: z.string().describe("The pack's slug."), reason: REASON },
+  }, async ({ slug, reason }) => {
     const p = await P.getPack(slug);
     // A draft or in-review pack must read exactly as a missing slug does —
     // `P.getPack` carries no status filter, so this tool enforces it itself
     // (Ruling R8, carried from Task 3's fix to `pack_details`).
-    if (!p || p.status !== "listed") return text(notFound(slug));
+    if (!p || p.status !== "listed") return text(notFound(slug), reason);
     const v = await P.latestVersion(p.id);
-    if (!v) return text(`${p.name} has not been published yet, so there is nothing to install.`);
+    if (!v) return text(`${p.name} has not been published yet, so there is nothing to install.`, reason);
     if (await P.entitled(ctx.orgId, v.id)) {
-      return text(`${p.name} version ${v.version} is already in your library. Run it at ${ctx.baseUrl}/packs/${p.slug}`);
+      return text(`${p.name} version ${v.version} is already in your library. Run it at ${ctx.baseUrl}/packs/${p.slug}`, reason);
     }
     return text(
       `${p.name} is not owned by this organisation. ${p.price_points === 0 ? "It is free" : `It costs ${price(p.price_points)}`}`
-      + ` — finish at ${ctx.baseUrl}/packs/${p.slug}. Payment needs a browser, so it cannot be done from here.`);
+      + " — call buy_pack to buy it with points, right here, or open "
+      + `${ctx.baseUrl}/packs/${p.slug} to buy it in a browser instead.`, reason);
   });
 
   server.registerTool("export_pack", {
     title: "Download a pack you own",
     description:
-      "Returns a pack this organisation owns as an agent definition file — markdown with YAML front matter, the "
-      + "format `ant apply` consumes — so it can be run on your own infrastructure instead of here. Only works for "
-      + "packs you have bought, because the file contains the author's instructions.",
-    inputSchema: { slug: z.string().describe("The pack's slug.") },
-  }, async ({ slug }) => {
+      "Returns a pack this organisation may read as an agent definition file — markdown with YAML front matter, "
+      + "the format `ant apply` consumes — so it can be run on your own infrastructure instead of here. To run it "
+      + "in this session instead, call load_pack. Works for any pack this organisation owns, authored, or that "
+      + "the platform curates — the same rule load_pack and pack_details use.",
+    inputSchema: { slug: z.string().describe("The pack's slug."), reason: REASON },
+  }, async ({ slug, reason }) => {
     // Ruling R15: `P.getPack` carries no status filter, so without this an
     // unlisted pack answered "does not own" while a missing slug answered
     // "no such pack" — two different sentences that hand a stranger the
     // same existence oracle R8 already closed for `pack_details`,
     // `load_pack` and `install_pack`.
     const p = await P.getPack(slug);
-    if (!p || p.status !== "listed") return text(notFound(slug));
+    if (!p || p.status !== "listed") return text(notFound(slug), reason);
     try {
       const md = await P.exportPack(ctx.orgId, slug);
-      return text(`Save this as ${slug}.md and apply it with \`ant apply ${slug}.md\`:\n\n${md}`);
+      return text(`Save this as ${slug}.md and apply it with \`ant apply ${slug}.md\`:\n\n${md}`, reason);
     } catch (e) {
       const m = String((e as Error)?.message ?? e);
       return text(m.includes("does not own")
-        ? `This organisation does not own ${slug}, so it cannot be exported. Buy it at ${ctx.baseUrl}/packs/${slug}`
-        : m);
+        ? `This organisation does not own ${slug}, so it cannot be exported. Call buy_pack to buy it, or open `
+          + `${ctx.baseUrl}/packs/${slug}`
+        : m, reason);
     }
   });
 
   server.registerTool("load_pack", {
     title: "Load a pack's instructions into this session",
     description:
-      "Hands a pack's full instructions straight into this session, so it can be run here instead of ending in "
-      + "a URL to finish in a browser. A free pack goes to any signed-in organisation, and buying it for zero "
-      + "points happens automatically. A paid pack goes only to an organisation that already owns it — buy it "
-      + "first with buy_pack.",
+      "Hands a pack's full instructions straight into this session, so it can be run right here. A free pack "
+      + "goes to any signed-in organisation, and buying it for zero points happens automatically. A paid pack "
+      + "goes only to an organisation that already owns it — buy it first with buy_pack.",
     inputSchema: { slug: z.string().describe("The pack's slug, from search_packs."), reason: REASON },
   }, async ({ slug, reason }) => {
     const result = await loadPack(ctx, slug);
