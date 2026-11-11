@@ -162,6 +162,39 @@ test("pack_details points at load_pack and no longer refuses to reveal instructi
   assert.doesNotMatch(out, /not available through any tool/);
 });
 
+test("pack_details tells an author they own their own paid pack, not to buy it", async () => {
+  // `P.mayExport` — not a bare `P.entitled` probe — is the one rule
+  // `load_pack` and `buy_pack` already decide ownership by: an author (and
+  // the platform curator) can read and run their own pack with no
+  // `entitlements` row ever written. Before this fix, `pack_details` used
+  // a bare `entitled` check and told an author "Owned by you: no" and "To
+  // buy it, call buy_pack" for a pack they wrote and never bought.
+  const author = await A.signUp({
+    email: email("details-author"), name: "Author", password: "correct-horse", orgName: `Details Author Co ${n}`,
+  });
+  const slug = `mcp-details-author-owned-${++n}`;
+  await Auth.createPack(author.orgId, {
+    slug, name: "Author Owned Widget", tagline: "x", author: "Someone", model: "claude-opus-5",
+    pricePoints: 500, upgradePoints: 0, instructions: "Do it.",
+  });
+  await P.publishPack(slug);
+  const platform = await db.platformOrgId();
+  await Auth.setStatus(platform, slug, "review");
+  await Auth.setStatus(platform, slug, "listed");
+
+  const authorBearer = await mintToken(`agents_session=${author.token}`);
+  const version = await P.latestVersion((await P.getPack(slug)).id);
+
+  // No purchases row and no entitlement — ownership here comes from
+  // authorship alone, exactly as `assertMayExport`'s first clause grants it.
+  assert.equal(await P.entitled(author.orgId, version.id), false);
+
+  const out = await callTool(authorBearer, "pack_details", { slug });
+  assert.match(out, /Owned by you: yes/);
+  assert.match(out, /Start a run at/);
+  assert.doesNotMatch(out, /To buy it/);
+});
+
 test("pack_details carries the reason line when one is given", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);

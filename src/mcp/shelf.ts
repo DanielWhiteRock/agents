@@ -296,8 +296,16 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
     if (!p || p.status !== "listed") return text(`There is no pack called "${slug}". Try search_packs.`, reason);
 
     const v = await P.latestVersion(p.id);
+    // `P.mayExport`, not a bare `P.entitled` probe — the author and the
+    // platform curator can read and run their own pack with no
+    // `entitlements` row at all (see `assertMayExport`), and `load_pack`/
+    // `buy_pack` already decide "does this organisation own it" the same
+    // way. A bare `entitled` check here told an author "Owned by you: no"
+    // and "To buy it, call buy_pack" for a pack they wrote — the same class
+    // of bug `buy_pack` was fixed for one task ago, just reached through a
+    // different tool.
     const [owned, creatorHandle, stats, rating, rail] = await Promise.all([
-      v ? P.entitled(ctx.orgId, v.id) : Promise.resolve(false),
+      v ? P.mayExport(ctx.orgId, p, v.id) : Promise.resolve(false),
       creatorHandleOf(p.creator_id),
       P.packStats(p.id),
       ratingOf(p.id),
