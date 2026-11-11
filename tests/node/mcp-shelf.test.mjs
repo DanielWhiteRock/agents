@@ -285,3 +285,47 @@ test("an unknown handle is not found, not an empty profile", async () => {
 
   assert.match(await callTool(token, "get_author", { handle: "nobody" }), /no such creator/i);
 });
+
+// ------------------------------------------------------------------- Task 6
+
+test("find_tools names the packs that declare a tool", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  await listedPack({
+    slug: `mcp-tools-senior-engineer-${++n}`, name: "Tools Senior Engineer",
+    tools: [{ name: "bash", policy: "always_allow" }, { name: "write", policy: "always_allow" }],
+  });
+
+  const out = await callTool(token, "find_tools", { query: "bash" });
+  assert.match(out, /bash/);
+  assert.match(out, /senior-engineer/);
+});
+
+test("find_tools with no query lists the whole index", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  await listedPack({
+    slug: `mcp-tools-index-${++n}`, name: "Tools Index Pack",
+    tools: [
+      { name: "bash", policy: "always_allow" }, { name: "write", policy: "always_allow" },
+      { name: "edit", policy: "always_allow" },
+    ],
+  });
+
+  const out = await callTool(token, "find_tools", {});
+  for (const toolName of ["bash", "write", "edit"]) assert.match(out, new RegExp(toolName));
+});
+
+test("find_tools reaches MCP servers as well as tools", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  await listedPack({
+    slug: `mcp-tools-figma-${++n}`, name: "Tools Figma Pack",
+    mcpServers: [{ name: "figma", url: "https://figma.example.com/mcp" }],
+  });
+
+  assert.match(await callTool(token, "find_tools", { query: "figma" }), /figma/);
+});

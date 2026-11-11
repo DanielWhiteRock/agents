@@ -207,6 +207,46 @@ async function popularPacks(ctx: McpContext, timeframe: "week" | "month" | "all_
   return P.rankPacks(withWindow);
 }
 
+/**
+ * Every tool and MCP server name declared by a `listed` pack, grouped by
+ * `(kind, name)` — a different query for a different job than
+ * `packIdsForTool` (a filter) or `toolNamesByPack` (a per-pack lookup); see
+ * Ruling R2. `query`, when given, narrows both tables by a case-insensitive
+ * substring before grouping, so a miss never grouped a row only to discard
+ * it.
+ */
+async function toolIndex(query?: string): Promise<Array<{
+  tool: string; kind: "tool" | "mcp"; packs: Array<{ slug: string; name: string }>;
+}>> {
+  const s = await sql();
+  const needle = query?.trim().toLowerCase();
+  const likeClause = needle ? " AND LOWER(x.name) LIKE $1" : "";
+  const params = needle ? [`%${needle}%`] : [];
+
+  const [toolRows, mcpRows] = await Promise.all([
+    s.query<{ name: string; slug: string; pack_name: string }>(
+      `SELECT x.name, p.slug, p.name AS pack_name FROM pack_tools x JOIN packs p ON p.id = x.pack_id
+       WHERE p.status = 'listed'${likeClause}`, params),
+    s.query<{ name: string; slug: string; pack_name: string }>(
+      `SELECT x.name, p.slug, p.name AS pack_name FROM pack_mcp_servers x JOIN packs p ON p.id = x.pack_id
+       WHERE p.status = 'listed'${likeClause}`, params),
+  ]);
+
+  const entries = new Map<string, { tool: string; kind: "tool" | "mcp"; packs: Array<{ slug: string; name: string }> }>();
+  const add = (rows: typeof toolRows, kind: "tool" | "mcp") => {
+    for (const r of rows) {
+      const key = `${kind}:${r.name.toLowerCase()}`;
+      const entry = entries.get(key) ?? { tool: r.name, kind, packs: [] };
+      if (!entry.packs.some((p) => p.slug === r.slug)) entry.packs.push({ slug: r.slug, name: r.pack_name });
+      entries.set(key, entry);
+    }
+  };
+  add(toolRows, "tool");
+  add(mcpRows, "mcp");
+
+  return [...entries.values()].sort((a, b) => a.tool.localeCompare(b.tool) || a.kind.localeCompare(b.kind));
+}
+
 export function registerShelf(server: McpServer, ctx: McpContext): void {
   server.registerTool("search_packs", {
     title: "Search the pack catalog",
@@ -371,6 +411,30 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
       "",
       ...(packs.length ? ["Packs:", ...packs.map((p) => `- ${p.name} (${p.slug})`)] : ["No listed packs yet."]),
     ].join("\n"), reason);
+  });
+
+  server.registerTool("find_tools", {
+    title: "Find a worker by the tool it uses",
+    description:
+      "Which packs declare a given tool or MCP server, by name — the routing index for 'I already use Kling, "
+      + "which pack can reach it'. Discovery only: this does not run or quote a tool. Call pack_details and "
+      + "load_pack once you've found the pack you want.",
+    inputSchema: {
+      query: z.string().optional().describe(
+        "Match tool or MCP server names containing this text, case-insensitively. Omit to list the whole index."),
+      reason: REASON,
+    },
+  }, async ({ query, reason }) => {
+    const index = await toolIndex(query);
+    if (index.length === 0) {
+      return text(
+        query ? `Nothing in the catalog declares a tool matching "${query}".` : "No pack declares any tool yet.",
+        reason);
+    }
+    const lines = index.map((e) =>
+      `${e.tool} (${e.kind}) · ${e.packs.length} pack${e.packs.length === 1 ? "" : "s"}: `
+      + e.packs.map((p) => `${p.name} (${p.slug})`).join(", "));
+    return text(lines.join("\n"), reason);
   });
 }
 
