@@ -3,6 +3,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as P from "../app/platform.js";
 import * as Pay from "../billing/purchases.js";
+import { balanceMillipoints, pts } from "../billing/points.js";
 import { sql } from "../app/sql.js";
 import { text, price, REASON } from "./reply.js";
 import type { McpContext } from "./server.js";
@@ -92,6 +93,65 @@ export async function loadPack(
   return { ok: true, markdown: `${versionLine}\n\n${markdown}` };
 }
 
+/**
+ * Spend this organisation's points on a pack.
+ *
+ * The server never saw what the agent told its user, so the only thing it
+ * can enforce is an echo: `agreed_price_points` must equal the live price
+ * exactly, or this refuses and restates the live price rather than charging
+ * a stale quote. `confirm: true` is required by the schema itself (a
+ * `z.literal(true)`, not a defaulted boolean), so a call cannot buy by
+ * merely omitting the field.
+ *
+ * Gates on `status === "listed"` with the shared `notFound`, exactly like
+ * `load_pack`, `install_pack` and `export_pack` (Ruling R17) — an unlisted
+ * pack must not be purchasable, and must read as byte-identical to a missing
+ * slug.
+ *
+ * Already owning the pack is a silent no-op, not a refusal: it skips
+ * `buyWithPoints` entirely (so there is no second ledger row and no second
+ * `purchases` row) and just hands back what `load_pack` would already give
+ * this organisation. `buyWithPoints` is the single purchase path — this
+ * function never grants the entitlement itself, so there is exactly one
+ * place a double-grant bug could creep in, and it isn't here.
+ */
+export async function buyPack(
+  ctx: McpContext, args: { slug: string; agreed_price_points: number; confirm: true },
+): Promise<string> {
+  const { slug, agreed_price_points } = args;
+  const p = await P.getPack(slug);
+  if (!p || p.status !== "listed") return notFound(slug);
+
+  const v = await P.latestVersion(p.id);
+  if (!v) return `${p.name} has not been published yet, so there is nothing to buy.`;
+
+  const live = Pay.pricePoints(p);
+  if (agreed_price_points !== live) {
+    return `The price has changed: ${p.name} now costs ${price(live)}, not ${price(agreed_price_points)}. `
+      + "Call buy_pack again with the current price if you still want it.";
+  }
+
+  if (!(await P.entitled(ctx.orgId, v.id))) {
+    try {
+      await Pay.buyWithPoints({
+        orgId: ctx.orgId, userId: ctx.userId, packVersionId: v.id, packId: p.id,
+        pricePoints: live, description: p.name,
+      });
+    } catch {
+      // `buyWithPoints` only ever throws here for one reason once the price
+      // has already matched and the pack is unowned: not enough balance. It
+      // checks the balance before writing anything, so nothing was debited
+      // or granted — safe to report the live balance back unchanged.
+      const bal = await balanceMillipoints(ctx.orgId);
+      return `${p.name} costs ${price(live)} and this organisation only has ${pts(bal)}. `
+        + `Top up at ${ctx.baseUrl}/ledger/topup`;
+    }
+  }
+
+  const result = await loadPack(ctx, slug);
+  return result.ok ? result.markdown : result.message;
+}
+
 export function registerAcquire(server: McpServer, ctx: McpContext): void {
   server.registerTool("my_library", {
     title: "What this organisation owns",
@@ -170,5 +230,25 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
   }, async ({ slug, reason }) => {
     const result = await loadPack(ctx, slug);
     return text(result.ok ? result.markdown : result.message, reason);
+  });
+
+  server.registerTool("buy_pack", {
+    title: "Buy a pack with points",
+    description:
+      "Spends this organisation's points to buy a pack, then hands over its instructions the same way load_pack "
+      + "does. `agreed_price_points` must equal the pack's current price exactly — pass the number you already "
+      + "told the person who authorized this, in points — or the call is refused and the live price is restated "
+      + "rather than charged. `confirm` must be true. Buying a pack already owned is a no-op: it is not charged "
+      + "again.",
+    inputSchema: {
+      slug: z.string().describe("The pack's slug, from search_packs."),
+      agreed_price_points: z.number().describe(
+        "The price in points, exactly as told to the person who authorized this call. Must match the live price."),
+      confirm: z.literal(true).describe("Must be true — confirms the person approved spending agreed_price_points."),
+      reason: REASON,
+    },
+  }, async ({ slug, agreed_price_points, confirm, reason }) => {
+    const message = await buyPack(ctx, { slug, agreed_price_points, confirm });
+    return text(message, reason);
   });
 }

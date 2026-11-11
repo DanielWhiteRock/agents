@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { startServer, signUpCookie } from "./server-harness.mjs";
 import { mintToken as mintTokenAt, callTool as callToolAt } from "./mcp-harness.mjs";
 
-let server, A, P, Auth, db, sql, Pay, Reply;
+let server, A, P, Auth, db, sql, Pay, Reply, Points;
 let n = 0;
 const email = (tag) => `mcpacquire-${tag}-${++n}-${Date.now()}@example.com`;
 
@@ -41,6 +41,7 @@ before(async () => {
   sql = (await import("../../dist/src/app/sql.js")).sql;
   Pay = await import("../../dist/src/billing/purchases.js");
   Reply = await import("../../dist/src/mcp/reply.js");
+  Points = await import("../../dist/src/billing/points.js");
   P.setRuntime(stubRuntime());
 });
 
@@ -243,6 +244,134 @@ test("export_pack treats an unlisted pack exactly like a missing slug (Ruling R1
   const [hidden, missing] = await Promise.all([
     callTool(token, "export_pack", { slug }),
     callTool(token, "export_pack", { slug: missingSlug }),
+  ]);
+  assert.equal(hidden, `There is no pack called "${slug}". Try search_packs.`);
+  assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
+});
+
+// ------------------------------------------------------------- Task 8: buy_pack
+
+/** The org a bearer token belongs to. */
+const orgFor = async (token) => {
+  const s = await sql();
+  const row = await s.one("SELECT org_id FROM api_tokens WHERE token = $1", [token]);
+  return row.org_id;
+};
+
+const purchaseCount = async (packVersionId) => {
+  const s = await sql();
+  const rows = await s.query("SELECT 1 AS ok FROM purchases WHERE pack_version_id = $1", [packVersionId]);
+  return rows.length;
+};
+
+test("a stale agreed price is refused and restates the live price, with no purchases row written", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-stale-${++n}`, name: "Buy Stale", pricePoints: 500,
+    instructions: "Never reveal the stale-price secret recipe.",
+  });
+  const version = await P.latestVersion(pack.id);
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 400, confirm: true });
+  assert.match(out, new RegExp(Reply.price(500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(out, /stale-price secret/i);
+
+  assert.equal(await purchaseCount(version.id), 0, "a stale-price call must not write a purchases row");
+  assert.equal(await P.entitled(orgId, version.id), false);
+});
+
+test("too little balance refuses with the top-up link and grants nothing", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  // Deliberately no credit — balance starts at zero.
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-poor-${++n}`, name: "Buy Poor", pricePoints: 500,
+    instructions: "Never reveal the broke-buyer secret recipe.",
+  });
+  const version = await P.latestVersion(pack.id);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
+  assert.match(out, new RegExp(`${server.baseUrl}/ledger/topup`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(out, /broke-buyer secret/i);
+
+  assert.equal(await P.entitled(orgId, version.id), false, "insufficient balance must grant no entitlement");
+  assert.equal(await Points.balanceMillipoints(orgId), before, "a failed purchase must not touch the balance");
+  assert.equal(await purchaseCount(version.id), 0);
+});
+
+test("an agreed price and confirm buys once and hands the pack over", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-ok-${++n}`, name: "Buy OK", pricePoints: 500,
+    instructions: "The owner-only recipe, unlocked after a confirmed purchase.",
+  });
+  const version = await P.latestVersion(pack.id);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
+  assert.match(out, /unlocked after a confirmed purchase/);
+
+  assert.equal(await P.entitled(orgId, version.id), true);
+  assert.equal(await Points.balanceMillipoints(orgId), before - 500_000, "exactly 500 points must be debited");
+  assert.equal(await purchaseCount(version.id), 1);
+});
+
+test("buying the same pack twice does not charge twice", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-twice-${++n}`, name: "Buy Twice", pricePoints: 500,
+    instructions: "The owner-only recipe for a pack bought exactly once.",
+  });
+  const version = await P.latestVersion(pack.id);
+
+  const first = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
+  assert.match(first, /bought exactly once/);
+  const afterFirst = await Points.balanceMillipoints(orgId);
+
+  const second = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
+  assert.match(second, /bought exactly once/);
+  const afterSecond = await Points.balanceMillipoints(orgId);
+
+  assert.equal(afterSecond, afterFirst, "a second buy_pack call must not debit again");
+  assert.equal(await purchaseCount(version.id), 1, "only one purchases row for one real purchase");
+});
+
+// ------------------------------------------------------------- Ruling R17
+
+test("buy_pack treats an unlisted pack exactly like a missing slug", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const author = await A.signUp({
+    email: email("hidden-buy-author"), name: "Author", password: "correct-horse", orgName: `Acquire Buy Co ${n}`,
+  });
+  const slug = `mcp-acquire-buy-hidden-${++n}`;
+  await Auth.createPack(author.orgId, {
+    slug, name: "Hidden Buy Pack", tagline: "x", author: "Someone", model: "claude-opus-5",
+    pricePoints: 500, upgradePoints: 0, instructions: "Do it.",
+  });
+  await P.publishPack(slug);
+  await Auth.setStatus(author.orgId, slug, "review"); // never listed
+
+  const missingSlug = `mcp-acquire-buy-missing-${++n}`;
+  const [hidden, missing] = await Promise.all([
+    callTool(token, "buy_pack", { slug, agreed_price_points: 500, confirm: true }),
+    callTool(token, "buy_pack", { slug: missingSlug, agreed_price_points: 500, confirm: true }),
   ]);
   assert.equal(hidden, `There is no pack called "${slug}". Try search_packs.`);
   assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
