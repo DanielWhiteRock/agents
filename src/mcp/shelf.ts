@@ -166,6 +166,47 @@ export async function searchRows(ctx: McpContext, args: SearchArgs): Promise<{ r
   return { rows: ordered.slice(0, limit), matched: ordered.length };
 }
 
+/** A trailing window, in days, for the two bounded `get_popular` timeframes. */
+const POPULAR_WINDOW_DAYS: Record<"week" | "month", number> = { week: 7, month: 30 };
+
+/**
+ * Completed, non-trial runs within a trailing window, grouped by pack — one
+ * query, not one per candidate pack. `catalogFor`'s own `runs` column is
+ * all-time and unconditional; this is the same count narrowed to
+ * `started_at >= cutoff`, which is the one piece `catalogFor` cannot give
+ * `get_popular` without a second query of its own.
+ */
+async function windowedRuns(days: number): Promise<Map<string, number>> {
+  const s = await sql();
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  const rows = await s.query<{ pack_id: string; runs: string | number }>(
+    `SELECT v.pack_id, COUNT(*) AS runs FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+     WHERE r.is_trial = 0 AND r.started_at >= $1 GROUP BY v.pack_id`,
+    [cutoff]);
+  return new Map(rows.map((r) => [r.pack_id, Number(r.runs)]));
+}
+
+/**
+ * `get_popular`'s own ordering: the shelf's order (`rankPacks`), restricted
+ * to packs that actually ran in the window asked about.
+ *
+ * "Popular" has no honest meaning for a pack nobody has run — and without
+ * this filter, a pack with zero runs this week would still surface via
+ * `rankPacks`' own newest-first tie-break, which is exactly right for
+ * browsing the whole shelf (`search_packs`'s `trending` sort) but wrong here:
+ * a brand-new, never-run pack is not "popular this week" just because it is
+ * new.
+ */
+async function popularPacks(ctx: McpContext, timeframe: "week" | "month" | "all_time"): Promise<P.CatalogPack[]> {
+  const catalog = await P.catalogFor(ctx.orgId);
+  if (timeframe === "all_time") return P.rankPacks(catalog.filter((p) => p.runs > 0));
+  const windowed = await windowedRuns(POPULAR_WINDOW_DAYS[timeframe]);
+  const withWindow = catalog
+    .map((p) => ({ ...p, runs: windowed.get(p.id) ?? 0 }))
+    .filter((p) => p.runs > 0);
+  return P.rankPacks(withWindow);
+}
+
 export function registerShelf(server: McpServer, ctx: McpContext): void {
   server.registerTool("search_packs", {
     title: "Search the pack catalog",
@@ -260,4 +301,40 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
       + "paid packs once this organisation owns them.",
     ].join("\n"), reason);
   });
+
+  server.registerTool("list_categories", {
+    title: "Browse by category",
+    description:
+      "Every tag at least one listed pack carries, with how many packs carry it. Pass one of these as "
+      + "search_packs's `category` to narrow the shelf.",
+    inputSchema: { reason: REASON },
+  }, async ({ reason }) => {
+    const cats = await P.categories();
+    if (cats.length === 0) return text("No categories yet.", reason);
+    const lines = cats.map((c) => `${c.tag} · ${c.count} pack${c.count === 1 ? "" : "s"}`);
+    return text(lines.join("\n"), reason);
+  });
+
+  server.registerTool("get_popular", {
+    title: "What's popular right now",
+    description:
+      "Packs that have actually been run, ranked the same way the shelf itself ranks, over a trailing window. "
+      + "Empty for a timeframe nothing has run in yet — that is itself information, not an error.",
+    inputSchema: {
+      timeframe: z.enum(["week", "month", "all_time"]).optional().describe(
+        "The window runs are counted over. Defaults to all_time."),
+      limit: z.number().int().min(1).max(50).optional().describe("Maximum packs to return. Defaults to 10."),
+      reason: REASON,
+    },
+  }, async ({ timeframe, limit, reason }) => {
+    const tf = timeframe ?? "all_time";
+    const lim = Math.min(Math.max(limit ?? 10, 1), 50);
+    const ranked = await popularPacks(ctx, tf);
+    if (ranked.length === 0) {
+      return text(`Nothing has run ${tf === "all_time" ? "yet" : `in the last ${tf}`}.`, reason);
+    }
+    const lines = ranked.slice(0, lim).map((p) => packLine(p, p.owned));
+    return text(lines.join("\n\n"), reason);
+  });
+
 }

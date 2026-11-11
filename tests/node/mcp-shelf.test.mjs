@@ -67,12 +67,12 @@ const listedPack = async (overrides = {}) => {
   return pack;
 };
 
-const insertRun = async (orgId, userId, packVersionId) => {
+const insertRun = async (orgId, userId, packVersionId, startedAt = db.now()) => {
   const s = await sql();
   await s.query(
     `INSERT INTO runs (id, org_id, user_id, pack_version_id, session_id, model, status, budget_cents, started_at, ended_at)
      VALUES ($1,$2,$3,$4,$5,'claude-opus-5','idle',50,$6,$6)`,
-    [`run_${++n}`, orgId, userId, packVersionId, `sesn_${n}`, db.now()]);
+    [`run_${++n}`, orgId, userId, packVersionId, `sesn_${n}`, startedAt]);
 };
 
 test("an empty query returns a bounded ranked page, not the whole table", async () => {
@@ -214,4 +214,45 @@ test("a pack in review is invisible by name and by exact slug", async () => {
 
   const bySlug = await callTool(token, "search_packs", { query: slug });
   assert.equal(bySlug, `Nothing in the catalog matches "${slug}".`);
+});
+
+// ------------------------------------------------------------------- Task 4
+
+test("categories count only listed packs", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  // The shipped catalog's own "Pack Zero" already carries "engineering" as a
+  // listed pack — the one count this asserts on. This test's own fixture is
+  // deliberately left in review, to prove it does *not* add a second one.
+  const author = await A.signUp({
+    email: email("categories-hidden-author"), name: "Author", password: "correct-horse",
+    orgName: `Categories Hidden Co ${n}`,
+  });
+  const hiddenSlug = `mcp-categories-hidden-${++n}`;
+  await Auth.createPack(author.orgId, {
+    slug: hiddenSlug, name: "Engineering Hidden", tagline: "x", author: "Someone", model: "claude-opus-5",
+    pricePoints: 0, upgradePoints: 0, instructions: "Do it.", tags: "engineering",
+  });
+  await P.publishPack(hiddenSlug);
+  await Auth.setStatus(author.orgId, hiddenSlug, "review"); // never listed
+
+  const out = await callTool(token, "list_categories", {});
+  assert.match(out, /engineering · 1\b/);
+});
+
+test("get_popular week ignores a run from last month", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({ slug: `mcp-popular-senior-engineer-${++n}`, name: "Popular Senior Engineer" });
+  const runner = await A.signUp({
+    email: email("popular-runner"), name: "Runner", password: "correct-horse", orgName: `Popular Runner Co ${n}`,
+  });
+  const version = await P.latestVersion(pack.id);
+  const fortyDaysAgo = new Date(Date.now() - 40 * 86_400_000).toISOString();
+  await insertRun(runner.orgId, runner.userId, version.id, fortyDaysAgo);
+
+  assert.doesNotMatch(await callTool(token, "get_popular", { timeframe: "week" }), /senior-engineer/);
+  assert.match(await callTool(token, "get_popular", { timeframe: "all_time" }), /senior-engineer/);
 });
