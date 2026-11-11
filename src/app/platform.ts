@@ -1261,11 +1261,21 @@ export async function topUp(runId: string): Promise<RunRow> {
  * Who may take a copy of a pack: anyone who bought it, the organisation that
  * wrote it, and the curator. An author being unable to pull back their own work
  * would make the folder a one-way trip.
+ *
+ * The boolean form a caller can check *before* deciding to charge anyone —
+ * an author or the platform org already has access via the clauses below
+ * with no `entitlements` row ever written for them, so a bare `entitled`
+ * probe reads `false` for them and would otherwise let a purchase path
+ * charge them for what they already have for free.
  */
+export async function mayExport(orgId: string, pack: PackRow, packVersionId: string): Promise<boolean> {
+  if (pack.author_org_id === orgId) return true;
+  if ((await platformOrgId()) === orgId) return true;
+  return entitled(orgId, packVersionId);
+}
+
 export async function assertMayExport(orgId: string, pack: PackRow, packVersionId: string): Promise<void> {
-  if (pack.author_org_id === orgId) return;
-  if ((await platformOrgId()) === orgId) return;
-  await assertEntitled(orgId, packVersionId);
+  if (!(await mayExport(orgId, pack, packVersionId))) throw new NotEntitledError();
 }
 
 /**
