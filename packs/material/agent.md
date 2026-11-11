@@ -6,7 +6,7 @@ description: "Google's Material Design with layered surfaces, dynamic theming, b
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/material.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/material.webp"
 model:
   id: claude-opus-5
   effort: high

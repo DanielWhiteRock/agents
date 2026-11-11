@@ -6,7 +6,7 @@ description: "Throwback design with vintage-inspired typography, high-contrast r
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/retro.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/retro.webp"
 model:
   id: claude-opus-5
   effort: high

@@ -6,7 +6,7 @@ description: "Conversion-focused design that removes friction and guides users t
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/levels.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/levels.webp"
 model:
   id: claude-opus-5
   effort: high

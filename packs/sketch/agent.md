@@ -6,7 +6,7 @@ description: "'A friendly, hand-drawn sketch interface inspired by pencil illust
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/sketch.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/sketch.webp"
 model:
   id: claude-opus-5
   effort: high

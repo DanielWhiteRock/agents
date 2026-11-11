@@ -6,7 +6,7 @@ description: "Soft, rounded 3D-like shapes mimicking malleable clay with playful
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/claymorphism.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/claymorphism.webp"
 model:
   id: claude-opus-5
   effort: high

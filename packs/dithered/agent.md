@@ -6,7 +6,7 @@ description: "Dot-pattern rendering technique that simulates shades with a limit
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/dithered.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/dithered.webp"
 model:
   id: claude-opus-5
   effort: high

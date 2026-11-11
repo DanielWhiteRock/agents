@@ -6,7 +6,7 @@ description: "Raw, anti-design aesthetic inspired by concrete architecture with 
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/brutalism.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/brutalism.webp"
 model:
   id: claude-opus-5
   effort: high

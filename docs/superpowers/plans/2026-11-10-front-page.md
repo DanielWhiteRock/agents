@@ -483,12 +483,12 @@ Perspective's own brief, rendered.
 
 | Section | File | Reads as |
 |---|---|---|
-| 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` · poster | a founder moving along an endless wall of other people's toolkits, each lighting up as he passes. Bright, delighted, loops. See below. |
-| 4 What's in a worker | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/anatomy.webp` | a solid block exploded into six stacked plates, the top one lit. A folder, not a file. |
-| 6b Somebody wrote this | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/author.webp` | the same frame held: the people who turned up, and what they brought. |
-| 7 It runs here | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/runs-here.webp` | a sealed enclosure with a glowing core, a measured ribbon unrolling out of it. Hosted, and metered. |
-| 8 Connect over MCP | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/mcp.webp` | five cables converging into one socket. |
-| 9 For authors | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/authors.webp` | one original on a plinth, many faint copies around it, coins returning along a curve. |
+| 1 Hero | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/hero.mp4` · poster | a founder moving along an endless wall of other people's toolkits, each lighting up as he passes. Bright, delighted, loops. See below. |
+| 4 What's in a worker | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/anatomy.webp` | a solid block exploded into six stacked plates, the top one lit. A folder, not a file. |
+| 6b Somebody wrote this | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/author.webp` | the same frame held: the people who turned up, and what they brought. |
+| 7 It runs here | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/runs-here.webp` | a sealed enclosure with a glowing core, a measured ribbon unrolling out of it. Hosted, and metered. |
+| 8 Connect over MCP | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/mcp.webp` | five cables converging into one socket. |
+| 9 For authors | `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/authors.webp` | one original on a plinth, many faint copies around it, coins returning along a curve. |
 
 All 16-34KB, immutable cache header. Seedream 4.5 at 2K, 135 credits across
 six images and two reruns.
@@ -515,9 +515,9 @@ beat is the one the economics make possible: he hires fifty, because he can.
 
 | File | What it is |
 |---|---|
-| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero.mp4` | 4s loop, 1152×648, h264, no audio, 257KB |
-| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hero-poster.webp` | first frame, 70KB |
-| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front/hired-fifty.webp` | fifty specialists, each with their own kit, and one delighted founder. Section 3, Roles. |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/hero.mp4` | 4s loop, 1152×648, h264, no audio, 257KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/hero-poster.webp` | first frame, 70KB |
+| `https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/front/hired-fifty.webp` | fifty specialists, each with their own kit, and one delighted founder. Section 3, Roles. |
 
 **The sweep was chosen because it loops and an arrival does not.** Our own
 Video Producer's Brief pack made that argument: an arrival needs a before and

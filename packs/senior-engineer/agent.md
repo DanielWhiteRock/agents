@@ -6,7 +6,7 @@ description: "Reads your code before changing it, writes the smallest thing that
 price: 0
 tags: "engineering, code review"
 role: engineer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/senior-engineer.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/senior-engineer.webp"
 model:
   id: claude-opus-5
   effort: high

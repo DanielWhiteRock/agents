@@ -6,7 +6,7 @@ description: "Smooth color transitions and gradient-rich surfaces for modern, pl
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/gradient.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/gradient.webp"
 model:
   id: claude-opus-5
   effort: high

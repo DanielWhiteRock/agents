@@ -6,7 +6,7 @@ description: "Spatial depth design with isometric views, vanishing points, and l
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/perspective.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/perspective.webp"
 model:
   id: claude-opus-5
   effort: high
