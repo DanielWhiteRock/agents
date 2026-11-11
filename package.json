@@ -9,7 +9,7 @@
     "start": "node dist/src/app/server.js",
     "dev": "tsc -p tsconfig.build.json && node dist/src/app/server.js",
     "test:unit": "vitest run",
-    "test:integration": "tsc -p tsconfig.build.json && node --test --test-concurrency=1 tests/node/*.test.mjs",
+    "test:integration": "node scripts/check-test-db.mjs && tsc -p tsconfig.build.json && node --test --test-concurrency=1 tests/node/*.test.mjs",
     "judge": "node scripts/judge.mjs",
     "judge:strict": "node scripts/judge.mjs --min 99"
   },

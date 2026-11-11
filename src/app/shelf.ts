@@ -99,3 +99,64 @@ export async function anatomy(): Promise<Anatomy[]> {
       JOIN packs p ON p.id = v.pack_id WHERE p.status = 'listed'`);
   return shapeAnatomy(rows.map((r) => ({ path: r.path, packId: r.pack_id })));
 }
+
+
+/**
+ * Words in a sentence worth searching for.
+ *
+ * The funnel asks "what do you need done?", so people answer in sentences.
+ * The shelf's own search matches the whole query as one substring, which a
+ * sentence can never satisfy: "someone to review my code" found nothing on a
+ * shelf that holds a code reviewer. Pulling the carrying words out of the
+ * sentence is what makes the question on the page an honest one.
+ *
+ * Pure, so the hard part — which words carry meaning — is tested directly.
+ */
+const STOPWORDS = new Set([
+  "a", "about", "all", "am", "an", "and", "any", "anyone", "are", "as", "at", "be", "best",
+  "build", "built", "but", "by", "can", "could", "do", "does", "expert", "find", "for",
+  "from", "get", "give", "good", "has", "have", "help", "her", "here", "him", "hire",
+  "hiring", "his", "how", "i", "in", "into", "is", "it", "its", "just", "like", "looking",
+  "me", "more", "my", "need", "needs", "of", "on", "one", "or", "our", "out", "person",
+  "please", "pro", "professional", "senior", "should", "so", "some", "somebody",
+  "someone", "that", "the", "their", "them", "then", "there", "they", "this", "to",
+  "up", "us", "very", "want", "wanted", "wants", "was", "we", "well", "what", "when",
+  "which", "who", "why",
+  "will", "with", "work", "worker", "would", "you", "your",
+]);
+
+export function searchTerms(sentence: string): string[] {
+  const seen = new Set<string>();
+  for (const raw of sentence.toLowerCase().split(/[^a-z0-9+#.]+/)) {
+    const w = raw.replace(/^[.]+|[.]+$/g, "");
+    // Two letters is the floor because the roles people ask for live there:
+    // qa, ux, ai. Below that a match is noise.
+    if (w.length < 2 || STOPWORDS.has(w)) continue;
+    seen.add(w);
+    if (seen.size === 6) break;      // a long sentence is a mood, not a query
+  }
+  return [...seen];
+}
+
+/** The text on a pack a search is allowed to look at. */
+type Searchable = { name: string; tagline: string; tags: string; role: string; author: string };
+
+/**
+ * Order packs by how much of the sentence they answer.
+ *
+ * Packs arrive already in the shelf's ranked order, and a sort that keeps ties
+ * in their incoming order means the shelf's own ranking decides between two
+ * packs that match the question equally well.
+ */
+export function rankByTerms<T extends Searchable>(packs: T[], terms: string[]): T[] {
+  if (terms.length === 0) return [];
+  const hits = (p: T): number => {
+    const hay = `${p.name} ${p.tagline} ${p.tags} ${p.role} ${p.author}`.toLowerCase();
+    return terms.filter((t) => hay.includes(t)).length;
+  };
+  return packs
+    .map((p, i) => ({ p, i, h: hits(p) }))
+    .filter((x) => x.h > 0)
+    .sort((a, b) => b.h - a.h || a.i - b.i)
+    .map((x) => x.p);
+}

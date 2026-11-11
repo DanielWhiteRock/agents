@@ -271,8 +271,13 @@ transition:transform var(--press) ease-out}
 .btn.ghost:active{background:color-mix(in oklab,var(--ink) 8%,transparent)}
 :where(a,button,input,select,textarea,summary):focus-visible{
 outline:2px solid var(--primary);outline-offset:2px;border-radius:var(--s1)}
-.tag{display:inline-block;font-size:var(--t1);font-family:var(--mono);color:var(--muted);
-border:1px solid var(--line);border-radius:999px;padding:2px var(--s2)}
+.tag{display:inline-flex;align-items:center;min-height:2rem;font-size:var(--t1);
+font-family:var(--mono);color:var(--muted);vertical-align:middle;
+border:1px solid var(--line);border-radius:999px;padding:0 var(--s2)}
+a.tag{color:var(--ink);text-decoration:none;
+transition:background var(--dur-snappy) var(--spring)}
+a.tag:hover{background:color-mix(in oklab,var(--ink) 6%,transparent);text-decoration:none}
+a.tag:active{transform:scale(.97);transition:transform var(--press) ease-out}
 textarea{width:100%;background:var(--panel);color:var(--ink);border:1px solid var(--line);
 border-radius:var(--s3);padding:var(--s3);font:inherit;min-height:6rem;resize:vertical;
 box-shadow:var(--plane1);transition:border-color var(--dur-snappy) var(--spring)}
@@ -1052,7 +1057,9 @@ ${breadcrumb(p)}
 <h1>${esc(p.name)}</h1>
 <p class="lede">${esc(p.tagline)}</p>
 <div class="row" style="margin-bottom:var(--s2)">
-  <span class="tag">by ${creator ? `<a href="/creators/${esc(creator.handle)}">${esc(p.author)}</a>` : esc(p.author)}</span>
+  ${creator
+    ? `<a class="tag" href="/creators/${esc(creator.handle)}">by ${esc(p.author)}</a>`
+    : `<span class="tag">by ${esc(p.author)}</span>`}
   <span class="tag">${free ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>

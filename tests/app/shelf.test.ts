@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shapeAnatomy } from "../../src/app/shelf.js";
+import { shapeAnatomy, searchTerms, rankByTerms } from "../../src/app/shelf.js";
 
 describe("shapeAnatomy", () => {
   it("counts the parts a folder carries, in a fixed order", () => {
@@ -31,5 +31,54 @@ describe("shapeAnatomy", () => {
 
   it("survives a path with no directory at all", () => {
     expect(() => shapeAnatomy([{ path: "", packId: "a" }])).not.toThrow();
+  });
+});
+
+describe("searchTerms", () => {
+  it("pulls the carrying words out of a sentence", () => {
+    expect(searchTerms("someone to review my code")).toEqual(["review", "code"]);
+  });
+
+  it("keeps the two-letter words that are whole roles", () => {
+    expect(searchTerms("I need a QA and a UX person")).toEqual(["qa", "ux"]);
+  });
+
+  it("leaves a single keyword alone, so the plain search still works", () => {
+    expect(searchTerms("brutalism")).toEqual(["brutalism"]);
+  });
+
+  it("drops duplicates and caps a rambling answer at six terms", () => {
+    const terms = searchTerms("design design a brutalist neon playful retro bold loud quiet");
+    expect(terms).toEqual(["design", "brutalist", "neon", "playful", "retro", "bold"]);
+  });
+
+  it("finds nothing to search for in a sentence made only of filler", () => {
+    expect(searchTerms("I am looking for someone who can help me")).toEqual([]);
+  });
+});
+
+describe("rankByTerms", () => {
+  const packs = [
+    { name: "Senior Engineer", tagline: "Reviews code", tags: "engineering,review", role: "engineer", author: "a" },
+    { name: "Neobrutalism", tagline: "Loud design", tags: "design,web", role: "designer", author: "b" },
+    { name: "Code Historian", tagline: "Reads git", tags: "code", role: "engineer", author: "c" },
+  ];
+
+  it("puts the pack that answers more of the question first", () => {
+    expect(rankByTerms(packs, ["review", "code"]).map((p) => p.name))
+      .toEqual(["Senior Engineer", "Code Historian"]);
+  });
+
+  it("breaks a tie on the order the shelf handed it over", () => {
+    expect(rankByTerms(packs, ["code"]).map((p) => p.name))
+      .toEqual(["Senior Engineer", "Code Historian"]);
+  });
+
+  it("matches nothing when no term lands, rather than falling back to everything", () => {
+    expect(rankByTerms(packs, ["accountant"])).toEqual([]);
+  });
+
+  it("returns nothing for a question with no searchable words in it", () => {
+    expect(rankByTerms(packs, [])).toEqual([]);
   });
 });

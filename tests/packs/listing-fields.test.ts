@@ -364,7 +364,7 @@ describe("the pack page", () => {
 
   it("links the byline to the creator's page when the pack has one", () => {
     const h = render({ extras: { creator: { id: "cr_1", handle: "typeui" } } });
-    expect(h).toContain(`<a href="/creators/typeui">typeui.sh</a>`);
+    expect(h).toContain(`<a class="tag" href="/creators/typeui">by typeui.sh</a>`);
   });
 
   it("leaves the byline as plain text for a pack with no creator", () => {

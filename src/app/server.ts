@@ -1401,8 +1401,14 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
       rows.map((r) => ({ ...r, pricePoints: Pay.pricePoints(r), runs: signals.get(r.id)?.runs ?? 0 }));
     // The funnel searches the real shelf. Showing somebody a result they
     // cannot have is worse than showing them nothing, so a miss says so.
-    const matches = asked ? await withPrice(await P.listPacks(asked)) : undefined;
-    const featured = (await withPrice(await P.listPacks()))
+    //
+    // The question is asked in prose, so it is answered that way: the shelf's
+    // own search wants one keyword, and a sentence is broken into the words
+    // that carry it before anything is matched. One ranked read serves both
+    // the search and the featured row.
+    const shelf = await withPrice(await P.listPacks());
+    const matches = asked ? Shelf.rankByTerms(shelf, Shelf.searchTerms(asked)) : undefined;
+    const featured = [...shelf]
       .sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name)).slice(0, 6);
     return html(res, V.frontPage({
       totals, roles, anatomy, featured,
