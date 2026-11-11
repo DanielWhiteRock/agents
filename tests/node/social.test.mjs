@@ -14,7 +14,7 @@ if (!process.env.DATABASE_URL) {
   process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "social-")), "t.db");
 }
 
-let A, P, Auth, Pay, S, db, sql;
+let A, P, Auth, Pay, S, L, db, sql;
 let n = 0;
 const email = () => `s${++n}-${Date.now()}@example.com`;
 
@@ -47,6 +47,7 @@ before(async () => {
   Auth = await import("../../dist/src/app/authoring.js");
   Pay = await import("../../dist/src/billing/purchases.js");
   S = await import("../../dist/src/app/social.js");
+  L = await import("../../dist/src/app/listing.js");
   sql = (await import("../../dist/src/app/sql.js")).sql;
   await db.initDb();
   P.setRuntime(stubRuntime());
@@ -396,7 +397,20 @@ test("main() refuses a Postgres target end to end: non-zero exit, nothing writte
   assert.equal(Number(after.n), Number(before.n), "a refused run must write nothing");
 });
 
-test("seeding: one pack crosses the rating threshold, one sits deliberately at four, votes and saves and threads all land", async () => {
+/**
+ * Running the whole suite against Postgres is how the dialect gets checked,
+ * and these two tests cannot take part in that: the seed refuses any target
+ * but the local SQLite fallback, on purpose, so against a `DATABASE_URL` it
+ * exits 2 and writes nothing. Skipped with the reason rather than left to
+ * fail, which would read as a dialect problem and is not one. (The guard
+ * tests above are exactly the ones that *do* run either way.)
+ */
+const SQLITE_ONLY = process.env.DATABASE_URL
+  ? "the seed only ever runs against SQLite, by design — see guardEnvironment"
+  : false;
+
+test("seeding: one pack crosses the rating threshold, one sits deliberately at four, votes and saves and threads all land",
+  { skip: SQLITE_ONLY }, async () => {
   const s = await sql();
   const code = await Seed.main([]);
   assert.equal(code, 0);
@@ -424,13 +438,45 @@ test("seeding: one pack crosses the rating threshold, one sits deliberately at f
 
   const threads = await s.query(
     "SELECT t.* FROM threads t JOIN creators c ON c.id = t.creator_id WHERE c.handle LIKE 'seed-studio-%'");
-  assert.equal(threads.length, 2, "two threads were opened against the seeded creator's profile");
+  assert.equal(threads.length, 2, "two threads were opened against the seeded creator");
+
+  // One of them is scoped to a pack. Both used to be profile-scoped, which
+  // made the FAQ loop — the thing the messaging work exists for — impossible
+  // to click from a seeded database: `threadCard`'s publish control needs a
+  // pack behind the thread.
+  const scoped = threads.filter((t) => t.pack_id);
+  assert.equal(scoped.length, 1, "one thread is pack-scoped, so it can be published to the FAQ");
+  assert.equal(scoped[0].pack_id, guardrails.id);
+  assert.equal(guardrails.creator_id, (await s.one(
+    "SELECT id FROM creators WHERE handle LIKE 'seed-studio-%'")).id,
+  "and that pack is lent to the seeded creator, which is what makes the thread possible");
+
+  // The listing itself: most of the pack page is these blocks, and every one
+  // of them is conditional on having content, so a seed with none of it left
+  // the page as a tagline and a buy button.
+  const listing = L.listingOf(guardrails);
+  assert.ok(listing.description.length > 100, "a real description, not a tagline");
+  assert.ok(listing.useCases.length >= 3);
+  assert.ok(listing.limitations.length >= 2);
+  assert.ok(listing.faq.length >= 2);
+  assert.ok(listing.scenarios.length >= 2);
+  assert.ok(listing.requirements.length >= 1);
+  assert.ok(guardrails.listing_approved_at, "approved through the real path, not written straight onto the pack");
+  assert.equal(await L.draftFor(guardrails.id), null, "and no draft left waiting");
+  assert.ok(L.listingOf(campaign).description.length > 100, "both seeded packs have one");
+
+  // And a changelog note, which is the one listing field that attaches to a
+  // version rather than to the pack — so it needs a publish to exist at all.
+  const notes = await P.changelogOf(guardrails.id);
+  assert.equal(notes.length, 1, "exactly one note, however many times the seed has run");
+  assert.ok(notes[0].note.length > 20);
   const messages = await s.query(
     "SELECT m.* FROM thread_messages m WHERE m.thread_id IN (SELECT id FROM threads WHERE creator_id IN (SELECT id FROM creators WHERE handle LIKE 'seed-studio-%'))");
   assert.ok(messages.length >= 3, "the question and at least one reply landed");
 });
 
-test("--wipe removes every seeded row and nothing else: the catalog packs stay published", async () => {
+test("--wipe removes every seeded row and nothing else: the catalog packs stay published",
+  { skip: SQLITE_ONLY }, async () => {
   const s = await sql();
   // Seed again so this test is independent of ordering/execution of the one above.
   await Seed.main([]);
@@ -460,6 +506,16 @@ test("--wipe removes every seeded row and nothing else: the catalog packs stay p
   assert.equal(stillThere.status, "listed");
   const version = await P.latestVersion(stillThere.id);
   assert.ok(version, "the published version seeding created (or reused) is left in place");
+
+  // The two things the seed writes onto a catalog pack rather than onto its
+  // own rows — the listing columns and the borrowed `creator_id` — are put
+  // back exactly as they were, since `is_seed` cannot reach them.
+  assert.equal(L.hasListing(stillThere), false, "the seeded listing is gone from the pack");
+  assert.equal(stillThere.listing_approved_at, null);
+  assert.equal(stillThere.creator_id, null, "and the pack is nobody's again");
+  assert.equal(await L.draftFor(stillThere.id), null);
+  const snapshots = await s.query("SELECT key FROM settings WHERE key LIKE 'seed_social%'");
+  assert.deepEqual(snapshots, [], "and the snapshots the seed took are gone with it");
 });
 
 // `auth.signUp` — which every seeded org goes through — ends by calling

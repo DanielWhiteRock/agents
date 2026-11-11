@@ -20,11 +20,20 @@
  * `src/app/db.ts`) exists only so `--wipe` can find exactly the rows this
  * script wrote and remove them — never a real buyer's. No aggregate reads it.
  *
+ * Two things the seed writes are not reachable from `orgs.is_seed`, because
+ * they live on catalog packs rather than on anything this script created: the
+ * six listing columns (without them most of the pack page renders nothing,
+ * which defeats the point of having something to look at) and one pack's
+ * `creator_id`, so a thread can be scoped to a pack and the publish-to-FAQ
+ * loop can actually be exercised. Both are snapshotted before they are
+ * touched and restored verbatim by `--wipe`, the same way `platform_org_id`
+ * already is.
+ *
  * Seeded through the domain functions wherever one exists — `auth.signUp`,
  * `purchases.beginPurchase`, `platform.startRun`/`endRun`/`publishPack`,
  * `social.submitReview`/`vote`/`toggleSave`, `creators.upsertCreator`,
- * `messages.openThread`/`reply` — so the seeded data is data the application
- * could actually have produced. `authoring.createPack` is deliberately never
+ * `messages.openThread`/`reply`, `listing.saveDraft`/`approveDraft` — so the
+ * seeded data is data the application could actually have produced. `authoring.createPack` is deliberately never
  * called: the packs seeded here are the existing built-in catalog
  * (`platform.seedCatalog`), not new ones. Raw SQL appears only for the
  * `is_seed` stamp itself (a bookkeeping column no domain function has any
@@ -32,7 +41,7 @@
  * each use is commented where it happens.
  */
 import { pathToFileURL } from "node:url";
-import { initDb } from "../dist/src/app/db.js";
+import { initDb, platformOrgId } from "../dist/src/app/db.js";
 import { sql } from "../dist/src/app/sql.js";
 import * as A from "../dist/src/app/auth.js";
 import * as P from "../dist/src/app/platform.js";
@@ -40,6 +49,7 @@ import * as Pay from "../dist/src/billing/purchases.js";
 import * as S from "../dist/src/app/social.js";
 import * as Cr from "../dist/src/app/creators.js";
 import * as M from "../dist/src/app/messages.js";
+import * as L from "../dist/src/app/listing.js";
 
 export class SeedGuardError extends Error {
   constructor(message) {
@@ -106,6 +116,92 @@ const stubRuntime = () => ({
   listOutputs: async () => [],
   downloadOutput: async () => ({ bytes: Buffer.alloc(0), filename: "f" }),
 });
+
+/**
+ * Hand-written listings for the two packs this script seeds.
+ *
+ * The social layer was the only thing seeded before, so the thing the seed
+ * exists to let somebody look at — the pack page — still rendered a tagline,
+ * a price and a buy button: every listing block is conditional on having
+ * content, and none of them had any. Written by hand rather than generated,
+ * because the generator costs a model call per pack and the point here is a
+ * page to look at, not a demonstration of the generator.
+ *
+ * Put in front of a human exactly as a generated draft is — `saveDraft` then
+ * `approveDraft`, through the real approval path and its copy-quality guard —
+ * so nothing here reaches a page by a route a listing could not normally
+ * take.
+ */
+const LISTINGS = {
+  guardrails: {
+    description: "A reviewer that reads what another agent produced and tells you which parts of it you can act "
+      + "on. It goes looking for the confident sentence with an invented number in it, the conclusion that only "
+      + "holds if something unproven is true, and the answer to a question nobody asked.\n\n"
+      + "It does not rewrite the work and it does not pad. You get a verdict, the findings that earned a place in "
+      + "the order they would cost you money, and a short list of the things a person has to decide rather than "
+      + "fix.",
+    useCases: [
+      "Check a draft another agent wrote before it goes to a client",
+      "Find the fabricated figure in an otherwise plausible summary",
+      "Decide whether an agent's output is safe to act on unattended",
+      "Catch the irreversible step buried in a sensible-looking plan",
+    ],
+    limitations: [
+      "It judges what it is given — it cannot look up whether a cited source exists",
+      "A long document is reviewed as a whole, so a single run costs real tokens",
+      "It will not rewrite the work for you; that is deliberate, not a missing feature",
+    ],
+    faq: [
+      { q: "Does it change the work it reviews?",
+        a: "No. It reports, ranks and stops — a reviewer that rewrites is just a second author." },
+      { q: "Will it tell me everything is fine?",
+        a: "If nothing earned a finding it says so in two sentences. That is the honest answer more often than a "
+          + "list of hedges would be." },
+    ],
+    scenarios: [
+      { brief: "Here is a market summary an agent wrote for a client deck. Should we send it?",
+        reached: ["read", "web"],
+        output: "FIX FIRST — two of the four figures cannot be traced to anything you gave it." },
+      { brief: "Review this migration plan before I run it.",
+        reached: ["read"],
+        output: "DO NOT USE — step 4 drops a table before the backup it depends on is verified." },
+    ],
+    requirements: ["Something another agent produced, pasted or uploaded"],
+  },
+  "campaign-strategist": {
+    description: "Takes a brief that says \"we need more awareness\" and returns something a team could actually "
+      + "run: one commercial outcome with a number in it, one audience whose behaviour has to change, and a "
+      + "reason every channel is on the list.\n\n"
+      + "It will push back before it plans. A brief with no number in it gets a question, not a campaign — which "
+      + "is the part most useful and the part most likely to annoy you.",
+    useCases: [
+      "Turn a vague internal brief into a plan with one measurable outcome",
+      "Work out which audience actually has to change its behaviour",
+      "Defend or kill a channel somebody added because it was cheap",
+      "Write the one message a campaign stands on",
+    ],
+    limitations: [
+      "It plans; it does not buy media or publish anything",
+      "Without a commercial outcome it asks for one rather than inventing it",
+      "Channel costs are estimates from the brief, not live rate cards",
+    ],
+    faq: [
+      { q: "Can it run the campaign it plans?",
+        a: "No. It produces the plan and the reasoning; the running is yours." },
+      { q: "What if we genuinely do not have a number yet?",
+        a: "Then the first thing it gives you back is the question that finds one." },
+    ],
+    scenarios: [
+      { brief: "We are launching in Germany in March and need a plan.",
+        reached: ["read"],
+        output: "Outcome: 400 paid teams by June. Audience: ops leads who already run a competitor." },
+      { brief: "Marketing wants to add TikTok. Is that defensible?",
+        reached: ["read", "web"],
+        output: "Not for this audience — the behaviour you need changed is not performed there." },
+    ],
+    requirements: ["A brief, however rough", "Somebody who can say what the business outcome is"],
+  },
+};
 
 let n = 0;
 const id = () => `${Date.now().toString(36)}${(++n).toString(36)}`;
@@ -211,6 +307,74 @@ async function restorePlatformOrgId() {
   await s.query("DELETE FROM settings WHERE key = $1", [PLATFORM_ORG_SNAPSHOT_KEY]);
 }
 
+// ------------------------------------------- the catalog-pack side effects
+//
+// Two of the things worth looking at live on catalog packs, not on anything
+// this script created: the six listing columns, and one pack's `creator_id`
+// (without which a thread cannot be scoped to a pack and the publish-to-FAQ
+// loop cannot be exercised at all). Neither is reachable from `orgs.is_seed`,
+// so `--wipe` would have no way to undo them. Same treatment as
+// `platform_org_id`: one snapshot taken before anything is written, restored
+// verbatim afterwards, and the snapshot removed with it.
+//
+// The published version and its changelog note are deliberately *not* in
+// here: `--wipe` has never un-published a pack it published, because a
+// version is immutable and a note describes the version it shipped with.
+const PACK_SNAPSHOT_KEY = "seed_social_pack_columns_snapshot";
+const BORROWED_COLUMNS = [
+  "description", "use_cases", "limitations", "faq", "scenarios", "requirements",
+  "listing_approved_at", "listing_stale_at", "creator_id",
+];
+
+/** Called once, before the first listing is written. A no-op if a snapshot already exists. */
+async function snapshotPackColumns(slugs) {
+  const s = await sql();
+  const already = await s.one("SELECT 1 AS ok FROM settings WHERE key = $1", [PACK_SNAPSHOT_KEY]);
+  if (already) return;
+  const saved = [];
+  for (const slug of slugs) {
+    const pack = await P.getPack(slug);
+    if (!pack) continue;
+    const row = { slug };
+    for (const column of BORROWED_COLUMNS) row[column] = pack[column] ?? null;
+    saved.push(row);
+  }
+  await s.query(
+    "INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING",
+    [PACK_SNAPSHOT_KEY, JSON.stringify(saved)]);
+}
+
+/** Puts every borrowed column back exactly as it was, then deletes the snapshot. */
+async function restorePackColumns() {
+  const s = await sql();
+  const snapshot = await s.one("SELECT value FROM settings WHERE key = $1", [PACK_SNAPSHOT_KEY]);
+  if (!snapshot) return;
+  for (const saved of JSON.parse(snapshot.value)) {
+    const pack = await P.getPack(saved.slug);
+    if (!pack) continue;
+    await s.query(
+      `UPDATE packs SET description = $1, use_cases = $2, limitations = $3, faq = $4, scenarios = $5,
+         requirements = $6, listing_approved_at = $7, listing_stale_at = $8, creator_id = $9
+       WHERE id = $10`,
+      [...BORROWED_COLUMNS.map((c) => saved[c]), pack.id]);
+    // A draft the seed wrote and never approved (an interrupted run) is as
+    // much a seed artifact as the approved copy.
+    await s.query("DELETE FROM pack_listing_drafts WHERE pack_id = $1", [pack.id]);
+  }
+  await s.query("DELETE FROM settings WHERE key = $1", [PACK_SNAPSHOT_KEY]);
+}
+
+/**
+ * One listing, through the real approval path: a draft, then a human's
+ * approval. The curating organisation does the approving, since the catalog's
+ * packs have no author org of their own until re-attribution runs.
+ */
+async function approveListing(pack, listing, sourceVersion) {
+  await L.saveDraft(pack.id, listing, sourceVersion);
+  const curator = await platformOrgId();
+  await L.approveDraft(curator, pack.slug);
+}
+
 // -------------------------------------------------------------- the seed
 
 async function seed() {
@@ -219,8 +383,20 @@ async function seed() {
   // Before the first organisation is created — see the block above.
   await snapshotPlatformOrgId();
 
+  // Before any catalog pack's own columns are written — see the block above.
+  await snapshotPackColumns(Object.keys(LISTINGS));
+
   // Pack A: seven ratings, above RATING_THRESHOLD (5) — the average renders.
-  const { pack: packA, version: versionA } = await ensurePublished("guardrails");
+  const { pack: packA } = await ensurePublished("guardrails");
+  // A changelog note, which is the one listing field that attaches to a
+  // version rather than to the pack — so the block needs a publish to exist
+  // at all. Only once: a note already recorded means a previous seed did
+  // this, and `--wipe` leaves published versions alone on purpose.
+  if ((await P.changelogOf(packA.id)).length === 0) {
+    await P.publishPack(packA.slug,
+      "Ranks findings by what they would actually cost, and stops padding a clean review.");
+  }
+  const versionA = await P.latestVersion(packA.id);
   const ratingsA = [5, 5, 4, 5, 3, 4, 2];
   const reviewersA = [];
   for (const [i, rating] of ratingsA.entries()) {
@@ -234,6 +410,10 @@ async function seed() {
   // Pack B: exactly four ratings — deliberately at the threshold's doorstep,
   // so the average stays hidden. The contrast with pack A is the point.
   const { pack: packB, version: versionB } = await ensurePublished("campaign-strategist");
+  // Both packs get a listing, so the page has something on it besides a
+  // tagline and a buy button.
+  await approveListing(packA, LISTINGS["guardrails"], versionA.version);
+  await approveListing(packB, LISTINGS["campaign-strategist"], versionB.version);
   const ratingsB = [5, 4, 4, 3];
   for (const [i, rating] of ratingsB.entries()) {
     const org = await seedOrg(`Campaign Reviewer ${i + 1}`);
@@ -256,19 +436,28 @@ async function seed() {
   await bookmark(reviewersA[0], packA.id);
   await bookmark(reviewersA[1], packA.id);
 
-  // Two threads, asked of a creator's profile rather than any one pack —
-  // `openThread`'s `packId` is nullable for exactly this case — so seeding
-  // buyer<->creator messaging does not require re-attributing a real
-  // catalog pack's `creator_id` as a side effect of running this script.
+  // Two threads: one scoped to a pack, one to the creator's profile.
+  //
+  // Both used to be profile-scoped, which quietly made the whole point of
+  // the messaging work unreachable from the seed: `threadCard`'s publish
+  // control needs `t.pack`, so the FAQ loop the spec calls "the reason this
+  // is worth building" could not be clicked. Scoping one to a pack means
+  // lending that pack this creator's `creator_id` — snapshotted above, and
+  // put back by `--wipe`.
   const creatorOrg = await seedOrg("Seed Studio", "Creator");
   const creator = await Cr.upsertCreator({
     orgId: creatorOrg.orgId, userId: creatorOrg.userId,
     handle: `seed-studio-${id()}`, displayName: "Seed Studio", bio: "Seeded for local review.",
   });
+  // Raw SQL: lending a catalog pack to the seeded creator is bookkeeping for
+  // the seed, not something any domain function has a reason to offer.
+  const s2 = await sql();
+  await s2.query("UPDATE packs SET creator_id = $1 WHERE id = $2", [creator.id, packA.id]);
+
   const asker1 = await seedOrg("Asking Org One");
   const asker2 = await seedOrg("Asking Org Two");
   const thread1 = await M.openThread({
-    orgId: asker1.orgId, userId: asker1.userId, creatorId: creator.id,
+    orgId: asker1.orgId, userId: asker1.userId, creatorId: creator.id, packId: packA.id,
     subject: "Does this handle a multi-currency catalog?",
     body: "We sell in six currencies — does the worker reason about FX, or only one at a time?",
   });
@@ -283,6 +472,7 @@ async function seed() {
   });
 
   return {
+    listings: Object.keys(LISTINGS),
     packA: { slug: packA.slug, ratings: ratingsA.length },
     packB: { slug: packB.slug, ratings: ratingsB.length },
     votes: { up: 3, down: 1 },
@@ -295,10 +485,12 @@ async function seed() {
 
 /**
  * Removes exactly the rows this script wrote — every row whose organisation
- * is `is_seed`, plus the creator profile and threads that organisation owns
- * — and nothing else. Never touches `packs` or `pack_versions`: a catalog
- * pack this script published (because it had no version yet) stays
- * published after a wipe, same as any other publish.
+ * is `is_seed`, plus the creator profile and threads that organisation owns,
+ * plus the pack columns the seed borrowed (`restorePackColumns`) — and
+ * nothing else. Never deletes a `packs` or `pack_versions` row: a catalog
+ * pack this script published (because it had no version yet, or to hang a
+ * changelog note on) stays published after a wipe, same as any other
+ * publish.
  *
  * Deleted in FK order (children before the parents `orgs`/`runs` they point
  * at), using subqueries scoped to `is_seed` rather than passed parameters —
@@ -329,6 +521,10 @@ async function wipe() {
   await s.exec(`DELETE FROM users WHERE org_id IN ${SEED_ORGS}`);
   await s.exec("DELETE FROM orgs WHERE is_seed = 1");
   await restorePlatformOrgId();
+  // The listing columns and the borrowed `creator_id` — written onto catalog
+  // packs, so unreachable from is_seed. Restored after the creators are gone,
+  // which is also what clears the FK that `creator_id` was pointing at.
+  await restorePackColumns();
   return Number(before?.n ?? 0);
 }
 
@@ -364,7 +560,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   console.log(`Seeded ${result.packB.slug}: ${result.packB.ratings} ratings (below threshold — no average).`);
   console.log(`Votes on ${result.packA.slug}: ${result.votes.up} up, ${result.votes.down} down (only the up count is "useful").`);
   console.log(`Saves on ${result.packA.slug}: ${result.saves}.`);
-  console.log(`Threads: ${result.threads.join(", ")}`);
+  console.log(`Listings approved: ${result.listings.join(", ")} (the pack page has blocks to render now).`);
+  console.log(`Threads: ${result.threads.join(", ")} (the first is pack-scoped, so it can be published to the FAQ).`);
   console.log("\nRun again with --wipe to remove everything this script wrote.");
   return 0;
 }
