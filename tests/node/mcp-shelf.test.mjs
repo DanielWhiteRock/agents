@@ -4,11 +4,13 @@
 // cookie (`/mcp` resolves `Authorization` before the session gate; see
 // `src/app/server.ts`).
 //
-// `callTool()` is defined once here, at the top, because later MCP tool tests
-// reuse this file and this helper rather than reinventing it.
+// `mintToken` and `callTool` live in `mcp-harness.mjs`, a non-test module, so
+// later MCP tool tests can import them too without each pulling in this
+// file's own `before`/`after`/`test(...)` and starting a second server.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { startServer, signUpCookie } from "./server-harness.mjs";
+import { mintToken as mintTokenAt, callTool as callToolAt } from "./mcp-harness.mjs";
 
 let server, A, P, Auth, db, sql;
 let n = 0;
@@ -44,40 +46,10 @@ before(async () => {
 
 after(async () => { await server.stop(); });
 
-/** Mints a bearer token for a signed-in cookie, via the real `/tokens` form. */
-async function mintToken(cookie) {
-  const res = await fetch(`${server.baseUrl}/tokens`, {
-    method: "POST", redirect: "manual",
-    headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ name: "test token" }),
-  });
-  const loc = res.headers.get("location");
-  const token = loc ? new URL(loc, server.baseUrl).searchParams.get("new") : null;
-  if (!token) throw new Error(`no token minted (status ${res.status}, location ${loc})`);
-  return token;
-}
-
-/**
- * One JSON-RPC `tools/call` over `/mcp`, authenticated with a bearer token.
- * The transport answers as Server-Sent Events even for a single request, so
- * the body is parsed for its one `data:` line rather than as plain JSON.
- */
-async function callTool(token, name, args = {}) {
-  const res = await fetch(`${server.baseUrl}/mcp`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-  });
-  const raw = await res.text();
-  const line = raw.split("\n").find((l) => l.startsWith("data: "));
-  const payload = JSON.parse(line ? line.slice(6) : raw);
-  if (payload.error) throw new Error(`${name} failed (${res.status}): ${payload.error.message}`);
-  return payload.result.content[0].text;
-}
+// Thin wrappers over `mcp-harness.mjs`'s helpers, bound to this file's own
+// server, so every test below reads exactly as it did when these were local.
+const mintToken = (cookie) => mintTokenAt(server.baseUrl, cookie);
+const callTool = (token, name, args = {}) => callToolAt(server.baseUrl, token, name, args);
 
 /** A listed, published pack, ready to appear on the shelf. */
 const listedPack = async (overrides = {}) => {
