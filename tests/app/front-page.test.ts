@@ -45,9 +45,11 @@ describe("the stat strip", () => {
     expect(h).toContain("<b>5</b><span>runs</span>");
   });
 
-  it("promises no rating it cannot show", () => {
-    const h = frontPage(data());
-    expect(h).toContain("No ratings, no vote counts, no user numbers");
+  it("explains the rule behind the missing stars rather than apologising for them", () => {
+    const flat = frontPage(data()).replace(/\s+/g, " ");
+    expect(flat).toContain("only rate a worker you have actually run");
+    expect(flat).toContain("an average takes five");
+    expect(flat).not.toContain("we do not have any yet");
   });
 });
 

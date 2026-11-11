@@ -722,8 +722,9 @@ ${d.asked !== undefined ? matchBlock(d) : ""}
     <li><b>${t.authors}</b><span>authors</span></li>
     ${t.runs > 0 ? `<li><b>${t.runs}</b><span>runs</span></li>` : ""}
   </ul>
-  <p class="lede">No ratings, no vote counts, no user numbers — we do not have any yet.
-  These are the ones we do have.</p>
+  <p class="lede">You can only rate a worker you have actually run, and an average
+  takes five. That is why there are no stars on this page — not yet, and never
+  bought.</p>
 </section>
 
 ${shownRoles.length ? `<section>

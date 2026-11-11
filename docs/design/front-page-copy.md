@@ -68,7 +68,13 @@ The numbers, unrounded
 72 workers · 147 skills · 5 roles filled · 6 authors · 3 runs
 
 **Body (shipped)**
-No ratings, no vote counts, no user numbers — we do not have any yet. These are the ones we do have.
+You can only rate a worker you have actually run, and an average takes five. That is why there are no stars on this page — not yet, and never bought.
+
+> Second pass. "We do not have any yet" apologised for a rule. `social.ts`
+> gates rating twice — only a finished, non-trial run earns the right to rate,
+> and the average stays hidden below five ratings — so an empty rating is the
+> gate working, not a gap. Naming the gate turns the weakest line on the strip
+> into the reason to trust the rest of it.
 
 > Cut to one line. The paragraph below spent five sentences explaining a
 > decision the strip already demonstrates; the figures argue for themselves and
