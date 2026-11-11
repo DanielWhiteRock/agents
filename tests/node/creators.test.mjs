@@ -70,8 +70,12 @@ const legacyPack = async ({ author = "typeui.sh", authorOrgId = null, builtOn = 
   const s = await sql();
   const packId = db.id("pk");
   await s.query(
-    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, built_on, upgrade_points, model, instructions, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,10,'claude-opus-5','do the thing',$8)`,
+    // `price_cents` named explicitly, like every other writer: the schema
+    // declares no default for it, because a database upgraded through the
+    // millipoints rename does not have one either. See `upgrade.test.mjs`.
+    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, built_on, price_cents,
+       upgrade_points, model, instructions, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,0,10,'claude-opus-5','do the thing',$8)`,
     [packId, `legacy-${++n}`, "Legacy Pack", "does legacy things", author, authorOrgId, builtOn, db.now()]);
   return packId;
 };

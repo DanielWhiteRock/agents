@@ -499,10 +499,33 @@ export async function seedCatalog(): Promise<number> {
   const s = await sql();
   let n = 0;
   for (const p of SEED_PACKS) {
+    // `price_cents` is written explicitly, and the value is 0.
+    //
+    // It has to be written at all because it is NOT NULL and, on a database
+    // that predates the millipoints rename, has no DEFAULT — `CREATE TABLE IF
+    // NOT EXISTS` cannot add one to a table that already exists. Leaving it
+    // out booted fine on a fresh database and killed the process on a real
+    // one, which is why the live service stopped deploying.
+    //
+    // 0 rather than `pricePoints * 400`, which is what the one-time migration
+    // `price_points = price_cents / 400` implies the old rate was. Two
+    // reasons. Nothing reads this column: it is not on `PackRow`, so no query
+    // in the app can even see it, and every price a buyer meets — the pack
+    // page, the buy button, `purchases.pricePoints`, the curate queue — reads
+    // `price_points`. And its one reader is that migration, which is recorded
+    // in `schema_migrations` and will never run again on a database that has
+    // packs in it. So a converted value would be read by nobody, in the unit
+    // 8101fd6 established was wrong — writing 24000 here claims a $240 price
+    // no code path honours and no payment would ever charge. 0 says the true
+    // thing: this pack has no price in cents, it has a price in points.
+    //
+    // The honest end state is to drop the column. That is a destructive
+    // migration on a live database and a table rebuild on SQLite, so it is
+    // not what belongs in a fix for an outage.
     const rows = await s.query(
-      `INSERT INTO packs (id, slug, name, tagline, author, price_points, upgrade_points, model, effort,
-         pinned_models, instructions, tags, image, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
+      `INSERT INTO packs (id, slug, name, tagline, author, price_cents, price_points, upgrade_points,
+         model, effort, pinned_models, instructions, tags, image, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
        ON CONFLICT (slug) DO NOTHING RETURNING id`,
       [id("pk"), p.slug, p.name, p.tagline, p.author, p.pricePoints, p.upgradePoints, p.model,
         p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now(),

@@ -10,7 +10,7 @@ if (!process.env.DATABASE_URL) {
   process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "listing-")), "t.db");
 }
 
-let A, P, Auth, L, M, Cr, db, sql;
+let A, P, Auth, L, M, Cr, db, sql, setSql;
 let n = 0;
 const email = () => `l${++n}-${Date.now()}@example.com`;
 
@@ -44,7 +44,7 @@ before(async () => {
   L = await import("../../dist/src/app/listing.js");
   M = await import("../../dist/src/app/messages.js");
   Cr = await import("../../dist/src/app/creators.js");
-  sql = (await import("../../dist/src/app/sql.js")).sql;
+  ({ sql, setSql } = await import("../../dist/src/app/sql.js"));
   await db.initDb();
   P.setRuntime(stubRuntime());
 });
@@ -241,6 +241,123 @@ test("the guard still refuses a model-written FAQ entry that quotes the method",
     /verbatim/i,
     "what the model proposed is still judged, FAQ included");
   assert.equal(await L.draftFor(pack.id), null);
+});
+
+/**
+ * Who wrote the draft decides what approval does with the FAQ.
+ *
+ * The merge above exists to stop a *generator* deleting an answer a creator
+ * published out of a real buyer exchange. It was never meant to stop a person
+ * editing their own listing — and because it did, nothing in the application
+ * could change or delete a live answer, while the approval screen said the
+ * draft would be published as saved. `saveDraft` is the human path and marks
+ * the draft as such; `saveGeneratedDraft` marks it as the machine's.
+ */
+test("an answer the author rewrote by hand reaches the page", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveDraft(pack.id, {
+    ...DRAFT,
+    faq: [{ q: PUBLISHED_ANSWER.q, a: "No — read-only, and it never pushes a branch." }],
+  }, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.faq, [{ q: PUBLISHED_ANSWER.q, a: "No — read-only, and it never pushes a branch." }],
+    "the author's correction is what a buyer reads, not the answer it replaced");
+});
+
+test("an answer the author deleted by hand leaves the page", async () => {
+  const { orgId, pack } = await makePack();
+  const keep = { q: "Which currencies?", a: "USD only." };
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([PUBLISHED_ANSWER, keep]), pack.id]);
+
+  // The author emptied one block out of the FAQ box and saved what was left.
+  await L.saveDraft(pack.id, { ...DRAFT, faq: [keep] }, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  assert.deepEqual(L.listingOf(await P.getPack(pack.slug)).faq, [keep],
+    "an answer removed from the box is removed from the page");
+});
+
+test("a human editing a generated draft takes it over, and can then delete a live answer", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
+  const seeded = await L.draftWithMeta(pack.id);
+  assert.equal(seeded.authoredBy, "generator", "the generator wrote it");
+  assert.equal(seeded.listing.faq.length, 2, "and it was seeded from what is live");
+
+  // The author reads that box, removes the published answer and saves: the
+  // contents are now theirs, whoever typed them first.
+  await L.saveDraft(pack.id, {
+    ...DRAFT,
+    faq: seeded.listing.faq.filter((f) => f.q !== PUBLISHED_ANSWER.q),
+  }, 1);
+  assert.equal((await L.draftWithMeta(pack.id)).authoredBy, "human", "saving flipped the provenance");
+
+  await L.approveDraft(orgId, pack.slug);
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.faq.map((f) => f.q), ["Which currencies?"],
+    "the answer the author removed is gone, because they took responsibility for the box");
+});
+
+test("a draft left unmarked is read as the generator's, which is the side that loses nothing", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+  await L.saveDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
+  // A row written before the column existed, or by a writer that does not set
+  // it: the default covers the first, this covers anything else.
+  await s.query("UPDATE pack_listing_drafts SET authored_by = $1 WHERE pack_id = $2", ["", pack.id]);
+  assert.equal((await L.draftWithMeta(pack.id)).authoredBy, "generator");
+
+  await L.approveDraft(orgId, pack.slug);
+  assert.ok(L.listingOf(await P.getPack(pack.slug)).faq.some((f) => f.q === PUBLISHED_ANSWER.q),
+    "an unmarked draft is merged, so the published answer survives");
+});
+
+// --------------------------------------------------- a save with nothing in it
+//
+// The upsert takes whatever arrives, so a submission with all six boxes blank
+// used to replace a generated draft with an empty one and say nothing: the
+// draft gone, and a model call to get it back.
+
+const EMPTY = {
+  description: "", useCases: [], limitations: [], faq: [], scenarios: [], requirements: [],
+};
+
+test("a save with every field empty is refused, and the draft that was there survives", async () => {
+  const { pack } = await makePack();
+  await L.saveGeneratedDraft(pack.id, DRAFT, 1);
+
+  await assert.rejects(L.saveDraft(pack.id, EMPTY, 1), /every field was blank/);
+
+  const still = await L.draftWithMeta(pack.id);
+  assert.equal(still.listing.description, DRAFT.description, "the draft is exactly as it was");
+  assert.equal(still.authoredBy, "generator", "and the refused save did not claim it either");
+});
+
+test("emptying five of the six fields is a real listing, and publishes", async () => {
+  // The refusal is only for a submission with nothing in it at all — every
+  // individual field, the FAQ included, can still be cleared and published.
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveDraft(pack.id, { ...EMPTY, description: "Audits a price list, and nothing else." }, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.equal(live.description, "Audits a price list, and nothing else.");
+  assert.deepEqual(live.faq, [], "including the FAQ the author emptied");
+  assert.deepEqual(live.useCases, []);
 });
 
 test("approving never drops an answer published after the draft was generated", async () => {
@@ -452,7 +569,10 @@ test("publishing an answer and approving a listing at the same time loses neithe
   // One entry already live, so the merge has something to carry as well.
   await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
     [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
-  await L.saveDraft(pack.id, { ...DRAFT, faq: [{ q: "From the generator?", a: "Yes." }] }, 1);
+  // The generator's draft, deliberately: a draft the author saved is
+  // authoritative for the FAQ, so the merge this race is about is the one on
+  // the generated path.
+  await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "From the generator?", a: "Yes." }] }, 1);
 
   // Both read-modify-write cycles in flight at once: each `await` inside them
   // is a point where the other one runs, which is exactly the interleaving.
@@ -467,6 +587,169 @@ test("publishing an answer and approving a listing at the same time loses neithe
   assert.ok(questions.includes("From the generator?"), "the approved draft's entry is there");
   assert.ok(questions.includes(question.body), "and so is the answer published out of the inbox");
   assert.equal(await L.draftFor(pack.id), null, "the draft was consumed exactly once");
+});
+
+/**
+ * The third writer of `packs.faq`: a folder's own `faq:` block, merged by
+ * `importPack`. The merge stops a re-import deleting a published answer it
+ * knows nothing about. The compare-and-set below stops the *read* it merged
+ * from going stale under it, which is the same loss by a different route.
+ *
+ * This first case pins the merge, end to end, with both writers in flight —
+ * not the condition: the interleaving Node actually produces here runs the
+ * two writes in order, so it would pass without a guard. The case after it is
+ * the one that fails if the condition goes.
+ */
+test("a folder re-import and an inbox publish at the same time lose neither answer", async () => {
+  const { author, pack, creator, thread, question, answer } = await packWithThread();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+
+  const files = [{
+    path: "agent.md",
+    text: `---\nname: ${pack.name}\nslug: ${pack.slug}\nmodel: claude-opus-5\n`
+      + `faq:\n  - q: From the folder?\n    a: Yes.\n---\n${INPUT.instructions}`,
+  }];
+
+  // Both read-modify-write cycles in flight at once, the same interleaving the
+  // approval test above drives.
+  await Promise.all([
+    M.publishToFaq(creator.id, thread.id, question.id, answer.id),
+    Auth.importPack({ orgId: author.orgId, files }),
+  ]);
+
+  const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
+  assert.ok(questions.includes("Already live?"), "the entry that was already live survives");
+  assert.ok(questions.includes("From the folder?"), "the folder's own entry landed");
+  assert.ok(questions.includes(question.body),
+    "and so does the answer published out of the inbox while the import was running");
+});
+
+test("an import's write computed from a stale FAQ read lands nothing at all", async () => {
+  const { author, pack, creator, thread, question, answer } = await packWithThread();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+
+  // What the import reads before it merges the folder's own entries in.
+  const was = (await P.packById(pack.id)).faq ?? "";
+
+  // The creator publishes an answer out of the inbox in the gap — the whole
+  // of the window the merge cannot see, because it already read the column.
+  await M.publishToFaq(creator.id, thread.id, question.id, answer.id);
+
+  // The import's write, still carrying the value it computed from that read.
+  // Refused, and nothing written — which is what the retry re-reads on.
+  await assert.rejects(
+    Auth.updatePack(author.orgId, pack.slug, {
+      ...INPUT, slug: pack.slug,
+      faq: [{ q: "Already live?", a: "Yes." }, { q: "From the folder?", a: "Yes." }],
+    }, { faq: was }),
+    /same time/);
+
+  const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
+  assert.ok(questions.includes(question.body), "the answer published in the gap survives");
+  assert.ok(!questions.includes("From the folder?"), "and the stale write landed nothing");
+});
+
+/**
+ * The writer that looked like a fourth: a plain details-form save.
+ *
+ * `packFields` in `server.ts` carries no listing field at all, and `updatePack`
+ * wrote every absent one back as the value it had read — so `faq = <what I
+ * read two awaits ago>`, which erases an answer published out of the inbox in
+ * between. The column is now left out of the SET list unless the caller states
+ * a FAQ, so a details-form save does not write it at all.
+ */
+/**
+ * Asserted against the statement rather than through a race, deliberately.
+ *
+ * Driving the two writers with `Promise.all` proves nothing here: the
+ * interleaving Node produces runs the save's write before the publish's, so
+ * such a test passes with the column written back as well. What the fix
+ * actually claims is narrower and checkable — the column is not in the
+ * statement — and a recording `Sql` can be asked exactly that.
+ */
+const recordingSql = (row) => {
+  const writes = [];
+  return {
+    dialect: "sqlite",
+    writes,
+    async query(text, params = []) {
+      if (/^\s*UPDATE/i.test(text)) {
+        writes.push({ text, params });
+        return [{ id: row.id }];
+      }
+      return /FROM packs/i.test(text) ? [row] : [];
+    },
+    async one(text, params) { return (await this.query(text, params))[0]; },
+    async exec() {},
+    async close() {},
+  };
+};
+
+test("a details-form save leaves the FAQ out of the statement altogether", async () => {
+  const { orgId, pack } = await makePack();
+  const live = JSON.stringify([{ q: "Already live?", a: "Yes." }]);
+  const fake = recordingSql({ ...pack, faq: live });
+  const real = await sql();
+  setSql(fake);
+  try {
+    // The details form: no listing field mentioned at all.
+    await Auth.updatePack(orgId, pack.slug, { ...INPUT, slug: pack.slug, tagline: "A sharper line" });
+    // And a caller that does state a FAQ, which must still write one.
+    await Auth.updatePack(orgId, pack.slug, {
+      ...INPUT, slug: pack.slug, faq: [{ q: "Stated outright?", a: "Yes." }],
+    });
+  } finally { setSql(real); }
+
+  const [withoutFaq, withFaq] = fake.writes;
+  assert.ok(withoutFaq && withFaq, "both saves ran");
+  assert.doesNotMatch(withoutFaq.text, /faq =/,
+    "a caller that states no FAQ does not write the column, so there is no race to lose");
+  assert.ok(!withoutFaq.params.some((p) => String(p) === live),
+    "and the value it read is not even sent");
+  assert.equal(withoutFaq.params.length, 21, "twenty-one parameters, none of them the FAQ");
+  assert.match(withFaq.text, /faq = \$22/, "a caller that states one still writes it");
+  assert.ok(withFaq.params.some((p) => String(p).includes("Stated outright?")));
+  assert.equal(withFaq.params.length, 22);
+});
+
+test("a details-form save still cannot wipe the five listing fields it does not mention", async () => {
+  // The other half of "absent means leave it alone": `faq` is left alone by
+  // not being written, the rest by being written back as they were, and both
+  // have to stay true.
+  const { orgId, pack } = await makePack();
+  await L.saveDraft(pack.id, DRAFT, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  await Auth.updatePack(orgId, pack.slug, { ...INPUT, slug: pack.slug, tagline: "A sharper line" });
+
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.equal(live.description, DRAFT.description);
+  assert.deepEqual(live.useCases, DRAFT.useCases);
+  assert.deepEqual(live.limitations, DRAFT.limitations);
+  assert.deepEqual(live.requirements, DRAFT.requirements);
+  assert.deepEqual(live.scenarios, DRAFT.scenarios);
+  assert.deepEqual(live.faq, DRAFT.faq, "the FAQ included, which is now left alone by not being written");
+});
+
+test("an import's write with the FAQ it really read goes through", async () => {
+  // The other half of the condition: it refuses a stale write, not every write.
+  const { author, pack } = await packWithThread();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+  const was = (await P.packById(pack.id)).faq ?? "";
+
+  await Auth.updatePack(author.orgId, pack.slug, {
+    ...INPUT, slug: pack.slug,
+    faq: [{ q: "Already live?", a: "Yes." }, { q: "From the folder?", a: "Yes." }],
+  }, { faq: was });
+
+  const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
+  assert.deepEqual(questions, ["Already live?", "From the folder?"]);
 });
 
 test("a changelog note is written once per version, and a repeat is ignored rather than thrown", async () => {
