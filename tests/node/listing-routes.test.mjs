@@ -260,3 +260,72 @@ test("an unpublished pack's page renders no changelog heading", async () => {
   assert.equal(res.status, 200);
   assert.doesNotMatch(await res.text(), /Changelog/);
 });
+
+// ----------------------------------------------------- the permissions rail
+//
+// The rail is the block the spec singles out as "derived, not
+// author-declared". What it used to render was `pack_tools.policy` — the
+// author's own agent.md text, which never reaches the runtime: `publishPack`
+// builds the agent config from the platform-wide setting and forces
+// always_ask where the pack ships a PreToolUse hook. So a pack could declare
+// always_allow, run with always_ask, and have the page tell a buyer it runs
+// unattended. The branch's own export→re-import round trip makes the inverse
+// the normal case, since `export.ts` writes always_ask into every exported
+// agent.md and the importer now reads it back.
+
+const toolsBlock = (policy) => `tools:
+  - type: agent_toolset_20260401
+    default_config:
+      enabled: true
+    configs:
+      - name: bash
+        permission_policy:
+          type: ${policy}
+`;
+
+const HOOK = "---\nname: no-rm\nevent: PreToolUse\ntool: bash\nmatch: rm -rf\n---\nNot on a buyer's machine.";
+
+test("the rail states the policy a run is configured with, not the one the author declared", async () => {
+  const owner = await A.signUp({
+    email: email(), name: "Author", password: "correct-horse-battery-staple", orgName: `Rail Co ${++n}`,
+  });
+  const cookie = await cookieFor(owner.userId);
+
+  // Declares always_allow, ships a PreToolUse hook: the hook can only bind if
+  // the call pauses, so the published version really does run always_ask.
+  const hookedSlug = `rail-hooked-${n}`;
+  await Auth.importPack({ orgId: owner.orgId, files: [
+    { path: "agent.md",
+      text: `---\nname: Hooked\nslug: ${hookedSlug}\nmodel: claude-opus-5\n${toolsBlock("always_allow")}---\nThe method.` },
+    { path: "hooks/no-rm.md", text: HOOK },
+  ] });
+  await P.publishPack(hookedSlug);
+
+  const hooked = await (await fetch(`${server.baseUrl}/packs/${hookedSlug}`, { headers: { cookie } })).text();
+  assert.match(hooked, /bash — pauses for a human/,
+    "a pack whose hook forces always_ask says so, whatever its agent.md declared");
+  assert.doesNotMatch(hooked, /bash — runs unattended/);
+
+  // Declares always_ask — the posture every exported agent.md carries — and
+  // ships no hook, so the run is configured from the platform default.
+  const plainSlug = `rail-plain-${n}`;
+  await Auth.importPack({ orgId: owner.orgId, files: [
+    { path: "agent.md",
+      text: `---\nname: Plain\nslug: ${plainSlug}\nmodel: claude-opus-5\n${toolsBlock("always_ask")}---\nThe method.` },
+  ] });
+  await P.publishPack(plainSlug);
+
+  const plain = await (await fetch(`${server.baseUrl}/packs/${plainSlug}`, { headers: { cookie } })).text();
+  assert.match(plain, /bash — runs unattended/,
+    "the platform default is what the run gets, so it is what the rail says");
+  assert.doesNotMatch(plain, /bash — pauses for a human/);
+});
+
+test("a pack with no stored tools gets the platform-level statement, in a buyer's terms", async () => {
+  const { pack, cookie } = await authorWithPack();
+  const page = await (await fetch(`${server.baseUrl}/packs/${pack.slug}`, { headers: { cookie } })).text();
+  assert.match(page, /run shell commands/);
+  assert.match(page, /read and write files in the run&#39;s workspace/);
+  assert.match(page, /run unattended, without pausing for approval/);
+  assert.doesNotMatch(page, /no tools recorded/, "an internals report is not a disclosure");
+});

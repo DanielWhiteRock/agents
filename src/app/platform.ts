@@ -391,6 +391,33 @@ export async function destructivePolicy(): Promise<DestructivePolicy> {
   return raw === "always_ask" || raw === "auto" ? raw : "always_allow";
 }
 
+/**
+ * The policy a run is configured with, which is not the one a pack declared.
+ *
+ * `publishPack` builds every agent config from the platform-wide setting and
+ * forces `always_ask` where the pack ships PreToolUse hooks, because a hook
+ * can only bind if the call pauses. So `pack_tools.policy` — the author's own
+ * `agent.md` text — never reaches the runtime, and the permissions rail must
+ * not render it: a pack declaring `always_allow` next to a hook runs with
+ * `always_ask`. Both the publish path and the rail go through this, so the
+ * page and the run cannot drift apart.
+ */
+export function policyWithHooks(global: DestructivePolicy, hooks: Hook[]): DestructivePolicy {
+  return needsInterception(hooks) ? "always_ask" : global;
+}
+
+/**
+ * The same thing for a published version, read from that version's own
+ * snapshot of the folder — so the rail describes what a buyer would actually
+ * run, not what the author's working copy says today. An unpublished pack has
+ * no baked configuration yet, so it gets the platform policy.
+ */
+export async function effectivePolicy(packVersionId: string | null | undefined): Promise<DestructivePolicy> {
+  const global = await destructivePolicy();
+  if (!packVersionId) return global;
+  return policyWithHooks(global, await runHooks(packVersionId));
+}
+
 export async function effortFor(model: string, effort: string | null | undefined): Promise<PackDefinition["effort"] | undefined> {
   if (!effort) return undefined;
   const excluded = (await setting("models_without_effort")).split(",").map((x) => x.trim());
@@ -463,9 +490,11 @@ export async function publishPack(slug: string, note?: string): Promise<PackVers
   const parsed = tree.length > 0 ? validateTree(tree) : null;
   // A hook can only bind if the call pauses, so a pack declaring PreToolUse
   // hooks is published with always_ask whatever the platform default is. The
-  // server answers those pauses itself, so nobody is blocked by it.
+  // server answers those pauses itself, so nobody is blocked by it. Through
+  // `policyWithHooks` rather than inline, because the permissions rail has to
+  // reach the identical answer for a published version.
   const hooks = tree.length > 0 ? parseHooks(tree) : [];
-  if (needsInterception(hooks)) def.destructivePolicy = "always_ask";
+  def.destructivePolicy = policyWithHooks(def.destructivePolicy ?? await destructivePolicy(), hooks);
   const skills = parsed?.skills ?? [];
   const subagents = (parsed?.subagents ?? []).map((sa) => {
     const meta = readFrontMatterMeta(sa.file.content);

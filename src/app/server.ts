@@ -219,14 +219,17 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       ? { turns: await settingInt("trial_turns"), budgetCents: await settingInt("trial_budget_cents"),
           used: await P.hasTriedPack(ctx.orgId, p.id) }
       : null;
-    // The permissions rail is derived from what the pack stored, falling back
-    // to the platform's own policy where a pack has no tools recorded — which
-    // is every pack published before they were persisted.
+    // The permissions rail is derived from what the run is configured with,
+    // not from what the author declared: `pack_tools` supplies the tool names
+    // and `effectivePolicy` the posture — the platform setting, forced to
+    // always_ask by a PreToolUse hook, exactly as `publishPack` baked it.
+    // A pack with no tools recorded (every pack published before they were
+    // persisted) gets the platform-level statement instead.
     const permissions = permissionSummary({
-      tools: await P.packTools(p.id),
+      tools: (await P.packTools(p.id)).map((t) => t.name),
       mcpServers: await P.packMcpServers(p.id),
       web: P.packExtras(p).web ?? {},
-      defaultPolicy: await P.destructivePolicy(),
+      policy: await P.effectivePolicy(v?.id ?? null),
     }).lines;
     const creatorHandle = await creatorHandleOf(p.creator_id);
     const extras: V.PackPageExtras = {
