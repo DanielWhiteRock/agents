@@ -649,8 +649,19 @@ export async function claimPlatformOrg(orgId: string): Promise<void> {
 
 let ready: Promise<void> | null = null;
 
+/**
+ * Bootstrap once per process — but a *failed* bootstrap is not remembered.
+ *
+ * The success is worth caching: every caller gets the same schema and nothing
+ * races. A rejection is not. The usual reason this throws is a database that
+ * was briefly unreachable, and caching that rejection makes one bad moment
+ * permanent for the life of the process: every later call is handed the same
+ * stale error, and the retry that would have worked never happens. Clearing
+ * the slot costs nothing — a second bootstrap against a database that is
+ * already set up is idempotent, which is the whole design of the function.
+ */
 export async function initDb(): Promise<void> {
-  if (!ready) ready = bootstrap();
+  if (!ready) ready = bootstrap().catch((e) => { ready = null; throw e; });
   return ready;
 }
 
