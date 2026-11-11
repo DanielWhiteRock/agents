@@ -14,7 +14,8 @@
  *
  * The payoff is `publishToFaq`: a creator can take one exchange that
  * actually happened and quote it onto the pack's FAQ, in the exact shape
- * `listing.ts` already reads — `{ q, a }` appended to `packs.faq` — with the
+ * `listing.ts` already reads — `{ q, a }` appended through that module's own
+ * `updateFaq`, which is the only writer of `packs.faq` — with the
  * asking organisation named nowhere in the result. The question is quoted as
  * asked and the answer as written; who asked it is not part of what gets
  * published.
@@ -22,7 +23,7 @@
 import { id, now } from "./db.js";
 import { sql } from "./sql.js";
 import { DomainError } from "./errors.js";
-import { faqFromJson } from "../packs/listing-shape.js";
+import { updateFaq } from "./listing.js";
 
 /** Thrown by `openThread` and `reply` for a body or subject with nothing in it, or a reference to a creator or pack that does not exist or does not line up. */
 export class MessagesInputError extends DomainError {
@@ -273,10 +274,10 @@ export async function publishToFaq(
   }
   if (answer.published_at) throw new MessagesInputError("this answer has already been published");
 
-  const pack = await s.one<{ faq: string }>("SELECT faq FROM packs WHERE id = $1", [thread.pack_id]);
-  const faq = faqFromJson(pack?.faq);
-  faq.push({ q: question.body, a: answer.body });
-  const t = now();
-  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify(faq), thread.pack_id]);
-  await s.query("UPDATE thread_messages SET published_at = $1 WHERE id = $2", [t, answer.id]);
+  // Through `updateFaq` rather than a read-modify-write of its own: a
+  // listing approval writes the same column from the same in-memory
+  // read-and-write-back shape, and interleaving the two lost whichever
+  // finished second. See `updateFaq` in `listing.ts`.
+  await updateFaq(thread.pack_id, (live) => [...live, { q: question.body, a: answer.body }]);
+  await s.query("UPDATE thread_messages SET published_at = $1 WHERE id = $2", [now(), answer.id]);
 }

@@ -18,7 +18,8 @@ import { DomainError } from "./errors.js";
 import { NotTheAuthorError, PackConflictError } from "./authoring.js";
 import * as P from "./platform.js";
 import {
-  listingFromColumns, listingFromParts, mergeFaq, type Listing, type ListingColumns,
+  faqFromJson, listingFromColumns, listingFromParts, mergeFaq,
+  type FaqEntry, type Listing, type ListingColumns,
 } from "../packs/listing-shape.js";
 
 /**
@@ -185,6 +186,56 @@ export async function saveGeneratedDraft(
 }
 
 /**
+ * `packs.faq` has two writers, and both of them read it, change it in memory
+ * and write the whole column back: `approveDraft` here, and
+ * `publishToFaq` in `messages.ts`, where a creator quotes a buyer's question
+ * and their own answer onto the page. Interleave those two read-modify-write
+ * cycles and the loser's entry is gone — the exact content loss the FAQ merge
+ * exists to prevent, arrived at from the other direction.
+ *
+ * There is no transaction primitive to reach for: `src/app/sql.ts` exposes
+ * `query`/`one`/`exec`/`close`, and adding one is a change with its own
+ * blast radius (pooled connections, two drivers, every existing caller) and
+ * its own review. So the narrow fix, which needs nothing new: make the write
+ * conditional on the value it was computed from, and retry on a miss. The
+ * loser re-reads, re-merges and writes again; nobody's answer disappears.
+ *
+ * `COALESCE(faq, '')` on both sides because the column arrived by migration
+ * and an older row can hold SQL NULL where a newer one holds `''` — and in
+ * both dialects `NULL = NULL` is not true, which would turn a retry loop
+ * into a guaranteed failure on exactly those rows.
+ */
+const FAQ_WRITE_ATTEMPTS = 5;
+
+export class FaqContendedError extends DomainError {
+  constructor() {
+    super("the FAQ was being written by somebody else at the same time — try that again",
+      409, "FaqContendedError");
+  }
+}
+
+/**
+ * Read `packs.faq`, let the caller decide what it should become, and write it
+ * back only if nobody else changed it in between.
+ *
+ * The one place `packs.faq` is appended to, so a second writer cannot be
+ * added without inheriting the guard.
+ */
+export async function updateFaq(packId: string, next: (live: FaqEntry[]) => FaqEntry[]): Promise<void> {
+  const s = await sql();
+  for (let attempt = 1; attempt <= FAQ_WRITE_ATTEMPTS; attempt += 1) {
+    const row = await s.one<{ faq: string | null }>("SELECT faq FROM packs WHERE id = $1", [packId]);
+    if (!row) throw new PackConflictError("no such pack");
+    const was = row.faq ?? "";
+    const written = await s.query<{ id: string }>(
+      `UPDATE packs SET faq = $1 WHERE id = $2 AND COALESCE(faq, '') = $3 RETURNING id`,
+      [JSON.stringify(next(faqFromJson(was))), packId, was]);
+    if (written.length > 0) return;
+  }
+  throw new FaqContendedError();
+}
+
+/**
  * Publish the draft: copy it onto `packs`, stamp the approval, clear any
  * staleness, and remove the draft so there is nothing left to re-approve.
  *
@@ -207,16 +258,32 @@ export async function approveDraft(orgId: string, slug: string): Promise<void> {
   // creator can publish another answer out of the inbox in between — so the
   // union is taken again here, at the moment of writing. Publishing a listing
   // is never the thing that deletes an answer somebody wrote to a buyer.
-  const faq = mergeFaq(listingOf(pack).faq, draft.faq);
-
+  //
+  // "At the moment of writing" has to mean it: between this read and this
+  // write, `publishToFaq` can land. So the pack is re-read each attempt, the
+  // union recomputed from what is actually stored, and the write conditional
+  // on that value — the same compare-and-set `updateFaq` makes, extended over
+  // the other five columns this statement also sets. See `updateFaq` above
+  // for why this is not a transaction.
   const s = await sql();
-  await s.query(
-    `UPDATE packs SET description = $1, use_cases = $2, limitations = $3, faq = $4, scenarios = $5,
-       requirements = $6, listing_approved_at = $7, listing_stale_at = NULL WHERE id = $8`,
-    [draft.description, JSON.stringify(draft.useCases), JSON.stringify(draft.limitations),
-      JSON.stringify(faq), JSON.stringify(draft.scenarios), JSON.stringify(draft.requirements),
-      now(), pack.id]);
-  await s.query("DELETE FROM pack_listing_drafts WHERE pack_id = $1", [pack.id]);
+  for (let attempt = 1; attempt <= FAQ_WRITE_ATTEMPTS; attempt += 1) {
+    const current = await P.packById(pack.id);
+    if (!current) throw new PackConflictError(`no pack at /packs/${slug}`);
+    const was = current.faq ?? "";
+    const faq = mergeFaq(listingOf(current).faq, draft.faq);
+    const written = await s.query<{ id: string }>(
+      `UPDATE packs SET description = $1, use_cases = $2, limitations = $3, faq = $4, scenarios = $5,
+         requirements = $6, listing_approved_at = $7, listing_stale_at = NULL
+       WHERE id = $8 AND COALESCE(faq, '') = $9 RETURNING id`,
+      [draft.description, JSON.stringify(draft.useCases), JSON.stringify(draft.limitations),
+        JSON.stringify(faq), JSON.stringify(draft.scenarios), JSON.stringify(draft.requirements),
+        now(), pack.id, was]);
+    if (written.length > 0) {
+      await s.query("DELETE FROM pack_listing_drafts WHERE pack_id = $1", [pack.id]);
+      return;
+    }
+  }
+  throw new FaqContendedError();
 }
 
 /** A pack was edited: its live listing may no longer describe what ships. */

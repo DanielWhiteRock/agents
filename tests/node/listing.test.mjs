@@ -10,7 +10,7 @@ if (!process.env.DATABASE_URL) {
   process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "listing-")), "t.db");
 }
 
-let A, P, Auth, L, db, sql;
+let A, P, Auth, L, M, Cr, db, sql;
 let n = 0;
 const email = () => `l${++n}-${Date.now()}@example.com`;
 
@@ -42,6 +42,8 @@ before(async () => {
   P = await import("../../dist/src/app/platform.js");
   Auth = await import("../../dist/src/app/authoring.js");
   L = await import("../../dist/src/app/listing.js");
+  M = await import("../../dist/src/app/messages.js");
+  Cr = await import("../../dist/src/app/creators.js");
   sql = (await import("../../dist/src/app/sql.js")).sql;
   await db.initDb();
   P.setRuntime(stubRuntime());
@@ -368,4 +370,101 @@ test("changelogOf lists only versions an author actually wrote a note for, newes
   assert.deepEqual(entries.map((e) => e.version), [v3.version, v1.version]);
   assert.equal(entries.find((e) => e.version === v3.version).note, "Third note.");
   assert.equal(entries.find((e) => e.version === v1.version).note, "First note.");
+});
+
+// ------------------------------------------------- two writers, one column
+//
+// `packs.faq` is written by `approveDraft` here and by `publishToFaq` in
+// messages.ts, and both of them read the column, change it in memory and
+// write the whole thing back. Interleaved, the loser's entry is gone — the
+// same content loss the FAQ merge exists to prevent, arrived at from the
+// other direction. There is no transaction primitive in `src/app/sql.ts` and
+// adding one is its own piece of work, so the write is conditional on the
+// value it was computed from and retried on a miss.
+
+/** A pack, its author, a creator profile for that author, and a buyer's thread about it. */
+const packWithThread = async () => {
+  const author = await A.signUp({
+    email: email(), name: "Author", password: "correct-horse", orgName: `Race Author ${++n}`,
+  });
+  const slug = `race-${n}`;
+  const pack = await Auth.createPack(author.orgId, { ...INPUT, slug });
+  const creator = await Cr.upsertCreator({
+    orgId: author.orgId, userId: author.userId,
+    handle: `race-creator-${n}`, displayName: "Race Creator",
+  });
+  const s = await sql();
+  await s.query("UPDATE packs SET creator_id = $1 WHERE id = $2", [creator.id, pack.id]);
+
+  const buyer = await A.signUp({
+    email: email(), name: "Buyer", password: "correct-horse", orgName: `Race Buyer ${n}`,
+  });
+  const thread = await M.openThread({
+    orgId: buyer.orgId, userId: buyer.userId, creatorId: creator.id, packId: pack.id,
+    subject: "Currencies?", body: "Does it handle more than one currency in a run?",
+  });
+  await M.reply({
+    threadId: thread.id, orgId: author.orgId, userId: author.userId,
+    body: "One per run today — run it once per currency.",
+  });
+  // Picked by who wrote them, not by order: both rows can carry the same
+  // millisecond, and `publishToFaq` insists the question is the asker's and
+  // the answer the creator's.
+  const messages = await s.query("SELECT * FROM thread_messages WHERE thread_id = $1", [thread.id]);
+  return {
+    author, buyer, pack, creator, thread,
+    question: messages.find((m) => m.org_id === buyer.orgId),
+    answer: messages.find((m) => m.org_id === author.orgId),
+  };
+};
+
+test("a FAQ write computed from a stale read lands nothing rather than overwriting", async () => {
+  const { pack, creator, thread, question, answer } = await packWithThread();
+  const s = await sql();
+
+  // What `approveDraft` reads before it merges.
+  const was = (await P.packById(pack.id)).faq ?? "";
+
+  // A creator publishes an answer out of the inbox in the gap.
+  await M.publishToFaq(creator.id, thread.id, question.id, answer.id);
+  const published = JSON.parse((await P.packById(pack.id)).faq);
+  assert.equal(published.length, 1);
+
+  // The stale write — the one that used to clobber it — now affects no rows,
+  // which is what the retry is triggered by. RETURNING on both drivers.
+  const written = await s.query(
+    "UPDATE packs SET faq = $1 WHERE id = $2 AND COALESCE(faq, '') = $3 RETURNING id",
+    [JSON.stringify([{ q: "Mine", a: "Only mine." }]), pack.id, was]);
+  assert.equal(written.length, 0, "a conditional write on a changed value writes nothing");
+  assert.deepEqual(JSON.parse((await P.packById(pack.id)).faq), published, "the published answer survives");
+
+  // And the condition is the whole of what saves it: the same statement
+  // without the guard — what both writers used to run — takes the answer out.
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Mine", a: "Only mine." }]), pack.id]);
+  assert.deepEqual(JSON.parse((await P.packById(pack.id)).faq), [{ q: "Mine", a: "Only mine." }],
+    "unguarded, the creator's published answer is simply gone");
+});
+
+test("publishing an answer and approving a listing at the same time loses neither", async () => {
+  const { author, pack, creator, thread, question, answer } = await packWithThread();
+  const s = await sql();
+  // One entry already live, so the merge has something to carry as well.
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+  await L.saveDraft(pack.id, { ...DRAFT, faq: [{ q: "From the generator?", a: "Yes." }] }, 1);
+
+  // Both read-modify-write cycles in flight at once: each `await` inside them
+  // is a point where the other one runs, which is exactly the interleaving.
+  await Promise.all([
+    M.publishToFaq(creator.id, thread.id, question.id, answer.id),
+    L.approveDraft(author.orgId, pack.slug),
+  ]);
+
+  const faq = JSON.parse((await P.packById(pack.id)).faq);
+  const questions = faq.map((f) => f.q);
+  assert.ok(questions.includes("Already live?"), "the entry that was already live survives");
+  assert.ok(questions.includes("From the generator?"), "the approved draft's entry is there");
+  assert.ok(questions.includes(question.body), "and so is the answer published out of the inbox");
+  assert.equal(await L.draftFor(pack.id), null, "the draft was consumed exactly once");
 });
