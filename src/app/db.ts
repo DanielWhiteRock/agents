@@ -1,3 +1,4 @@
+import { ROLES, assertRoleIcon, type RoleRow } from "./roles.js";
 import { sql } from "./sql.js";
 
 /**
@@ -454,6 +455,28 @@ CREATE TABLE IF NOT EXISTS pack_changelog (
   created_at TEXT NOT NULL,
   PRIMARY KEY (pack_id, version)
 );
+
+-- The jobs the shelf hires for. A table and not an array in code, because
+-- changing the roles should not need an edit, a merge and a deploy — and
+-- because the retagging that follows a role change is already data, so doing
+-- half of it as code was the bad seam.
+--
+-- rank is display order. listed retires a role without deleting it: a deleted
+-- row would orphan every pack tagged with its id, which is exactly the damage
+-- a taxonomy change should not be able to do.
+--
+-- No foreign key from packs.role to here, deliberately. A pack may carry a
+-- role we have since retired, and the shelf's job then is to stop advertising
+-- the role, not to refuse the pack.
+CREATE TABLE IF NOT EXISTS roles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  blurb TEXT NOT NULL,
+  -- Names a drawing in views.ts, checked against ICON_NAMES on every write.
+  icon TEXT NOT NULL,
+  rank INTEGER NOT NULL DEFAULT 0,
+  listed INTEGER NOT NULL DEFAULT 1
+);
 `;
 
 const SUBSTITUTIONS = {
@@ -694,6 +717,50 @@ async function bootstrap(): Promise<void> {
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     await s.query("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", [key, value]);
   }
+  // Seeded exactly like the settings above, and for the same reason: a fresh
+  // database gets the taxonomy without anybody running a script, and a
+  // database that already has one is left alone. DO NOTHING is the whole
+  // point — a role the owner has since edited must survive every restart.
+  for (const role of ROLES) await putRole(role, "seed");
+}
+
+/**
+ * The only way a role is written.
+ *
+ * `seed` leaves an existing row alone (bootstrap); `overwrite` replaces it,
+ * which is what an editing surface would want. Either way the icon is checked
+ * first, because `views.ts` substitutes the info glyph for a name it cannot
+ * draw and would therefore never report the mistake.
+ */
+export async function putRole(role: RoleRow, mode: "seed" | "overwrite" = "overwrite"): Promise<void> {
+  assertRoleIcon(role);
+  const s = await sql();
+  const onConflict = mode === "seed"
+    ? "DO NOTHING"
+    : `DO UPDATE SET name = EXCLUDED.name, blurb = EXCLUDED.blurb, icon = EXCLUDED.icon,
+         rank = EXCLUDED.rank, listed = EXCLUDED.listed`;
+  await s.query(
+    `INSERT INTO roles (id, name, blurb, icon, rank, listed) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) ${onConflict}`,
+    [role.id, role.name, role.blurb, role.icon, role.rank, role.listed ? 1 : 0]);
+}
+
+/**
+ * The taxonomy as the table holds it, in display order.
+ *
+ * Falls back to the seed when the table is empty — a database that has never
+ * been bootstrapped, or one a wipe caught mid-flight — because a shelf with
+ * no jobs on it is a worse answer than the list we would have seeded.
+ */
+export async function listRoles(): Promise<RoleRow[]> {
+  const s = await sql();
+  const rows = await s.query<{ id: string; name: string; blurb: string; icon: string; rank: number | string; listed: number | boolean }>(
+    "SELECT id, name, blurb, icon, rank, listed FROM roles ORDER BY rank, id");
+  if (!rows.length) return ROLES;
+  return rows.map((r) => ({
+    id: r.id, name: r.name, blurb: r.blurb, icon: r.icon,
+    rank: Number(r.rank), listed: r.listed === true || Number(r.listed) === 1,
+  }));
 }
 
 export async function setting(key: string): Promise<string> {

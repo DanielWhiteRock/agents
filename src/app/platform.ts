@@ -5,8 +5,7 @@
  * list_cost into a points debit and an author credit.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { id, initDb, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
-import { ROLES } from "./roles.js";
+import { id, initDb, listRoles, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
 import { sql } from "./sql.js";
 import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -361,22 +360,29 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
 /**
  * The jobs we list, and how many workers do each.
  *
- * The list itself is in `./roles.ts`, which imports nothing: `views.ts` needs
- * it to render a breadcrumb and the shelf's role strip, and reading it off
- * this module dragged the Anthropic SDK and the runtime into the pure render
- * module's import graph. Re-exported here so `P.ROLES` keeps working.
+ * The taxonomy is the `roles` table, read in display order, so changing the
+ * roles is a row and not a deploy. `./roles.ts` holds the seed that fills a
+ * fresh database and the fallback an empty table renders from; it imports
+ * nothing, because `views.ts` needs it for the breadcrumb and the shelf's
+ * role strip, and reading it off this module dragged the Anthropic SDK and
+ * the runtime into the pure render module's import graph. Re-exported here so
+ * `P.ROLES` keeps working.
  *
- * A role with nothing in it is not shown, because listing a job we cannot
- * fill is worse than not listing it.
+ * A role with nothing in it is not shown, because advertising a job we cannot
+ * fill is worse than not advertising it. A retired role (`listed = 0`) is not
+ * shown either, however many packs still carry its id.
  */
-export { ROLES, type Role } from "./roles.js";
+export { ROLES, type Role, type RoleRow } from "./roles.js";
 
 export async function roles(): Promise<Array<{ id: string; name: string; blurb: string; icon: string; count: number }>> {
   const s = await sql();
   const rows = await s.query<{ role: string; n: string | number }>(
     "SELECT role, COUNT(*) AS n FROM packs WHERE status = 'listed' AND role <> '' GROUP BY role");
   const counts = new Map(rows.map((r) => [r.role, Number(r.n)]));
-  return ROLES.map((r) => ({ ...r, count: counts.get(r.id) ?? 0 })).filter((r) => r.count > 0);
+  return (await listRoles())
+    .filter((r) => r.listed)
+    .map((r) => ({ id: r.id, name: r.name, blurb: r.blurb, icon: r.icon, count: counts.get(r.id) ?? 0 }))
+    .filter((r) => r.count > 0);
 }
 
 /** The tags actually present on a set of packs, counted. */
