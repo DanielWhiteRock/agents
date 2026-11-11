@@ -6,7 +6,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { id, initDb, listRoles, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
-import type { Role } from "./roles.js";
+import type { Role, RoleRow } from "./roles.js";
 import { sql } from "./sql.js";
 import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -374,6 +374,20 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
  * shown either, however many packs still carry its id.
  */
 export { ROLES, type Role, type RoleRow } from "./roles.js";
+
+/**
+ * Every role a pack may be put in, in display order — counts and all.
+ *
+ * `roles()` below is the shelf's question ("which jobs can we fill?") and
+ * answers it by dropping a role nothing is tagged with. An editor asking
+ * which role to put a pack IN needs the opposite: an empty role is exactly
+ * the one somebody is about to fill, and leaving it out of the select is why
+ * no surface could ever fill it. Retired rows stay out — `listed = 0` means
+ * the role is being wound down, not waiting for stock.
+ */
+export async function assignableRoles(): Promise<RoleRow[]> {
+  return (await listRoles()).filter((r) => r.listed);
+}
 
 export async function roles(): Promise<Array<{ id: string; name: string; blurb: string; icon: string; count: number }>> {
   const s = await sql();

@@ -815,12 +815,20 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     instructions: f["instructions"] ?? "",
     pinnedModels: (f["pinnedModels"] ?? "").split(",").map((x) => x.trim()).filter(Boolean),
     payoutEmail: f["payoutEmail"] ?? "",
+    // Spread conditionally, because the two empties mean different things.
+    // The editor's select is always submitted, so an empty value is the
+    // author choosing no role and `updatePack` clears the column. A body
+    // carrying no `role` key at all has no opinion — an older cached form, a
+    // caller posting only details — and must leave a set role alone, which is
+    // the same rule `PackInput.tools` already states for a field nobody
+    // mentioned.
+    ...(f["role"] === undefined ? {} : { role: f["role"] }),
   });
 
   if (method === "GET" && path === "/authors/new") {
     ownerOnly();
     return html(res, V.packEditorPage({
-      pack: null, models: await models(), balance: await bal(), viewer,
+      pack: null, models: await models(), roles: await P.assignableRoles(), balance: await bal(), viewer,
       err: url.searchParams.get("err") ?? undefined, isCurator: (await platformOrgId()) === ctx.orgId,
     }));
   }
@@ -857,7 +865,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const v = await P.latestVersion(pack.id);
     return html(res, V.packEditorPage({
       pack: { ...pack, ...(v ? { version: v.version } : {}) },
-      models: await models(), balance: await bal(), viewer,
+      models: await models(), roles: await P.assignableRoles(), balance: await bal(), viewer,
       err: url.searchParams.get("err") ?? undefined, isCurator: curator,
     }));
   }

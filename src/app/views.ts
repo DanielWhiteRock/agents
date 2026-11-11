@@ -1851,8 +1851,33 @@ const STATUS_NOTE: Record<string, string> = {
   unlisted: "Withdrawn from the catalog. Anyone who already bought it keeps it and can still run it.",
 };
 
+/**
+ * The role select's options: every assignable role, no role, and — only when
+ * the pack already carries one the table no longer offers — the role it has.
+ *
+ * That last case is the one that bites. A retired or unknown id left out of
+ * the list would make the browser submit whatever option happened to be
+ * first, so merely opening the editor and pressing Save would silently
+ * re-file the pack under a job nobody chose. Keeping it, labelled, means the
+ * form can only ever say what is already true.
+ */
+function roleOptions(roles: Array<{ id: string; name: string }>, current: string): string {
+  const known = roles.some((r) => r.id === current);
+  const extra = current && !known ? [{ id: current, name: `${current} — no longer listed` }] : [];
+  return [`<option value=""${current ? "" : " selected"}>(no role)</option>`]
+    .concat([...roles, ...extra].map((r) =>
+      `<option value="${esc(r.id)}"${r.id === current ? " selected" : ""}>${esc(r.name)}</option>`))
+    .join("");
+}
+
 export function packEditorPage(args: {
   pack: (PackRow & { version?: number }) | null;
+  /**
+   * The taxonomy as the `roles` table holds it, resolved by the route — not
+   * the `ROLES` seed, which an edited row outranks everywhere else and would
+   * outrank here too. A pure render module cannot read the table itself.
+   */
+  roles: Array<{ id: string; name: string }>;
   models: string[]; balance: number; viewer: Viewer; err?: string; isCurator: boolean;
 }): string {
   const p = args.pack;
@@ -1923,6 +1948,9 @@ document.getElementById('folder').addEventListener('change', (e) => send(e.targe
     </select></label>
     <label>Payout address <input type="text" name="payoutEmail" value="${esc(p?.author_payout_email ?? "")}" size="22"></label>
   </div>
+  <p style="margin-top:12px"><label>The job it does <select name="role">${roleOptions(args.roles, p?.role ?? "")}</select></label>
+    <span class="tag">the shelf a buyer browses by job — a role nothing is tagged with is not advertised at all, and
+    no role is a fair answer for work none of these describes</span></p>
   <p style="margin-top:12px"><label>Restrict to these models <span style="color:var(--muted);font-size:13px">(comma separated, blank for any)</span><br>
     <input type="text" name="pinnedModels" value="${esc(pinned.join(", "))}" style="width:100%"></label>
     <span class="tag">every extraction refusal measured came from Opus; a weaker model may simply comply</span></p>
