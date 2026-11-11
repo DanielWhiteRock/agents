@@ -5,8 +5,8 @@
  * list_cost into a points debit and an author credit.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { id, initDb, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
-import { ROLES } from "./roles.js";
+import { id, initDb, listRoles, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
+import type { Role, RoleRow } from "./roles.js";
 import { sql } from "./sql.js";
 import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -361,22 +361,59 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
 /**
  * The jobs we list, and how many workers do each.
  *
- * The list itself is in `./roles.ts`, which imports nothing: `views.ts` needs
- * it to render a breadcrumb and the shelf's role strip, and reading it off
- * this module dragged the Anthropic SDK and the runtime into the pure render
- * module's import graph. Re-exported here so `P.ROLES` keeps working.
+ * The taxonomy is the `roles` table, read in display order, so changing the
+ * roles is a row and not a deploy. `./roles.ts` holds the seed that fills a
+ * fresh database and the fallback an empty table renders from; it imports
+ * nothing, because `views.ts` needs it for the breadcrumb and the shelf's
+ * role strip, and reading it off this module dragged the Anthropic SDK and
+ * the runtime into the pure render module's import graph. Re-exported here so
+ * `P.ROLES` keeps working.
  *
- * A role with nothing in it is not shown, because listing a job we cannot
- * fill is worse than not listing it.
+ * A role with nothing in it is not shown, because advertising a job we cannot
+ * fill is worse than not advertising it. A retired role (`listed = 0`) is not
+ * shown either, however many packs still carry its id.
  */
-export { ROLES, type Role } from "./roles.js";
+export { ROLES, type Role, type RoleRow } from "./roles.js";
+
+/**
+ * Every role a pack may be put in, in display order — counts and all.
+ *
+ * `roles()` below is the shelf's question ("which jobs can we fill?") and
+ * answers it by dropping a role nothing is tagged with. An editor asking
+ * which role to put a pack IN needs the opposite: an empty role is exactly
+ * the one somebody is about to fill, and leaving it out of the select is why
+ * no surface could ever fill it. Retired rows stay out — `listed = 0` means
+ * the role is being wound down, not waiting for stock.
+ */
+export async function assignableRoles(): Promise<RoleRow[]> {
+  return (await listRoles()).filter((r) => r.listed);
+}
 
 export async function roles(): Promise<Array<{ id: string; name: string; blurb: string; icon: string; count: number }>> {
   const s = await sql();
   const rows = await s.query<{ role: string; n: string | number }>(
     "SELECT role, COUNT(*) AS n FROM packs WHERE status = 'listed' AND role <> '' GROUP BY role");
   const counts = new Map(rows.map((r) => [r.role, Number(r.n)]));
-  return ROLES.map((r) => ({ ...r, count: counts.get(r.id) ?? 0 })).filter((r) => r.count > 0);
+  return (await listRoles())
+    .filter((r) => r.listed)
+    .map((r) => ({ id: r.id, name: r.name, blurb: r.blurb, icon: r.icon, count: counts.get(r.id) ?? 0 }))
+    .filter((r) => r.count > 0);
+}
+
+/**
+ * The single row a pack's `role` column names, for the breadcrumb.
+ *
+ * Reads `listRoles()` — the same table `roles()` counts against, not the
+ * `ROLES` seed — so renaming a role here is what the breadcrumb shows too,
+ * which is the gap `views.ts`'s own doc comment flagged: a pure render
+ * module cannot read this table itself, so the route resolves it and hands
+ * it in. `null` for a role id matching no row, retired or never one; the
+ * breadcrumb drops the segment rather than guessing.
+ */
+export async function roleOf(roleId: string): Promise<Role | null> {
+  if (!roleId) return null;
+  const r = (await listRoles()).find((row) => row.id === roleId);
+  return r ? { id: r.id, name: r.name, blurb: r.blurb, icon: r.icon } : null;
 }
 
 /** The tags actually present on a set of packs, counted. */
@@ -523,13 +560,16 @@ export async function seedCatalog(): Promise<number> {
     // migration on a live database and a table rebuild on SQLite, so it is
     // not what belongs in a fix for an outage.
     const rows = await s.query(
+      // `role` is written here, and the migration in `db.ts` is what reaches
+      // the rows this statement will not touch: DO NOTHING means a definition
+      // that gains a role never updates the pack already on the shelf.
       `INSERT INTO packs (id, slug, name, tagline, author, price_cents, price_points, upgrade_points,
-         model, effort, pinned_models, instructions, tags, image, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
+         model, effort, pinned_models, instructions, tags, image, role, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,$13,$14,$15,'listed',$12)
        ON CONFLICT (slug) DO NOTHING RETURNING id`,
       [id("pk"), p.slug, p.name, p.tagline, p.author, p.pricePoints, p.upgradePoints, p.model,
         p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now(),
-        p.tags ?? "", p.image ?? null]);
+        p.tags ?? "", p.image ?? null, p.role ?? ""]);
     n += rows.length;
   }
   return n;

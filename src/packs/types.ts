@@ -37,6 +37,15 @@ export type PackDefinition = {
   tags?: string;
   /** A hero image, served from /assets. Generated, never stock. */
   image?: string;
+  /**
+   * The job this worker does: one id from the `roles` table, or absent.
+   *
+   * Absent is a real answer and the honest one for a pack whose work no
+   * surviving role describes — `platform.roles()` only advertises a role
+   * something is tagged with, so an invented tag would put a shelf on the
+   * front page that the catalog cannot fill.
+   */
+  role?: string;
   /** Points charged to take a newer version. */
   upgradePoints: number;
   tools?: PackTool[];

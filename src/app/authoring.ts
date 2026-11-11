@@ -44,7 +44,15 @@ export type PackInput = {
   tags?: string;
   /** A hero image: a filename under /assets, or an absolute URL. */
   image?: string;
-  /** The job this worker does, from P.ROLES. */
+  /**
+   * The job this worker does: an id from the `roles` table (the taxonomy is
+   * data now, so `P.ROLES` is only its seed).
+   *
+   * Undefined leaves a stored role alone on an update; an empty string
+   * clears it, which is how the editor's “no role” option takes a pack off a
+   * role shelf. No role is a legitimate end state — a role nothing is tagged
+   * with is not advertised, so the alternative is a shelf we cannot fill.
+   */
   role?: string;
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
@@ -211,7 +219,12 @@ export async function updatePack(
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id,
       input.tags?.trim() ?? pack.tags, input.image?.trim() || pack.image,
-      input.role?.trim() || pack.role,
+      // Undefined keeps what is stored; an empty string clears it. The two
+      // cannot collapse into one `||`, because then nothing could ever take a
+      // pack back off a role shelf — and four packs on the catalog are
+      // deliberately in no role at all, so "none" has to be a value a surface
+      // can actually send.
+      input.role === undefined ? pack.role : input.role.trim(),
       // A caller that never mentions the listing (the plain pack-details form,
       // for instance) must not wipe one set through the import or listing
       // flows — so an absent field keeps the row's current value. `faq` is

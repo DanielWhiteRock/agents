@@ -62,6 +62,9 @@ from you**. No timelines in weeks unless you were given dates.`,
   {
     slug: "video-brief",
     tags: "video, media",
+    // Writer: the role is "leaves a document someone can act on", and a
+    // shootable brief a crew could turn up to is exactly that document.
+    role: "writer",
     image: "video-brief-hero.webp",
     name: "Video Producer's Brief",
     tagline: "Takes an idea and returns a shootable brief a crew could actually turn up to.",

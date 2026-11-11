@@ -14,7 +14,7 @@ services:
     # the repository's default branch, and a blueprint that disagrees with the
     # dashboard is a deploy nobody can explain — the service has been running
     # this branch while the file implied another.
-    branch: agents-marketplace
+    branch: main
     healthCheckPath: /healthz
     # The scheduler is safe to run on more than one instance: firing a schedule
     # claims its row first. Start at one anyway — nothing here needs two yet.

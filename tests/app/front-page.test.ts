@@ -9,7 +9,8 @@ import type { PackRow } from "../../src/app/platform.js";
  * mostly about what it declines to say: a figure it does not have, a worker it
  * cannot sell, a match it did not find.
  */
-const pack = (over: Partial<PackRow> = {}): PackRow & { pricePoints: number; runs: number } => ({
+const pack = (over: Partial<PackRow & { pricePoints: number; runs: number }> = {}):
+  PackRow & { pricePoints: number; runs: number } => ({
   id: "pk_1", slug: "senior-engineer", name: "Senior Engineer",
   tagline: "Reads the code before it changes it", author: "typeui.sh",
   author_org_id: null, price_points: 0, tags: "engineering,quality", image: null,

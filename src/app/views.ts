@@ -1,5 +1,5 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
-import { ROLES } from "./roles.js";
+import { type IconName, type Role } from "./roles.js";
 import { capPerRole } from "./shelf.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import { faqRemovedBy, listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
@@ -507,8 +507,14 @@ const scrollable = (html: string): string =>
  * make, so the label is always in the markup — shown where there is room,
  * read aloud where there is not, and surfaced as a tooltip on hover. Hiding
  * the word is a layout decision; removing it is an accessibility bug.
+ *
+ * Keyed by `IconName` rather than by `string`, which is what makes the icon
+ * column of the `roles` table safe to validate: the names live in `roles.ts`
+ * and this table has to define exactly them, so `tsc` catches a name with no
+ * drawing and a drawing with no name. Role rows are checked against the same
+ * list on the way into the database.
  */
-const ICONS: Record<string, string> = {
+const ICONS: Record<IconName, string> = {
   catalog: '<path d="M3 7h7v7H3zM14 7h7v7h-7zM3 17h7v4H3zM14 17h7v4h-7z"/>',
   runs: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
   points: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5h5M9.5 13.5h5"/>',
@@ -530,7 +536,7 @@ const ICONS: Record<string, string> = {
 
 /** An icon with its name beside it; `only` hides the word but keeps it readable. */
 export function icon(name: string, label: string, only = false): string {
-  const d = ICONS[name] ?? ICONS["info"]!;
+  const d = ICONS[name as IconName] ?? ICONS["info"];
   return `<span class="ic${only ? " only" : ""}"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${d}</svg>`
     + `<span class="lbl">${esc(label)}</span></span>`;
 }
@@ -996,6 +1002,14 @@ export type PackPageExtras = {
   rating: Rating;
   /** Written opinions worth showing — a rating, a body, or both; newest edit first. */
   reviews: Array<{ byline: string | null; rating: number | null; body: string; createdAt: string }>;
+  /**
+   * The row the pack's `role` column names, read from the same table the
+   * shelf's role strip reads — not the `ROLES` seed — so renaming a role
+   * there is what the breadcrumb shows too. `null` when the pack's role
+   * matches no row (never tagged, or the row has since been renamed out from
+   * under it); the breadcrumb then drops the segment rather than guessing.
+   */
+  role: Role | null;
   /** Whether this viewing organisation has a completed, non-trial run and may submit one. */
   mayReview: boolean;
   /** This organisation's own review, so the form edits it instead of handing back a blank one. */
@@ -1036,10 +1050,12 @@ const stars = (n: number): string => "★".repeat(n) + "☆".repeat(5 - n);
  *
  * The role segment is a link into the shelf filtered by that role, which is
  * the page it claims to be a step down from. A pack with no role loses the
- * segment rather than showing an empty one.
+ * segment rather than showing an empty one. `role` is resolved by the route
+ * against the `roles` table, not read off a constant here — this module
+ * imports nothing from the service layer, so it renders whatever it is
+ * given.
  */
-function breadcrumb(p: PackRow): string {
-  const role = ROLES.find((r) => r.id === p.role);
+function breadcrumb(p: PackRow, role: Role | null): string {
   const sep = ` <span aria-hidden="true">›</span> `;
   return `<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a>${sep}<span>Workers</span>${
     role ? `${sep}<a href="/?q=${encodeURIComponent(role.id)}">${esc(role.name)}</a>` : ""
@@ -1066,12 +1082,12 @@ export function packPage(
   const choices = (pinned.length ? pinned : models);
   const {
     listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator,
-    rating, reviews, mayReview, myReview, votes, saved, changelog,
+    rating, reviews, mayReview, myReview, votes, saved, changelog, role,
   } = extras;
   const free = p.price_points === 0;
   return layout(p.name, `
 ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
-${breadcrumb(p)}
+${breadcrumb(p, role)}
 <h1>${esc(p.name)}</h1>
 <p class="lede">${esc(p.tagline)}</p>
 <div class="row" style="margin-bottom:var(--s2)">
@@ -1835,8 +1851,33 @@ const STATUS_NOTE: Record<string, string> = {
   unlisted: "Withdrawn from the catalog. Anyone who already bought it keeps it and can still run it.",
 };
 
+/**
+ * The role select's options: every assignable role, no role, and — only when
+ * the pack already carries one the table no longer offers — the role it has.
+ *
+ * That last case is the one that bites. A retired or unknown id left out of
+ * the list would make the browser submit whatever option happened to be
+ * first, so merely opening the editor and pressing Save would silently
+ * re-file the pack under a job nobody chose. Keeping it, labelled, means the
+ * form can only ever say what is already true.
+ */
+function roleOptions(roles: Array<{ id: string; name: string }>, current: string): string {
+  const known = roles.some((r) => r.id === current);
+  const extra = current && !known ? [{ id: current, name: `${current} — no longer listed` }] : [];
+  return [`<option value=""${current ? "" : " selected"}>(no role)</option>`]
+    .concat([...roles, ...extra].map((r) =>
+      `<option value="${esc(r.id)}"${r.id === current ? " selected" : ""}>${esc(r.name)}</option>`))
+    .join("");
+}
+
 export function packEditorPage(args: {
   pack: (PackRow & { version?: number }) | null;
+  /**
+   * The taxonomy as the `roles` table holds it, resolved by the route — not
+   * the `ROLES` seed, which an edited row outranks everywhere else and would
+   * outrank here too. A pure render module cannot read the table itself.
+   */
+  roles: Array<{ id: string; name: string }>;
   models: string[]; balance: number; viewer: Viewer; err?: string; isCurator: boolean;
 }): string {
   const p = args.pack;
@@ -1907,6 +1948,9 @@ document.getElementById('folder').addEventListener('change', (e) => send(e.targe
     </select></label>
     <label>Payout address <input type="text" name="payoutEmail" value="${esc(p?.author_payout_email ?? "")}" size="22"></label>
   </div>
+  <p style="margin-top:12px"><label>The job it does <select name="role">${roleOptions(args.roles, p?.role ?? "")}</select></label>
+    <span class="tag">the shelf a buyer browses by job — a role nothing is tagged with is not advertised at all, and
+    no role is a fair answer for work none of these describes</span></p>
   <p style="margin-top:12px"><label>Restrict to these models <span style="color:var(--muted);font-size:13px">(comma separated, blank for any)</span><br>
     <input type="text" name="pinnedModels" value="${esc(pinned.join(", "))}" style="width:100%"></label>
     <span class="tag">every extraction refusal measured came from Opus; a weaker model may simply comply</span></p>

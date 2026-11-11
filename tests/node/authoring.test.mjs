@@ -69,8 +69,8 @@ test("a new pack starts as a draft, not in the catalog", async () => {
 
 test("creating a pack persists the role it was given", async () => {
   const { orgId } = await org();
-  const pack = await Auth.createPack(orgId, { ...INPUT, slug: `role-${++n}`, role: "qa" });
-  assert.equal(pack.role, "qa", "the VALUES clause must reference every column it lists");
+  const pack = await Auth.createPack(orgId, { ...INPUT, slug: `role-${++n}`, role: "reviewer" });
+  assert.equal(pack.role, "reviewer", "the VALUES clause must reference every column it lists");
 });
 
 test("creating a pack persists its tools and MCP servers as their own rows", async () => {

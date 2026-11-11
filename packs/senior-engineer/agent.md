@@ -1,7 +1,7 @@
 ---
 name: "Senior Engineer"
 slug: senior-engineer
-author: "Dietrich Gebert, Cursor, Poteto — MIT, see README.md"
+author: "DietrichGebert, Cursor, Lauren Tan (poteto) — MIT, see README.md"
 description: "Reads your code before changing it, writes the smallest thing that works, and reviews like someone who has to maintain it."
 price: 0
 tags: "engineering, code review"
