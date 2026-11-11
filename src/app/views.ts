@@ -1,5 +1,5 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
-import { ROLES } from "./roles.js";
+import { ROLES, type IconName } from "./roles.js";
 import { capPerRole } from "./shelf.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import { faqRemovedBy, listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
@@ -507,8 +507,14 @@ const scrollable = (html: string): string =>
  * make, so the label is always in the markup — shown where there is room,
  * read aloud where there is not, and surfaced as a tooltip on hover. Hiding
  * the word is a layout decision; removing it is an accessibility bug.
+ *
+ * Keyed by `IconName` rather than by `string`, which is what makes the icon
+ * column of the `roles` table safe to validate: the names live in `roles.ts`
+ * and this table has to define exactly them, so `tsc` catches a name with no
+ * drawing and a drawing with no name. Role rows are checked against the same
+ * list on the way into the database.
  */
-const ICONS: Record<string, string> = {
+const ICONS: Record<IconName, string> = {
   catalog: '<path d="M3 7h7v7H3zM14 7h7v7h-7zM3 17h7v4H3zM14 17h7v4h-7z"/>',
   runs: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
   points: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5h5M9.5 13.5h5"/>',
@@ -530,7 +536,7 @@ const ICONS: Record<string, string> = {
 
 /** An icon with its name beside it; `only` hides the word but keeps it readable. */
 export function icon(name: string, label: string, only = false): string {
-  const d = ICONS[name] ?? ICONS["info"]!;
+  const d = ICONS[name as IconName] ?? ICONS["info"];
   return `<span class="ic${only ? " only" : ""}"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${d}</svg>`
     + `<span class="lbl">${esc(label)}</span></span>`;
 }
