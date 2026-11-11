@@ -6,7 +6,7 @@ description: "Clean, high-contrast enterprise design for data-driven workflows w
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/stitch.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/stitch.webp"
 model:
   id: claude-opus-5
   effort: high

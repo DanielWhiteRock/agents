@@ -6,7 +6,7 @@ description: "Carefully curated, modern minimal style with elegant serif typogra
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/refined.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/refined.webp"
 model:
   id: claude-opus-5
   effort: high

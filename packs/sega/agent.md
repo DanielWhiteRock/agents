@@ -6,7 +6,7 @@ description: "'A playful, arcade-inspired interface for games — built on the V
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/sega.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/sega.webp"
 model:
   id: claude-opus-5
   effort: high

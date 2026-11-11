@@ -6,7 +6,7 @@ description: "'A playful, joyful, two-color risograph print aesthetic built on a
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/riso.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/riso.webp"
 model:
   id: claude-opus-5
   effort: high

@@ -6,7 +6,7 @@ description: "Dark-themed cloud-platform aesthetic with modular grids, glass-lik
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/enterprise.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/enterprise.webp"
 model:
   id: claude-opus-5
   effort: high

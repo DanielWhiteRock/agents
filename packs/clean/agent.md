@@ -6,7 +6,7 @@ description: "Simplicity-focused design with ample whitespace, legible typograph
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/clean.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/clean.webp"
 model:
   id: claude-opus-5
   effort: high

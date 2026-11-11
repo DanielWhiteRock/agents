@@ -6,7 +6,7 @@ description: "Strong visual presence with heavyweight typography, high-contrast 
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/bold.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/bold.webp"
 model:
   id: claude-opus-5
   effort: high

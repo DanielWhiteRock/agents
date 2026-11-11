@@ -6,7 +6,7 @@ description: "Frosted glass effect with translucent layers, subtle blur, and lum
 price: 0
 tags: "web design, app design"
 role: designer
-image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/systems/glassmorphism.webp"
+image: "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agentspace/agents/alphaceo/glassmorphism.webp"
 model:
   id: claude-opus-5
   effort: high
