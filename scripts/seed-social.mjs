@@ -127,10 +127,13 @@ const stubRuntime = () => ({
  * because the generator costs a model call per pack and the point here is a
  * page to look at, not a demonstration of the generator.
  *
- * Put in front of a human exactly as a generated draft is — `saveDraft` then
+ * Published the way a person's own listing is — `saveDraft` then
  * `approveDraft`, through the real approval path and its copy-quality guard —
  * so nothing here reaches a page by a route a listing could not normally
- * take.
+ * take. `saveDraft` is the human path, so the draft is marked as saved by a
+ * person and its FAQ is published as written: right for hand-written copy,
+ * and not the same path a generated draft takes (`saveGeneratedDraft`, whose
+ * FAQ is merged with whatever is already live).
  */
 const LISTINGS = {
   guardrails: {

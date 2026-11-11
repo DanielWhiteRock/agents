@@ -14,12 +14,12 @@
  */
 import { now, platformOrgId } from "./db.js";
 import { sql } from "./sql.js";
-import { DomainError } from "./errors.js";
+import { DomainError, FAQ_WRITE_ATTEMPTS, FaqContendedError } from "./errors.js";
 import { NotTheAuthorError, PackConflictError } from "./authoring.js";
 import * as P from "./platform.js";
 import {
   faqFromJson, listingFromColumns, listingFromParts, mergeFaq,
-  type FaqEntry, type Listing, type ListingColumns,
+  type DraftAuthor, type FaqEntry, type Listing, type ListingColumns,
 } from "../packs/listing-shape.js";
 
 /**
@@ -29,25 +29,35 @@ import {
  * Re-exported here because a listing is still this module's subject —
  * callers say `L.Listing` and `L.mergeFaq`, and the move is not their news.
  */
-export { listingFromParts, mergeFaq };
-export type { Listing };
+export { listingFromParts, mergeFaq, FaqContendedError };
+export type { DraftAuthor, Listing };
 
-type DraftRow = ListingColumns & { pack_id: string; generated_at: string; source_version: number | null };
+type DraftRow = ListingColumns & {
+  pack_id: string; generated_at: string; source_version: number | null; authored_by: string | null;
+};
 
 /** The listing currently approved and live on the pack. */
 export function listingOf(pack: P.PackRow): Listing {
   return listingFromColumns(pack);
 }
 
-/** Whether a pack has any real listing content beyond its tagline. */
-export function hasListing(pack: P.PackRow): boolean {
-  const l = listingOf(pack);
+/** Whether a listing says anything at all — one field with something in it. */
+export function hasContent(l: Listing): boolean {
   return l.description.trim().length > 0 || l.useCases.length > 0 || l.limitations.length > 0
     || l.faq.length > 0 || l.scenarios.length > 0 || l.requirements.length > 0;
 }
 
-/** A draft plus the two facts the approval screen needs about it. */
-export type PendingDraft = { listing: Listing; generatedAt: string; sourceVersion: number | null };
+/** Whether a pack has any real listing content beyond its tagline. */
+export function hasListing(pack: P.PackRow): boolean {
+  return hasContent(listingOf(pack));
+}
+
+/** A draft plus the three facts the approval screen needs about it. */
+export type PendingDraft = {
+  listing: Listing; generatedAt: string; sourceVersion: number | null;
+  /** Who saved it last, which decides what approval does with the FAQ. */
+  authoredBy: DraftAuthor;
+};
 
 /** The draft awaiting approval, with when it was generated and from what. */
 export async function draftWithMeta(packId: string): Promise<PendingDraft | null> {
@@ -58,6 +68,10 @@ export async function draftWithMeta(packId: string): Promise<PendingDraft | null
     listing: listingFromColumns(row),
     generatedAt: row.generated_at,
     sourceVersion: row.source_version == null ? null : Number(row.source_version),
+    // Anything but an explicit "human" is read as generator-written: an
+    // unmarked row is one this code did not write, and generator is the
+    // reading under which no published answer can be lost.
+    authoredBy: row.authored_by === "human" ? "human" : "generator",
   };
 }
 
@@ -83,6 +97,33 @@ export class ListingVerbatimError extends DomainError {
       `that draft repeats the pack's own instructions verbatim ("${run}…") — `
       + `a listing describes what the worker does, it does not quote the method`,
       409, "ListingVerbatimError");
+  }
+}
+
+/**
+ * A save with nothing in it at all.
+ *
+ * `POST /packs/:slug/listing` upserts whatever arrives, so a submission with
+ * all six boxes blank replaced a generated draft with an empty one and said
+ * nothing — a draft gone and a model call to get it back.
+ *
+ * Refused outright rather than only when the pack has no live content,
+ * because the exception would permit exactly the case with the most to lose:
+ * an all-empty POST against a pack that *does* have an approved listing
+ * destroys the draft and then, approved, blanks the page. An all-empty form
+ * is also the shape an accident takes — a submit with the fields never
+ * filled, a resubmitted empty form — and it is indistinguishable from the
+ * deliberate version. Nothing is unreachable as a result: any five fields can
+ * be emptied, the FAQ included, so every field can still be cleared and
+ * published. Taking a listing off the page altogether is what withdrawing the
+ * pack is for, and that is a reviewable action rather than a blank form.
+ */
+export class ListingEmptyError extends DomainError {
+  constructor() {
+    super(
+      "every field was blank, so nothing was saved and the draft you had is still there — "
+      + "fill in at least one, or withdraw the pack if you want it off the shelf altogether",
+      409, "ListingEmptyError");
   }
 }
 
@@ -123,35 +164,48 @@ function assertNotVerbatim(listing: Listing, instructions: string): void {
 }
 
 /**
- * Replace whatever draft exists for this pack with a freshly generated one.
+ * Replace whatever draft exists for this pack with one a person saved.
  *
- * Prefer `saveGeneratedDraft` for anything a model wrote: it carries the
- * live FAQ forward, which approval would otherwise delete.
+ * This is the human path, and the draft it writes is marked as such: the
+ * author takes responsibility for its contents, so approval publishes the
+ * FAQ exactly as they left it, deletions included. A human editing a
+ * generated draft flips it — the upsert below writes `authored_by` like any
+ * other column — which is the point: once somebody has read a generated FAQ
+ * and saved it, the entries in it are theirs.
+ *
+ * Use `saveGeneratedDraft` for anything a model wrote: a generator knows
+ * nothing of the answers published out of a buyer exchange, so its draft
+ * carries the live FAQ forward and can never delete one.
  */
 export async function saveDraft(
   packId: string, listing: Listing, sourceVersion: number | null,
 ): Promise<void> {
+  // Emptiness first: it needs no pack row, and an empty listing cannot
+  // repeat the instructions anyway.
+  if (!hasContent(listing)) throw new ListingEmptyError();
   const pack = await P.packById(packId);
   if (pack) assertNotVerbatim(listing, pack.instructions);
-  await writeDraft(packId, listing, sourceVersion);
+  await writeDraft(packId, listing, sourceVersion, "human");
 }
 
 /** The write itself, with nothing judged — every caller above guards first. */
 async function writeDraft(
-  packId: string, listing: Listing, sourceVersion: number | null,
+  packId: string, listing: Listing, sourceVersion: number | null, authoredBy: DraftAuthor,
 ): Promise<void> {
   const s = await sql();
   await s.query(
     `INSERT INTO pack_listing_drafts
-       (pack_id, description, use_cases, limitations, faq, scenarios, requirements, generated_at, source_version)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (pack_id, description, use_cases, limitations, faq, scenarios, requirements, generated_at, source_version,
+        authored_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (pack_id) DO UPDATE SET
        description = EXCLUDED.description, use_cases = EXCLUDED.use_cases, limitations = EXCLUDED.limitations,
        faq = EXCLUDED.faq, scenarios = EXCLUDED.scenarios, requirements = EXCLUDED.requirements,
-       generated_at = EXCLUDED.generated_at, source_version = EXCLUDED.source_version`,
+       generated_at = EXCLUDED.generated_at, source_version = EXCLUDED.source_version,
+       authored_by = EXCLUDED.authored_by`,
     [packId, listing.description, JSON.stringify(listing.useCases), JSON.stringify(listing.limitations),
       JSON.stringify(listing.faq), JSON.stringify(listing.scenarios), JSON.stringify(listing.requirements),
-      now(), sourceVersion]);
+      now(), sourceVersion, authoredBy]);
 }
 
 /**
@@ -182,16 +236,20 @@ export async function saveGeneratedDraft(
   await writeDraft(packId, {
     ...listing,
     faq: mergeFaq(live?.faq ?? [], listing.faq),
-  }, sourceVersion);
+  }, sourceVersion, "generator");
 }
 
 /**
- * `packs.faq` has two writers, and both of them read it, change it in memory
- * and write the whole column back: `approveDraft` here, and
+ * `packs.faq` has three writers, and each of them reads it, changes it in
+ * memory and writes the whole column back: `approveDraft` here,
  * `publishToFaq` in `messages.ts`, where a creator quotes a buyer's question
- * and their own answer onto the page. Interleave those two read-modify-write
- * cycles and the loser's entry is gone — the exact content loss the FAQ merge
- * exists to prevent, arrived at from the other direction.
+ * and their own answer onto the page, and `importPack`'s merge in
+ * `authoring.ts`, where a folder's own `faq:` block arrives. Interleave two of
+ * those read-modify-write cycles and the loser's entry is gone — the exact
+ * content loss the FAQ merge exists to prevent, arrived at from the other
+ * direction. (`updatePack` is not a fourth: it leaves the column out of its
+ * SET list unless its caller states a FAQ, so a details-form save is not a
+ * writer of it at all.)
  *
  * There is no transaction primitive to reach for: `src/app/sql.ts` exposes
  * `query`/`one`/`exec`/`close`, and adding one is a change with its own
@@ -204,22 +262,15 @@ export async function saveGeneratedDraft(
  * and an older row can hold SQL NULL where a newer one holds `''` — and in
  * both dialects `NULL = NULL` is not true, which would turn a retry loop
  * into a guaranteed failure on exactly those rows.
- */
-const FAQ_WRITE_ATTEMPTS = 5;
-
-export class FaqContendedError extends DomainError {
-  constructor() {
-    super("the FAQ was being written by somebody else at the same time — try that again",
-      409, "FaqContendedError");
-  }
-}
-
-/**
- * Read `packs.faq`, let the caller decide what it should become, and write it
- * back only if nobody else changed it in between.
  *
- * The one place `packs.faq` is appended to, so a second writer cannot be
- * added without inheriting the guard.
+ * `FAQ_WRITE_ATTEMPTS` and `FaqContendedError` live in `errors.ts` because
+ * `authoring.ts` needs them too and may not import this module; re-exported
+ * above, since the condition is this module's subject.
+ *
+ * All of which is what the function below does: read `packs.faq`, let the
+ * caller decide what it should become, and write it back only if nobody else
+ * changed it in between. It is the one place `packs.faq` is appended to, so a
+ * second appender cannot be added without inheriting the guard.
  */
 export async function updateFaq(packId: string, next: (live: FaqEntry[]) => FaqEntry[]): Promise<void> {
   const s = await sql();
@@ -251,26 +302,39 @@ export async function approveDraft(orgId: string, slug: string): Promise<void> {
   const isCurator = curator !== null && curator === orgId;
   if (!isAuthor && !isCurator) throw new NotTheAuthorError();
 
-  const draft = await draftFor(pack.id);
-  if (!draft) throw new PackConflictError("there is no draft to approve");
+  const pending = await draftWithMeta(pack.id);
+  if (!pending) throw new PackConflictError("there is no draft to approve");
+  const draft = pending.listing;
 
-  // The draft was seeded from the live FAQ when it was generated, but a
-  // creator can publish another answer out of the inbox in between — so the
-  // union is taken again here, at the moment of writing. Publishing a listing
-  // is never the thing that deletes an answer somebody wrote to a buyer.
+  // The FAQ is the one field whose publication depends on who wrote the draft.
+  //
+  // A generated draft was seeded from the live FAQ when it was generated, but
+  // a creator can publish another answer out of the inbox in between — so for
+  // a generator the union is taken again here, at the moment of writing.
+  // Publishing a *generated* listing is never the thing that deletes an
+  // answer somebody wrote to a buyer.
+  //
+  // A draft a person saved is the opposite case, and the merge was never
+  // meant to cover it: they read the questions in the box, changed them and
+  // pressed save, so their version is the whole FAQ — a corrected answer
+  // reaches the page and a deleted one leaves it. Without this branch nothing
+  // in the application could edit a live answer at all, while the screen
+  // said otherwise.
   //
   // "At the moment of writing" has to mean it: between this read and this
   // write, `publishToFaq` can land. So the pack is re-read each attempt, the
-  // union recomputed from what is actually stored, and the write conditional
+  // value recomputed from what is actually stored, and the write conditional
   // on that value — the same compare-and-set `updateFaq` makes, extended over
   // the other five columns this statement also sets. See `updateFaq` above
-  // for why this is not a transaction.
+  // for why this is not a transaction. On the human path the retry re-reads
+  // and then still writes the author's own list, which is what authoritative
+  // means: an answer published in that gap is one they did not keep.
   const s = await sql();
   for (let attempt = 1; attempt <= FAQ_WRITE_ATTEMPTS; attempt += 1) {
     const current = await P.packById(pack.id);
     if (!current) throw new PackConflictError(`no pack at /packs/${slug}`);
     const was = current.faq ?? "";
-    const faq = mergeFaq(listingOf(current).faq, draft.faq);
+    const faq = pending.authoredBy === "human" ? draft.faq : mergeFaq(listingOf(current).faq, draft.faq);
     const written = await s.query<{ id: string }>(
       `UPDATE packs SET description = $1, use_cases = $2, limitations = $3, faq = $4, scenarios = $5,
          requirements = $6, listing_approved_at = $7, listing_stale_at = NULL

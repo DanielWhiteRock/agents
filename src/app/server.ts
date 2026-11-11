@@ -883,6 +883,10 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       pack,
       live: L.hasListing(pack) ? L.listingOf(pack) : null,
       draft: pending?.listing ?? null,
+      // No draft means no editor and no copy about one; "generator" is the
+      // reading an unmarked row gets everywhere else, so it is the default
+      // here too rather than a second spelling of "none".
+      draftAuthor: pending?.authoredBy ?? "generator",
       generatedAt: pending?.generatedAt ?? null,
       sourceVersion: pending?.sourceVersion ?? null,
       currentVersion: v?.version ?? null,

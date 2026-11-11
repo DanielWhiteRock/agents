@@ -32,9 +32,12 @@ let nextPort = 49200 + Math.floor(Math.random() * 4000);
  *
  * Call `stop()` once done with it.
  */
-export async function startServer() {
+export async function startServer(opts = {}) {
   const port = nextPort++;
-  const dbPath = join(mkdtempSync(join(tmpdir(), "http-")), "t.db");
+  // `opts.dbPath` points the server at a database that already exists — which
+  // is how `upgrade.test.mjs` makes the current build meet an old-shaped store
+  // instead of one it created itself.
+  const dbPath = opts.dbPath ?? join(mkdtempSync(join(tmpdir(), "http-")), "t.db");
   const child = spawn(process.execPath, ["dist/src/app/server.js"], {
     cwd: ROOT,
     // DATABASE_URL is cleared explicitly: an ambient one in the parent

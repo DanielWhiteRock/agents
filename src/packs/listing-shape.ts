@@ -26,6 +26,17 @@ export type Listing = {
   requirements: string[];
 };
 
+/**
+ * Who wrote the draft waiting on `pack_listing_drafts`.
+ *
+ * Here rather than in `src/app/listing.ts` for the same reason the shape is:
+ * the three layers that have to agree about it cannot all reach one another.
+ * `listing.ts` stores it, `server.ts` passes it along, and `views.ts` says
+ * what approval will do with it — and `views.ts` may not import `listing.ts`,
+ * which would pull the runtime into a render module's graph.
+ */
+export type DraftAuthor = "human" | "generator";
+
 /** The six stored columns, shared by `packs` and `pack_listing_drafts`. */
 export type ListingColumns = {
   description: string; use_cases: string; limitations: string;
@@ -127,15 +138,33 @@ export function listingFromColumns(row: ListingColumns): Listing {
  * a creator wrote to a buyer who actually asked.
  */
 export function mergeFaq(live: FaqEntry[], proposed: FaqEntry[]): FaqEntry[] {
-  const seen = new Set(live.map((f) => f.q.trim().toLowerCase()));
+  const seen = new Set(live.map(faqKey));
   const out = [...live];
   for (const entry of proposed) {
-    const key = entry.q.trim().toLowerCase();
+    const key = faqKey(entry);
     if (!key || seen.has(key)) continue;
     seen.add(key);
     out.push({ q: entry.q.trim(), a: entry.a.trim() });
   }
   return out;
+}
+
+/** A question as its identity: asked twice in any casing, it is one entry. */
+const faqKey = (f: FaqEntry): string => f.q.trim().toLowerCase();
+
+/**
+ * The live entries a proposed FAQ does not carry — which, for a draft its
+ * author saved, is the list of answers approving it will take off the page.
+ *
+ * Beside `mergeFaq` because it has to agree with it about what makes two
+ * questions the same one, and because the approval screen needs it: it can
+ * then name what is about to be removed instead of leaving the author to
+ * notice. A generated draft never removes anything, so this is only asked
+ * on the human branch.
+ */
+export function faqRemovedBy(live: FaqEntry[], proposed: FaqEntry[]): FaqEntry[] {
+  const kept = new Set(proposed.map(faqKey));
+  return live.filter((f) => !kept.has(faqKey(f)));
 }
 
 // --------------------------------------------------------------- the form
