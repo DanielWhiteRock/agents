@@ -140,9 +140,10 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const s = await sql();
   const packId = id("pk");
   await s.query(
-    // `price_cents` is written explicitly, as 0 — see `seedCatalog`. It is the
-    // dead half of the old money model, but it is NOT NULL and has no DEFAULT
-    // on any database that predates the millipoints rename.
+    // `price_cents` is written explicitly, as 0 — it is NOT NULL and has no
+    // DEFAULT on any database that predates the millipoints rename, and
+    // nothing reads it. `seedCatalog` carries the full reasoning for the
+    // value, including why it is not `pricePoints * 400`.
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_cents, price_points,
        upgrade_points, model, effort, pinned_models, extras, instructions, tags, image, role, status,
        author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on,
