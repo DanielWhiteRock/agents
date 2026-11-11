@@ -521,3 +521,67 @@ test("buy_pack treats an unlisted pack exactly like a missing slug", async () =>
   assert.equal(hidden, `There is no pack called "${slug}". Try search_packs.`);
   assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
 });
+
+// --------------------------------------------------------------- Task 9
+
+test("my_balance reports points, not dollars", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const out = await callTool(token, "my_balance", {});
+  assert.doesNotMatch(out, /\$/);
+  assert.match(out, /500/);
+});
+
+test("top_up returns a link and charges nothing", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const out = await callTool(token, "top_up", { amount_points: 500 });
+  assert.match(out, new RegExp(`${server.baseUrl}/ledger/topup`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.equal(await Points.balanceMillipoints(orgId), before);
+});
+
+test("my_library marks a row whose pack has a newer version", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+
+  const { pack, authorOrgId } = await listedPack({
+    slug: `mcp-acquire-library-behind-${++n}`, name: "Library Behind", pricePoints: 0,
+  });
+  const v1 = await P.latestVersion(pack.id);
+  await P.grantEntitlement(orgId, v1.id);
+
+  // The author publishes a second version after the entitlement was
+  // granted, so the row above is now pinned behind the catalog's latest.
+  await Auth.updatePack(authorOrgId, pack.slug, {
+    slug: pack.slug, name: pack.name, tagline: pack.tagline, author: pack.author,
+    model: pack.model, pricePoints: pack.price_points, upgradePoints: pack.upgrade_points,
+    instructions: "Version two instructions, now updated.",
+  });
+  await P.publishPack(pack.slug);
+
+  const out = await callTool(token, "my_library", {});
+  assert.match(out, /behind latest \(version 2\)/);
+});
+
+test("my_library leaves a current row unmarked", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-library-current-${++n}`, name: "Library Current", pricePoints: 0,
+  });
+  const v1 = await P.latestVersion(pack.id);
+  await P.grantEntitlement(orgId, v1.id);
+
+  const out = await callTool(token, "my_library", {});
+  assert.match(out, /Library Current/);
+  assert.doesNotMatch(out, /behind latest/);
+});

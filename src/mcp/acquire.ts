@@ -191,18 +191,63 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
     title: "What this organisation owns",
     description:
       "The packs this organisation has bought, with the version each entitlement is pinned to. A pack bought at "
-      + "version 2 keeps running version 2 until it is deliberately upgraded.",
+      + "version 2 keeps running version 2 until it is deliberately upgraded — and a row is marked when a newer "
+      + "version has since been published, so that staleness is never silent.",
     inputSchema: {},
   }, async () => {
     const s = await sql();
-    const rows = await s.query<{ name: string; slug: string; version: number; acquired_at: string }>(
-      `SELECT pk.name, pk.slug, pv.version, e.acquired_at
+    const rows = await s.query<{ pack_id: string; name: string; slug: string; version: number; acquired_at: string }>(
+      `SELECT pk.id AS pack_id, pk.name, pk.slug, pv.version, e.acquired_at
        FROM entitlements e
        JOIN pack_versions pv ON pv.id = e.pack_version_id
        JOIN packs pk ON pk.id = pv.pack_id
        WHERE e.org_id = $1 ORDER BY e.acquired_at DESC`, [ctx.orgId]);
     if (rows.length === 0) return text("This organisation does not own any packs yet. Use search_packs to look.");
-    return text(rows.map((r) => `${r.name} (${r.slug}) · version ${r.version} · since ${r.acquired_at.slice(0, 10)}`).join("\n"));
+    // The entitled version is read from the row itself; the latest is a
+    // fresh lookup per pack, never assumed — a publish that happened after
+    // the entitlement was granted is exactly what this marker exists to
+    // surface, so it must be computed now, not cached on the row.
+    const lines = await Promise.all(rows.map(async (r) => {
+      const latest = await P.latestVersion(r.pack_id);
+      const behind = latest && latest.version !== r.version ? ` · behind latest (version ${latest.version})` : "";
+      return `${r.name} (${r.slug}) · version ${r.version} · since ${r.acquired_at.slice(0, 10)}${behind}`;
+    }));
+    return text(lines.join("\n"));
+  });
+
+  server.registerTool("my_balance", {
+    title: "What this organisation can spend",
+    description:
+      "This organisation's points balance, with its most recent ledger activity — grants, top-ups, earnings and "
+      + "what has been spent, each in points. Call top_up to add more.",
+    inputSchema: {},
+  }, async () => {
+    const bal = await balanceMillipoints(ctx.orgId);
+    const s = await sql();
+    const rows = await s.query<{ bucket: string; delta_millipoints: number; reason: string; created_at: string }>(
+      `SELECT bucket, delta_millipoints, reason, created_at FROM points_ledger
+       WHERE org_id = $1 ORDER BY created_at DESC LIMIT 10`, [ctx.orgId]);
+    const lines = rows.map((r) =>
+      `${r.created_at.slice(0, 10)} · ${r.bucket} · ${pts(r.delta_millipoints)} · ${r.reason}`);
+    return text([
+      `Balance: ${pts(bal)}`,
+      "",
+      ...(lines.length ? ["Recent activity:", ...lines] : ["No ledger activity yet."]),
+    ].join("\n"));
+  });
+
+  server.registerTool("top_up", {
+    title: "Add points to the balance",
+    description:
+      "Points are bought with a card, which this server cannot take — this returns the link to top up in a "
+      + "browser. Nothing is charged here; this call never moves money or points by itself.",
+    inputSchema: {
+      amount_points: z.number().int().positive().describe("How many points you intend to add, so the top-up page can be opened pre-filled."),
+    },
+  }, async ({ amount_points }) => {
+    return text(
+      `To add ${price(amount_points)} to this organisation's balance, open ${ctx.baseUrl}/ledger/topup — `
+      + "this server cannot charge a card itself.");
   });
 
   server.registerTool("install_pack", {
