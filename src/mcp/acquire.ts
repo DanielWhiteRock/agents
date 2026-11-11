@@ -2,9 +2,69 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as P from "../app/platform.js";
+import * as Pay from "../billing/purchases.js";
 import { sql } from "../app/sql.js";
-import { text, price } from "./reply.js";
+import { text, price, REASON } from "./reply.js";
 import type { McpContext } from "./server.js";
+
+/**
+ * "No such pack" — the one sentence a draft, in-review, or truly missing
+ * slug must all produce, byte for byte, so the response can never be used to
+ * tell an unlisted pack apart from one that was never claimed at all.
+ */
+const notFound = (slug: string): string => `There is no pack called "${slug}". Try search_packs.`;
+
+/**
+ * Hand a pack's instructions into the calling agent's own session.
+ *
+ * Rules, in order: not `listed` → not found. Free → buy it for zero points
+ * (which grants the entitlement) and return it. Paid and already entitled →
+ * return it. Paid and not entitled → refuse, naming the price and `buy_pack`,
+ * with no fragment of the instructions themselves.
+ *
+ * `P.exportPack` always regenerates against the pack's *latest* published
+ * version, and authorizes against that same version — so an organisation
+ * entitled only to an older version is refused here exactly as a stranger
+ * would be, even though it does own a version of this pack. That is a known
+ * gap in `exportPack` itself (see the Task 7 report), not something this
+ * function papers over.
+ */
+export async function loadPack(
+  ctx: McpContext, slug: string,
+): Promise<{ ok: true; markdown: string } | { ok: false; message: string }> {
+  const p = await P.getPack(slug);
+  // Draft or in-review packs never reach `search_packs` or `pack_details`
+  // either (see `shelf.ts`) and must not become loadable just because the
+  // slug leaked out.
+  if (!p || p.status !== "listed") return { ok: false, message: notFound(slug) };
+
+  const v = await P.latestVersion(p.id);
+  if (!v) return { ok: false, message: `${p.name} has not been published yet, so there is nothing to load.` };
+
+  if (p.price_points === 0) {
+    // `buyWithPoints` already grants the entitlement for a zero-price
+    // purchase — this is how a free pack ends up owned, not a hand-rolled
+    // insert.
+    await Pay.buyWithPoints({
+      orgId: ctx.orgId, userId: ctx.userId, packVersionId: v.id, packId: p.id,
+      pricePoints: 0, description: p.name,
+    });
+  } else if (!(await P.entitled(ctx.orgId, v.id))) {
+    return {
+      ok: false,
+      message: `${p.name} costs ${price(p.price_points)} and this organisation does not own it. `
+        + "Call buy_pack to buy it — load_pack will hand over its instructions once this organisation owns it.",
+    };
+  }
+
+  const markdown = await P.exportPack(ctx.orgId, slug);
+  return {
+    ok: true,
+    // `v` was just re-read as `P.latestVersion`, so this is always the
+    // newest published version — there is no newer one to flag.
+    markdown: `Serving version ${v.version} of ${p.name} — the latest published; no newer version exists.\n\n${markdown}`,
+  };
+}
 
 export function registerAcquire(server: McpServer, ctx: McpContext): void {
   server.registerTool("my_library", {
@@ -33,7 +93,10 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
     inputSchema: { slug: z.string().describe("The pack's slug.") },
   }, async ({ slug }) => {
     const p = await P.getPack(slug);
-    if (!p) return text(`There is no pack called "${slug}".`);
+    // A draft or in-review pack must read exactly as a missing slug does —
+    // `P.getPack` carries no status filter, so this tool enforces it itself
+    // (Ruling R8, carried from Task 3's fix to `pack_details`).
+    if (!p || p.status !== "listed") return text(notFound(slug));
     const v = await P.latestVersion(p.id);
     if (!v) return text(`${p.name} has not been published yet, so there is nothing to install.`);
     if (await P.entitled(ctx.orgId, v.id)) {
@@ -61,5 +124,18 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
         ? `This organisation does not own ${slug}, so it cannot be exported. Buy it at ${ctx.baseUrl}/packs/${slug}`
         : m);
     }
+  });
+
+  server.registerTool("load_pack", {
+    title: "Load a pack's instructions into this session",
+    description:
+      "Hands a pack's full instructions straight into this session, so it can be run here instead of ending in "
+      + "a URL to finish in a browser. A free pack goes to any signed-in organisation, and buying it for zero "
+      + "points happens automatically. A paid pack goes only to an organisation that already owns it — buy it "
+      + "first with buy_pack.",
+    inputSchema: { slug: z.string().describe("The pack's slug, from search_packs."), reason: REASON },
+  }, async ({ slug, reason }) => {
+    const result = await loadPack(ctx, slug);
+    return text(result.ok ? result.markdown : result.message, reason);
   });
 }

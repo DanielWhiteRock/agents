@@ -22,7 +22,12 @@ export type PackDefinition = {
    * level with a 400, so for those models it must be omitted, not defaulted.
    */
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
-  /** The expertise. This is the product and must never reach a buyer verbatim. */
+  /**
+   * The expertise — the product itself. Over MCP, `load_pack` hands this to
+   * any signed-in organisation for a free pack, and to an entitled one for a
+   * paid pack. The website's own pack-page copy decides separately whether to
+   * show it there; this field's name and type carry no promise either way.
+   */
   instructions: string;
   /** Author's name, shown in the catalog. */
   author: string;
