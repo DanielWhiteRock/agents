@@ -160,3 +160,29 @@ export function rankByTerms<T extends Searchable>(packs: T[], terms: string[]): 
     .sort((a, b) => b.h - a.h || a.i - b.i)
     .map((x) => x.p);
 }
+
+
+/**
+ * The most-run workers, without letting one role fill the row.
+ *
+ * The shelf is lopsided — design has sixty-odd workers and engineering has one
+ * — so an unguarded "most run" row would be six designers, which tells a
+ * visitor about our seeding rather than about the work. A cap per role makes
+ * the row show the shelf's range at the cost of a few places.
+ *
+ * Packs arrive in the order the caller ranked them, and the cap preserves it.
+ */
+export function capPerRole<T extends { role: string }>(
+  packs: T[], perRole: number, limit: number,
+): T[] {
+  const seen = new Map<string, number>();
+  const out: T[] = [];
+  for (const p of packs) {
+    if (out.length === limit) break;
+    const n = seen.get(p.role) ?? 0;
+    if (n >= perRole) continue;
+    seen.set(p.role, n + 1);
+    out.push(p);
+  }
+  return out;
+}

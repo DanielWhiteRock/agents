@@ -366,8 +366,20 @@ code at 72 packs and 7,000, and simply shows less now.
 | 3 | Roles | the existing role row, moved here | ≥ 1 filled role |
 | 4 | What's in a worker | the anatomy strip — agensi's missing section | ≥ 1 part |
 | 5 | Most run | ranked by real runs, capped at 2 per role | ≥ 5 non-trial runs |
-| 6 | New this week | `created_at` within 7 days, newest first | ≥ 3 |
 | 6b | Somebody wrote this | the people behind the workers, and the three still unclaimed | ≥ 1 credited person |
+
+**Section 6, "New this week", is cut.** It was the only section whose content
+we cannot guarantee and whose default state is empty, and an empty freshness
+rail reads as abandonment rather than as modesty — it is the one element on the
+page that would not look *chosen*. The reasoning is in
+`docs/design/front-page-copy.md`. Section 6b does the job better: novelty with
+an author attached is a trust signal, novelty on its own is just a date. If a
+freshness line is wanted later, it belongs at the top of 6b as "Most recently
+published: <worker> by <author>", which is never empty however slow the week.
+
+**Section 5, "Most run", stays built.** At three runs it is a feature flag
+rather than a section, and it costs nothing while it stays dark — but its
+threshold is enforced in code, not by remembering.
 | 7 | It runs here | the wedge: hosted, budgeted, traced, billed in points | always |
 | 8 | Connect over MCP | the seven tools, the one endpoint | always |
 | 9 | For authors | earn on every run, cash out, keep your instructions | always |

@@ -1,5 +1,6 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
 import { ROLES } from "./roles.js";
+import { capPerRole } from "./shelf.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import { faqRemovedBy, listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
 import type { CreatorRow } from "./creators.js";
@@ -662,6 +663,9 @@ export type FrontData = {
 
 const ASSETS = "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front";
 
+/** Runs across the whole shelf before "the ones people actually run" appears. */
+export const MOST_RUN_THRESHOLD = 5;
+
 /**
  * The page somebody sees before they have an account.
  *
@@ -674,6 +678,12 @@ const ASSETS = "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front
 export function frontPage(d: FrontData): string {
   const { totals: t } = d;
   const shownRoles = d.roles.slice(0, 8);
+  // Below the threshold the row stays dark: five runs is not a ranking, it is
+  // three people trying the thing. The number lives here rather than in
+  // somebody's memory, which is what the plan asked for.
+  const mostRun = t.runs >= MOST_RUN_THRESHOLD
+    ? capPerRole(d.featured.filter((p) => p.runs > 0), 2, 6)
+    : [];
   return layout("Hire a worker", `
 <section class="hero">
   <video class="heroFilm" autoplay muted loop playsinline preload="none"
@@ -734,6 +744,14 @@ ${shownRoles.length ? `<section>
   has enough workers that you can choose between them. The rest have one or two each,
   so read the author's notes and decide whether that one suits the job. We would
   rather you learned this here than three minutes into a run.</p>
+</section>` : ""}
+
+${mostRun.length ? `<section>
+  <h2>The ones people actually run</h2>
+  <p class="lede">Ranked by runs that finished and were paid for, no more than two
+  from any one role — otherwise this row would be six designers, which would tell
+  you about our seeding rather than about the work.</p>
+  <div class="grid">${mostRun.map(frontCard).join("")}</div>
 </section>` : ""}
 
 <section class="split">

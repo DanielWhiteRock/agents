@@ -85,3 +85,43 @@ describe("the funnel", () => {
     expect(h).toContain("&lt;img");
   });
 });
+
+describe("the most-run row", () => {
+  const ran = (n: number, role: string, runs: number) =>
+    pack({ id: `pk_${n}`, name: `W${n}`, role, runs });
+
+  it("stays dark below the threshold: five runs is not a ranking", () => {
+    const h = frontPage(data({
+      totals: { packs: 71, roles: 2, authors: 6, skills: 146, runs: 4, pointsSpent: 1 },
+      featured: [ran(1, "designer", 3), ran(2, "engineer", 1)],
+    }));
+    expect(h).not.toContain("The ones people actually run");
+  });
+
+  it("appears once the shelf has enough runs behind it", () => {
+    const h = frontPage(data({
+      totals: { packs: 71, roles: 2, authors: 6, skills: 146, runs: 9, pointsSpent: 4 },
+      featured: [ran(1, "designer", 5), ran(2, "engineer", 4)],
+    }));
+    expect(h).toContain("The ones people actually run");
+    expect(h).toContain("W1");
+    expect(h).toContain("W2");
+  });
+
+  it("leaves out a worker nobody has run, even above the threshold", () => {
+    const h = frontPage(data({
+      totals: { packs: 71, roles: 2, authors: 6, skills: 146, runs: 9, pointsSpent: 4 },
+      featured: [ran(1, "designer", 9), ran(2, "engineer", 0)],
+    }));
+    expect(h).toContain("The ones people actually run");
+    expect(h).not.toContain(">W2<");
+  });
+
+  it("stays dark when every run belongs to a worker that is gone", () => {
+    const h = frontPage(data({
+      totals: { packs: 71, roles: 2, authors: 6, skills: 146, runs: 9, pointsSpent: 4 },
+      featured: [ran(1, "designer", 0)],
+    }));
+    expect(h).not.toContain("The ones people actually run");
+  });
+});
