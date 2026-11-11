@@ -544,6 +544,28 @@ const DEFAULT_SETTINGS: Record<string, string> = {
 };
 
 /**
+ * The one role this backfill is allowed to touch per pack, and only into an
+ * empty column.
+ *
+ * `guardrails` reviews another agent's output before a human acts on it, which
+ * is the Reviewer shelf; `video-brief` leaves a document a crew can act on,
+ * which is what the Writer role is defined as. Both are argued from the
+ * tagline each pack already ships, not from a guess about the instructions.
+ *
+ * `COALESCE(role, '') = ''` is the whole safety of it. A role somebody set in
+ * the editor is a human decision and outranks this list, so the statement can
+ * never overwrite one; that same guard is why running it twice is a no-op,
+ * which matters because a replayed migration here is a data change and not a
+ * column that already exists.
+ *
+ * Exported so a test can run it directly, twice, rather than inferring it
+ * from an index in the array above.
+ */
+export const ROLE_BACKFILL =
+  `UPDATE packs SET role = CASE slug WHEN 'guardrails' THEN 'reviewer' WHEN 'video-brief' THEN 'writer' END
+     WHERE slug IN ('guardrails', 'video-brief') AND COALESCE(role, '') = ''`;
+
+/**
  * Additive column migrations. CREATE TABLE IF NOT EXISTS cannot add a column,
  * and SQLite has no ADD COLUMN IF NOT EXISTS, so each is attempted and a
  * failure means it is already there.
@@ -651,6 +673,11 @@ const MIGRATIONS = [
   // older writer leaves unmarked — keeps exactly the behaviour it has today,
   // which is the direction that cannot lose an answer.
   "ALTER TABLE pack_listing_drafts ADD COLUMN authored_by TEXT NOT NULL DEFAULT 'generator'",
+  // The two packs in the catalog whose job the taxonomy actually has a shelf
+  // for. Setting it in the definition only reaches a fresh database, because
+  // `seedCatalog` inserts ON CONFLICT DO NOTHING and never updates a row that
+  // is already there — and every row on production already is.
+  ROLE_BACKFILL,
 ];
 
 /**

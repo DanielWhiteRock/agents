@@ -14,6 +14,9 @@ import type { PackDefinition } from "./types.js";
 export const PACK_ZERO: PackDefinition = {
   slug: "guardrails",
   tags: "quality, engineering",
+  // Reviewer, from its own tagline: it reads another agent's work before you
+  // act on it, which is the shelf that role describes.
+  role: "reviewer",
   image: "guardrails-hero.webp",
   name: "Guardrails Reviewer",
   tagline: "Reads another agent's work before you act on it, and tells you what not to trust.",

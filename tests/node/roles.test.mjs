@@ -183,3 +183,80 @@ test("a pack whose role matches no row renders the breadcrumb without a role seg
   assert.doesNotMatch(h, /\?q=retired-ghost-role/, "no role segment for a role nothing names");
   assert.match(h, /<span>Workers<\/span>/, "the rest of the breadcrumb still renders");
 });
+
+// ------------------------------------------------------- the role backfill
+//
+// Two packs in the catalog have a job the taxonomy has a shelf for, and both
+// are defined in code — but `seedCatalog` inserts ON CONFLICT DO NOTHING, so
+// a definition that gains a role never reaches the row already on the shelf.
+// `ROLE_BACKFILL` is the one statement that does, and it is a data change,
+// which is the kind of migration that cannot be allowed to run twice with a
+// different outcome: see the points ledger the old re-running loop emptied.
+//
+// Run directly rather than through `initDb`, because bootstrap records it in
+// `schema_migrations` and would never offer a second run to measure.
+
+/** The two slugs, as production holds them: a row that exists, with no role. */
+const seedCatalogWithEmptyRoles = async () => {
+  await P.seedCatalog();
+  const s = await sql();
+  await s.query("UPDATE packs SET role = '' WHERE slug IN ('guardrails', 'video-brief')");
+};
+
+test("the backfill fills the two empty roles, and says nothing about the other seed packs", async () => {
+  await seedCatalogWithEmptyRoles();
+  const s = await sql();
+  await s.exec(db.ROLE_BACKFILL);
+
+  const roleOf = async (slug) => (await s.one("SELECT role FROM packs WHERE slug = $1", [slug])).role;
+  assert.equal(await roleOf("guardrails"), "reviewer", "reads another agent's work before you act on it");
+  assert.equal(await roleOf("video-brief"), "writer", "leaves a document a crew can act on");
+
+  // Not an oversight. `campaign-strategist` is the Marketer blurb the evidence
+  // killed and `support-triage` is the only example of the dropped Support
+  // role, so there is no shelf either one honestly belongs on. Untagged is the
+  // decision, and a role nothing is tagged with is not advertised anyway.
+  assert.equal(await roleOf("campaign-strategist"), "", "no role is a decision, not a gap");
+  assert.equal(await roleOf("support-triage"), "");
+});
+
+test("running the backfill twice changes nothing, and a hand-set role is never overwritten", async () => {
+  await seedCatalogWithEmptyRoles();
+  const s = await sql();
+  const snapshot = async () => (await s.query(
+    "SELECT slug, role FROM packs WHERE slug IN ('guardrails', 'video-brief') ORDER BY slug"))
+    .map((r) => `${r.slug}=${r.role}`);
+
+  await s.exec(db.ROLE_BACKFILL);
+  const once = await snapshot();
+  await s.exec(db.ROLE_BACKFILL);
+  assert.deepEqual(await snapshot(), once, "the second run is a no-op — COALESCE(role, '') = '' is the guard");
+
+  // Somebody disagrees in the editor. The migration must lose that argument,
+  // on this boot and on every boot after it.
+  await s.query("UPDATE packs SET role = 'designer' WHERE slug = 'video-brief'");
+  await s.exec(db.ROLE_BACKFILL);
+  await s.exec(db.ROLE_BACKFILL);
+  assert.equal((await s.one("SELECT role FROM packs WHERE slug = 'video-brief'")).role, "designer",
+    "a human's choice outranks the list in the migration");
+
+  await s.query("UPDATE packs SET role = 'writer' WHERE slug = 'video-brief'");
+});
+
+test("a fresh database needs no backfill, because the definitions carry the roles", async () => {
+  // `seedCatalog` writes the column now, so the two paths agree: a new
+  // database gets the roles from `pack-zero.ts` and `seed-packs.ts`, an old
+  // one gets them from the statement above, and neither depends on the other.
+  const { SEED_PACKS } = await import("../../dist/src/packs/seed-packs.js");
+  const roleOfDefinition = (slug) => SEED_PACKS.find((p) => p.slug === slug).role ?? "";
+  assert.equal(roleOfDefinition("guardrails"), "reviewer");
+  assert.equal(roleOfDefinition("video-brief"), "writer");
+  assert.equal(roleOfDefinition("campaign-strategist"), "");
+  assert.equal(roleOfDefinition("support-triage"), "");
+
+  for (const slug of ["guardrails", "video-brief"]) {
+    const role = roleOfDefinition(slug);
+    assert.ok((await db.listRoles()).some((r) => r.id === role && r.listed),
+      `${slug} names ${role}, which is a role the table actually lists`);
+  }
+});

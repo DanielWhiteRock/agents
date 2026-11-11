@@ -560,13 +560,16 @@ export async function seedCatalog(): Promise<number> {
     // migration on a live database and a table rebuild on SQLite, so it is
     // not what belongs in a fix for an outage.
     const rows = await s.query(
+      // `role` is written here, and the migration in `db.ts` is what reaches
+      // the rows this statement will not touch: DO NOTHING means a definition
+      // that gains a role never updates the pack already on the shelf.
       `INSERT INTO packs (id, slug, name, tagline, author, price_cents, price_points, upgrade_points,
-         model, effort, pinned_models, instructions, tags, image, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
+         model, effort, pinned_models, instructions, tags, image, role, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,$13,$14,$15,'listed',$12)
        ON CONFLICT (slug) DO NOTHING RETURNING id`,
       [id("pk"), p.slug, p.name, p.tagline, p.author, p.pricePoints, p.upgradePoints, p.model,
         p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now(),
-        p.tags ?? "", p.image ?? null]);
+        p.tags ?? "", p.image ?? null, p.role ?? ""]);
     n += rows.length;
   }
   return n;
