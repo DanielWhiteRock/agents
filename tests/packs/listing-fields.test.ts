@@ -4,6 +4,7 @@ import {
   packPage, catalogPage, creatorPage, creatorEditorPage, listingApprovalPage, type PackPageExtras,
 } from "../../src/app/views.js";
 import { hasListing, type Listing } from "../../src/app/listing.js";
+import { listingFromForm, listingToForm } from "../../src/packs/listing-shape.js";
 import type { PackRow, PackVersionRow } from "../../src/app/platform.js";
 import type { CreatorRow } from "../../src/app/creators.js";
 
@@ -809,5 +810,90 @@ describe("the listing approval screen", () => {
   it("shows the submitted error beside the draft", () => {
     const h = listingApprovalPage(approvalArgs({ err: "there is no draft to approve" }));
     expect(h).toContain("there is no draft to approve");
+  });
+});
+
+// ------------------------------------------- the draft is editable, or else
+//
+// Without an editor, approval is approve-verbatim or nothing: the six listing
+// fields had exactly two writers (a folder import and the generator), so an
+// author who disagreed with one sentence could publish it anyway, publish
+// nothing, or pay for another model call. The spec says twice that the author
+// "edits freely, and approves", and chose per-pack approval because of it.
+
+describe("editing a proposed listing", () => {
+  it("renders the proposed column as fields, one per listing field", () => {
+    const h = listingApprovalPage(approvalArgs({ draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z" }));
+    expect(h).toContain(`action="/packs/senior-engineer/listing"`);
+    for (const name of ["description", "useCases", "scenarios", "limitations", "faq", "requirements"]) {
+      expect(h).toContain(`name="${name}"`);
+    }
+    // The boxes are filled with what the generator wrote, not left blank.
+    expect(h).toContain("Three bodies of work, pulling against each other.");
+    expect(h).toContain("Review a branch before it merges");
+    expect(h).toContain("Q: Does it write to the branch?");
+    expect(h).toContain("Brief: Review this branch");
+  });
+
+  it("carries the pack page's scenario disclaimer onto the approval screen", () => {
+    const editable = listingApprovalPage(approvalArgs({ draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z" }));
+    expect(editable).toMatch(/Written examples, not recorded runs/);
+    // And in the read-only column a member sees, which is the same prose.
+    const readOnly = listingApprovalPage(approvalArgs({
+      draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", canApprove: false,
+    }));
+    expect(readOnly).toMatch(/Written examples, not recorded runs/);
+  });
+
+  it("gives a member no form to post, the same way it gives them no button", () => {
+    const h = listingApprovalPage(approvalArgs({
+      draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", canApprove: false,
+    }));
+    expect(h).not.toContain(`action="/packs/senior-engineer/listing"`);
+    expect(h).not.toContain("<textarea");
+  });
+
+  it("says a save is still only a draft", () => {
+    const h = listingApprovalPage(approvalArgs({
+      draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", saved: true,
+    }));
+    expect(h).toMatch(/Draft saved/);
+    expect(h).toMatch(/still a draft/);
+  });
+
+  it("round-trips a listing through the form and back unchanged", () => {
+    expect(listingFromForm(listingToForm(FULL))).toEqual(FULL);
+  });
+
+  it("reads lists one per line and the object fields as labelled blocks", () => {
+    const l = listingFromForm({
+      description: "One paragraph.\n\nAnd another.",
+      useCases: "Review a branch\n  Find the bug  \n\n",
+      limitations: "Needs a diff",
+      requirements: "A git remote",
+      faq: "Q: Does it write?\nA: No.\nIt reads, and reports.\n---\nQ: Models?\nA: Opus.",
+      scenarios: "Brief: A noisy refactor\nReached: bash, read\nOutput: three findings\nworst first\n---\n"
+        + "Brief: A dependency bump\nReached: read\nOutput: one question",
+    });
+    expect(l.useCases).toEqual(["Review a branch", "Find the bug"]);
+    expect(l.faq).toEqual([
+      { q: "Does it write?", a: "No.\nIt reads, and reports." },
+      { q: "Models?", a: "Opus." },
+    ]);
+    expect(l.scenarios).toEqual([
+      { brief: "A noisy refactor", reached: ["bash", "read"], output: "three findings\nworst first" },
+      { brief: "A dependency bump", reached: ["read"], output: "one question" },
+    ]);
+  });
+
+  it("drops an entry a person emptied out rather than storing a blank card", () => {
+    const l = listingFromForm({ faq: "Q:\nA: an answer to nothing", scenarios: "---\n---" });
+    expect(l.faq).toEqual([]);
+    expect(l.scenarios).toEqual([]);
+  });
+
+  it("takes an unlabelled first line as the question, so a hand-typed entry still lands", () => {
+    const l = listingFromForm({ faq: "Does it write?\nA: No." });
+    expect(l.faq).toEqual([{ q: "Does it write?", a: "No." }]);
   });
 });

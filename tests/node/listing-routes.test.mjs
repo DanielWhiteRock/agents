@@ -329,3 +329,73 @@ test("a pack with no stored tools gets the platform-level statement, in a buyer'
   assert.match(page, /run unattended, without pausing for approval/);
   assert.doesNotMatch(page, /no tools recorded/, "an internals report is not a disclosure");
 });
+
+// ----------------------------------------------- editing before approving
+//
+// `POST /packs/:slug/listing` is the writer that did not exist: the six
+// listing fields had exactly two, a folder import and the generator, so the
+// approval screen's only choices were publish-verbatim, publish-nothing, or
+// pay for another model call. The spec says twice that the author "edits
+// freely, and approves".
+
+test("an author edits a generated draft and approves what they wrote, not what the model wrote", async () => {
+  const { pack, cookie } = await authorWithPack();
+  await L.saveDraft(pack.id, DRAFT, 1);
+
+  // The screen hands back fields, filled with the generator's words.
+  const screen = await (await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, { headers: { cookie } })).text();
+  assert.match(screen, new RegExp(`action="/packs/${pack.slug}/listing"`));
+  assert.match(screen, /<textarea name="description"/);
+
+  const saved = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, form(cookie, {
+    description: "Audits a branch before it merges, and says so plainly.",
+    useCases: "Review a branch\nRead a dependency bump",
+    limitations: "Needs a real diff",
+    requirements: "A git remote",
+    faq: "Q: Does it write?\nA: No — it reads and reports.",
+    scenarios: "Brief: A noisy refactor\nReached: read, bash\nOutput: three findings, worst first",
+  }));
+  assert.equal(saved.status, 303);
+  assert.equal(saved.headers.get("location"), `/packs/${pack.slug}/listing?saved=1`);
+
+  // Saved as a draft — and still nothing a buyer can see.
+  const draft = await L.draftFor(pack.id);
+  assert.equal(draft.description, "Audits a branch before it merges, and says so plainly.");
+  assert.deepEqual(draft.useCases, ["Review a branch", "Read a dependency bump"]);
+  assert.deepEqual(draft.faq, [{ q: "Does it write?", a: "No — it reads and reports." }]);
+  assert.deepEqual(draft.scenarios, [
+    { brief: "A noisy refactor", reached: ["read", "bash"], output: "three findings, worst first" },
+  ]);
+  assert.equal((await P.getPack(pack.slug)).description, "", "a save publishes nothing");
+
+  const approved = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing/approve`, form(cookie));
+  assert.equal(approved.status, 303);
+  const after = await P.getPack(pack.slug);
+  assert.equal(after.description, "Audits a branch before it merges, and says so plainly.",
+    "the author's wording is what reaches the buyer");
+  assert.deepEqual(L.listingOf(after).useCases, ["Review a branch", "Read a dependency bump"]);
+});
+
+test("a hand-written draft that pastes the method back is refused with the reason", async () => {
+  // The copy-quality guard lives in `saveDraft`, so it covers a person
+  // typing the instructions into the box exactly as it covers a generator.
+  const { pack, cookie } = await authorWithPack();
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, form(cookie, {
+    description: `${INSTRUCTIONS} ${INSTRUCTIONS}`,
+  }));
+  assert.equal(res.status, 303);
+  assert.match(decodeURIComponent(res.headers.get("location")), /verbatim/);
+  assert.equal(await L.draftFor(pack.id), null, "nothing was written");
+});
+
+test("a stranger cannot edit another organisation's draft", async () => {
+  const { pack } = await authorWithPack();
+  await L.saveDraft(pack.id, DRAFT, 1);
+  const stranger = await A.signUp({
+    email: email(), name: "Stranger", password: "correct-horse-battery-staple", orgName: `Stranger Co ${++n}`,
+  });
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`,
+    form(await cookieFor(stranger.userId), { description: "Mine now." }));
+  assert.ok(res.status === 403 || res.status === 404, `got ${res.status}`);
+  assert.equal((await L.draftFor(pack.id)).description, DRAFT.description, "the draft is untouched");
+});

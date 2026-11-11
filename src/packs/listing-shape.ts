@@ -137,3 +137,109 @@ export function mergeFaq(live: FaqEntry[], proposed: FaqEntry[]): FaqEntry[] {
   }
   return out;
 }
+
+// --------------------------------------------------------------- the form
+//
+// A generated draft has to be editable before it is approved. The spec says
+// twice that the author "edits freely, and approves", and chose per-pack
+// approval *because* the author edits — without an editor, approval is
+// approve-verbatim or nothing, and the human gate against "a page that
+// out-promises the pack" offers only: publish the wrong sentence, publish
+// nothing, or pay for another model call.
+//
+// So the approval screen renders the proposed listing as text a person can
+// change, and this is the codec between that text and the stored shape. It
+// lives here because both sides need it and neither may import the other:
+// `views.ts` is a pure render module (it must not pull the runtime into its
+// graph) and `server.ts` parses the posted form.
+//
+// The two list-of-objects fields need a representation a person can type.
+// Blocks separated by a line of `---`, each line labelled, and a label's
+// value running to the end of the block so an answer or an output can have
+// paragraphs in it. Unlabelled leading text is the first field, so a
+// one-line question with no `Q:` still parses rather than vanishing.
+
+export type ListingForm = {
+  description: string; useCases: string; limitations: string;
+  requirements: string; faq: string; scenarios: string;
+};
+
+const BLOCK_SEPARATOR = /^\s*---+\s*$/;
+
+const lines = (raw: string): string[] =>
+  raw.replace(/\r\n/g, "\n").split("\n").map((l) => l.trim()).filter(Boolean);
+
+/** Split a textarea into blocks on a `---` line, dropping the empty ones. */
+function blocks(raw: string): string[][] {
+  const out: string[][] = [];
+  let current: string[] = [];
+  for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
+    if (BLOCK_SEPARATOR.test(line)) {
+      out.push(current);
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  out.push(current);
+  return out.filter((b) => b.some((l) => l.trim()));
+}
+
+/**
+ * One block as its labelled fields. `labels` maps a label, lowercased and
+ * without its colon, to the field it fills; the first entry is also where
+ * unlabelled leading text goes.
+ */
+function labelled(block: string[], labels: Record<string, string>, first: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  let field = first;
+  for (const line of block) {
+    const m = /^\s*([A-Za-z ]{1,16}):\s?(.*)$/.exec(line);
+    const key = m ? labels[m[1]!.trim().toLowerCase()] : undefined;
+    if (m && key) {
+      field = key;
+      out[field] = m[2]!;
+    } else {
+      out[field] = out[field] === undefined ? line : `${out[field]}\n${line}`;
+    }
+  }
+  for (const [k, v] of Object.entries(out)) out[k] = v.trim();
+  return out;
+}
+
+const FAQ_LABELS = { q: "q", question: "q", a: "a", answer: "a" };
+const SCENARIO_LABELS = {
+  brief: "brief", reached: "reached", "reached for": "reached", output: "output",
+};
+
+/** What a person typed, as the listing it describes. */
+export function listingFromForm(f: Partial<Record<keyof ListingForm, string>>): Listing {
+  return listingFromParts({
+    description: (f.description ?? "").replace(/\r\n/g, "\n").trim(),
+    useCases: lines(f.useCases ?? ""),
+    limitations: lines(f.limitations ?? ""),
+    requirements: lines(f.requirements ?? ""),
+    faq: blocks(f.faq ?? "").map((b) => labelled(b, FAQ_LABELS, "q")),
+    scenarios: blocks(f.scenarios ?? "").map((b) => {
+      const parts = labelled(b, SCENARIO_LABELS, "brief");
+      return {
+        brief: parts["brief"] ?? "",
+        reached: (parts["reached"] ?? "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean),
+        output: parts["output"] ?? "",
+      };
+    }),
+  });
+}
+
+/** The same listing as the text the form shows, so a save round-trips. */
+export function listingToForm(l: Listing): ListingForm {
+  return {
+    description: l.description,
+    useCases: l.useCases.join("\n"),
+    limitations: l.limitations.join("\n"),
+    requirements: l.requirements.join("\n"),
+    faq: l.faq.map((f) => `Q: ${f.q}\nA: ${f.a}`).join("\n---\n"),
+    scenarios: l.scenarios.map((sc) =>
+      `Brief: ${sc.brief}\nReached: ${sc.reached.join(", ")}\nOutput: ${sc.output}`).join("\n---\n"),
+  };
+}

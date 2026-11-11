@@ -1,7 +1,7 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
 import { ROLES } from "./platform.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
-import type { Listing } from "./listing.js";
+import { listingToForm, type Listing } from "../packs/listing-shape.js";
 import type { CreatorRow } from "./creators.js";
 import type { Rating } from "./social.js";
 import type { InboxThread, MyThread } from "./messages.js";
@@ -1625,7 +1625,9 @@ function listingSections(l: Listing): string {
     block("What it does", l.description.trim() ? paragraphs(l.description) : ""),
     block("What you'd hire it for", l.useCases.length ? bullets(l.useCases) : ""),
     block("What a session looks like", l.scenarios.length
-      ? l.scenarios.map((s) => `<p style="margin:0 0 var(--s3)"><strong>${esc(s.brief)}</strong>
+      ? `<p style="${SECONDARY}">Written examples, not recorded runs. Nobody's real brief, repository or output
+  appears here — the same line a buyer reads above these on the pack page.</p>`
+        + l.scenarios.map((s) => `<p style="margin:0 0 var(--s3)"><strong>${esc(s.brief)}</strong>
   ${s.reached.length ? `<br><span style="${SECONDARY}">${esc(s.reached.join(" · "))}</span>` : ""}
   ${s.output ? `<br><span style="${SECONDARY}">${esc(s.output)}</span>` : ""}</p>`).join("")
       : ""),
@@ -1639,12 +1641,51 @@ function listingSections(l: Listing): string {
 }
 
 /**
+ * The proposed listing, as fields a person can change.
+ *
+ * The screen used to be a single Approve button over read-only prose, which
+ * made approval approve-verbatim or nothing: an author who disagreed with one
+ * sentence could publish it anyway, publish nothing, or pay for another model
+ * call. The spec says twice that the author "edits freely, and approves", and
+ * chose per-pack approval *because* the author edits — so this is where the
+ * editing happens, and the Approve button below publishes whatever was saved.
+ *
+ * The two list-of-objects fields are typed as labelled blocks separated by a
+ * `---` line; `listingFromForm` in `src/packs/listing-shape.ts` is the other
+ * half of that codec, and `listingToForm` here is the half that fills the
+ * boxes, so a save with nothing changed round-trips unchanged.
+ */
+function listingEditor(slug: string, draft: Listing): string {
+  const f = listingToForm(draft);
+  const field = (name: string, label: string, help: string, value: string, rows: number): string =>
+    `<p><label><strong>${label}</strong><br>
+  <span style="${SECONDARY}">${help}</span><br>
+  <textarea name="${name}" rows="${rows}" style="width:100%">${esc(value)}</textarea></label></p>`;
+  return `<form method="post" action="/packs/${esc(slug)}/listing">
+${field("description", "What it does", "Two or three paragraphs, separated by a blank line.", f.description, 7)}
+${field("useCases", "What you'd hire it for", "One per line.", f.useCases, 5)}
+${field("scenarios", "What a session looks like",
+    "Written examples, not recorded runs — never a real buyer's brief. One per block, blocks separated by a line "
+    + "of ---, lines labelled Brief:, Reached: (comma-separated) and Output:.", f.scenarios, 9)}
+${field("limitations", "Known limitations", "One per line. The ones you would want to be told.", f.limitations, 4)}
+${field("faq", "Questions people ask",
+    "One per block, blocks separated by a line of ---, lines labelled Q: and A:. An answer may run over "
+    + "several lines.", f.faq, 7)}
+${field("requirements", "Requires", "One per line.", f.requirements, 3)}
+  <button class="btn ghost" type="submit">Save the draft</button>
+  <span style="${SECONDARY};margin-left:var(--s3)">Saving changes the draft only. Nothing here reaches a buyer
+  until it is approved below.</span>
+</form>`;
+}
+
+/**
  * The one step between generated copy and a buyer.
  *
  * A generator writes drafts and nothing else; this screen is the only way a
- * draft becomes the listing. So it has two jobs: show what would be
- * published next to what is published now, and be honest that until the
- * button is pressed, nobody outside this page has seen a word of it.
+ * draft becomes the listing. So it has three jobs: show what would be
+ * published next to what is published now, let the author change it, and be
+ * honest that until the button is pressed, nobody outside this page has seen
+ * a word of it.
  */
 export function listingApprovalPage(args: {
   pack: PackRow;
@@ -1657,8 +1698,10 @@ export function listingApprovalPage(args: {
   sourceVersion: number | null;
   /** The version the pack is on now — a draft older than this describes a pack that has moved. */
   currentVersion: number | null;
-  /** Mirrors the route's own owner check: a member sees the facts, not a dead button. */
+  /** Mirrors the route's own owner check: a member sees the facts, not a dead button or a dead form. */
   canApprove: boolean;
+  /** Set after a save, so an author who changed one word is told it landed. */
+  saved?: boolean;
   balance: number;
   viewer: Viewer;
   err?: string;
@@ -1668,9 +1711,10 @@ export function listingApprovalPage(args: {
     && args.sourceVersion !== args.currentVersion;
   return layout(`Listing for ${p.name}`, `
 ${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+${args.saved ? `<div class="note">Draft saved. It is still a draft — approve it below to put it in front of buyers.</div>` : ""}
 <h1>The listing for ${esc(p.name)}</h1>
-<p class="lede">What a buyer reads before they buy. It is written by a generator and published by a person — those are
-two different steps, and this is the second one.</p>
+<p class="lede">What a buyer reads before they buy. It is drafted by a generator, edited and published by a person —
+those are two different steps, and this is the second one.</p>
 ${p.listing_stale_at ? `<div class="note"><strong>The method changed on ${esc(day(p.listing_stale_at))}.</strong>
 The live listing${p.listing_approved_at ? `, approved on ${esc(day(p.listing_approved_at))},` : ""} is out of date:
 it may no longer describe what ships. Generate it again and approve what comes back.</div>` : ""}
@@ -1690,19 +1734,20 @@ ${behind ? `<div class="note">This draft describes version ${args.sourceVersion}
   </div>
   <div class="card">
     <h3>Proposed</h3>
-    ${listingSections(draft)}
+    ${args.canApprove ? listingEditor(p.slug, draft) : listingSections(draft)}
   </div>
 </div>
 ${args.canApprove ? `<form method="post" action="/packs/${esc(p.slug)}/listing/approve" style="margin-top:var(--s4)">
   <button class="btn" type="submit">Approve and publish this listing</button>
 </form>
-<p class="lede" style="font-size:var(--t2)">Approving replaces the live copy with the proposed copy. Answers you
-published to the FAQ out of a buyer's question are kept, whatever the draft says.</p>`
-  : `<p class="lede" style="margin-top:var(--s4)">Only an owner of this organisation can publish a listing. This is
-what would be published.</p>`}`
+<p class="lede" style="font-size:var(--t2)">Approving publishes the draft as it is saved above — edit it first if a
+sentence promises more than the pack delivers. Answers you published to the FAQ out of a buyer's question are kept,
+whatever the draft says.</p>`
+  : `<p class="lede" style="margin-top:var(--s4)">Only an owner of this organisation can edit or publish a listing.
+This is what would be published.</p>`}`
   : `<p class="lede">There is no draft waiting. Generate one with
-<code>node scripts/generate-listings.mjs --slug ${esc(p.slug)}</code>, then come back here to read it before anybody
-else does.</p>
+<code>node scripts/generate-listings.mjs --slug ${esc(p.slug)}</code>, then come back here to read it, change what is
+wrong with it, and approve it before anybody else sees it.</p>
 <div class="card">
   <h3>What a buyer reads now</h3>
   ${live ? listingSections(live) : `<p class="lede">Nothing. The page shows the tagline and the price, and no more.</p>`}

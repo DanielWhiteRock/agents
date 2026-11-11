@@ -17,6 +17,7 @@ import * as L from "./listing.js";
 import * as S from "./social.js";
 import * as M from "./messages.js";
 import { permissionSummary } from "../packs/permissions.js";
+import { listingFromForm } from "../packs/listing-shape.js";
 import * as V from "./views.js";
 
 const PORT = Number(process.env["PORT"] ?? 4317);
@@ -866,9 +867,34 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       sourceVersion: pending?.sourceVersion ?? null,
       currentVersion: v?.version ?? null,
       canApprove: ctx.role === "owner",
+      saved: url.searchParams.get("saved") === "1",
       balance: await bal(), viewer,
       err: url.searchParams.get("err") ?? undefined,
     }));
+  }
+  // The author's own edit of a draft, which is the half of "edits freely, and
+  // approves" that did not exist: the six listing fields had exactly two
+  // writers, a folder import and the generator, so approval was
+  // approve-verbatim or nothing. Same gate as the approve route below —
+  // editing a draft is not publishing, but it is still the pack's own
+  // organisation's business and nobody else's. `saveDraft` upserts and runs
+  // the copy-quality guard, so a hand-written paste of the method is refused
+  // here exactly as a generated one is.
+  if (method === "POST" && listingMatch) {
+    ownerOnly();
+    const slug = listingMatch[1]!;
+    const pack = await myPackOr403(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const f = await body(req);
+    try {
+      // The draft keeps the version it was generated from, so the "from
+      // version N" badge still says what the model actually described. A
+      // listing written here with no draft behind it is of the current one.
+      const pending = await L.draftWithMeta(pack.id);
+      const sourceVersion = pending?.sourceVersion ?? (await P.latestVersion(pack.id))?.version ?? null;
+      await L.saveDraft(pack.id, listingFromForm(f), sourceVersion);
+    } catch (e) { return redirect(res, `/packs/${slug}/listing?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}/listing?saved=1`);
   }
   const approveMatch = /^\/packs\/([a-z0-9-]+)\/listing\/approve$/.exec(path);
   if (method === "POST" && approveMatch) {
