@@ -47,6 +47,20 @@ export async function creatorForOrg(orgId: string): Promise<CreatorRow | undefin
 }
 
 /**
+ * The handle behind a pack's `creator_id`, or null for a pack nobody has
+ * claimed. Both the website's pack page and the MCP `pack_details` tool need
+ * exactly this — a creator id off `packs.creator_id` resolved to its handle,
+ * nothing else of the row — so it lives here once rather than as a private
+ * copy in each caller.
+ */
+export async function creatorHandleOf(creatorId: string | null): Promise<string | null> {
+  if (!creatorId) return null;
+  const s = await sql();
+  const row = await s.one<{ handle: string }>("SELECT handle FROM creators WHERE id = $1", [creatorId]);
+  return row?.handle ?? null;
+}
+
+/**
  * Create or edit an organisation's creator profile. Keyed on org_id, so
  * saving again edits the same row rather than creating a second one; `verified`
  * is never settable here — it starts at its column default and stays there

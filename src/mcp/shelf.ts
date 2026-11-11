@@ -5,6 +5,7 @@ import * as P from "../app/platform.js";
 import { sql } from "../app/sql.js";
 import { stringsFromJson } from "../packs/listing-shape.js";
 import { permissionSummary } from "../packs/permissions.js";
+import { creatorHandleOf } from "../app/creators.js";
 import { ratingOf } from "../app/social.js";
 import { text, price, REASON } from "./reply.js";
 import { score } from "./relevance.js";
@@ -68,18 +69,6 @@ async function toolNamesByPack(): Promise<Map<string, string[]>> {
 
 /** A pack's tags, as the lowercase tokens `category` is matched against. */
 const tagTokens = (tags: string): string[] => tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
-
-/**
- * The handle behind a pack's `creator_id`, or null for a pack nobody has
- * claimed — the same fact the website's own pack page shows, read the same
- * way (`creators.ts` has no id-keyed lookup to call instead).
- */
-async function creatorHandleOf(creatorId: string | null): Promise<string | null> {
-  if (!creatorId) return null;
-  const s = await sql();
-  const row = await s.one<{ handle: string }>("SELECT handle FROM creators WHERE id = $1", [creatorId]);
-  return row?.handle ?? null;
-}
 
 /**
  * The permissions rail for one pack, in the agent's own words — the same

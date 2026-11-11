@@ -116,14 +116,6 @@ async function packNameOf(packVersionId: string): Promise<string> {
   return (await P.packById(v.pack_id))?.name ?? "?";
 }
 
-/** The handle behind a pack's `creator_id`, or null for a pack nobody has claimed. */
-async function creatorHandleOf(creatorId: string | null): Promise<string | null> {
-  if (!creatorId) return null;
-  const s = await sql();
-  const row = await s.one<{ handle: string }>("SELECT handle FROM creators WHERE id = $1", [creatorId]);
-  return row?.handle ?? null;
-}
-
 /**
  * Written opinions worth showing — a rating, a body, or both. A review row
  * with neither (both left blank at submit time) conveys nothing and is
@@ -234,7 +226,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       P.packTools(p.id),
       P.packMcpServers(p.id),
       P.effectivePolicy(v?.id ?? null),
-      creatorHandleOf(p.creator_id),
+      Cr.creatorHandleOf(p.creator_id),
       P.packStats(p.id),
       P.packFileSummary(p.id),
       settingInt("refund_window_days"),
