@@ -20,7 +20,10 @@ Four of the spec's open questions block the later plans, not this one. **Open qu
 
 ## Global Constraints
 
-- **One currency: points.** Pack prices and run costs render with `pts()` from `src/billing/points.ts`, called as `pts(price_points * 1000)` exactly as `src/app/views.ts` does. `fmt()` renders dollars and must not appear in `src/mcp/` — the current server prints `$1.20` where the web prints `120 points`, and this plan fixes that.
+- **One currency: points** — but the two money fields are stored in different units, and `src/app/views.ts` is the authority on both.
+  - **Pack prices.** `packs.price_points` holds whole points, so it renders as `pts(price_points * 1000)` (`views.ts:760`).
+  - **Run costs.** `list_cost_cents`, `budget_cents`, `billed_cents` and `cost_cents` hold **millipoints**, despite the `_cents` in their names — `pointsForUsage` (`src/billing/points.ts:109`) returns "thousandths of a point" and that is what fills them. They render as `pts(field)` with **no multiplier**, exactly as `views.ts:944,1040,1042,1046` and `pts(delta_millipoints)` do. Multiplying these by 1000 overstates every run's cost a thousandfold.
+  - `fmt()` renders real dollars and must not appear in `src/mcp/` at all.
 - **Stateless.** A fresh `McpServer` and transport per request (`handleMcpRequest`). No module-level mutable state; nothing cached between requests.
 - **Org-scoped, and silent about what it refuses.** Anything belonging to another organisation is reported as not found, never as forbidden. `run_trace` is the existing model.
 - **Only `listed` packs are visible or loadable.** `P.listPacks()` filters `status = 'listed'`; `P.getPack()` does not. Every tool that takes a slug must apply the filter itself.
