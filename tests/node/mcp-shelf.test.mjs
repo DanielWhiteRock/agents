@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { startServer, signUpCookie } from "./server-harness.mjs";
 import { mintToken as mintTokenAt, callTool as callToolAt } from "./mcp-harness.mjs";
 
-let server, A, P, Auth, db, sql;
+let server, A, P, Auth, db, sql, Creators;
 let n = 0;
 const email = (tag) => `mcpshelf-${tag}-${++n}-${Date.now()}@example.com`;
 
@@ -41,6 +41,7 @@ before(async () => {
   Auth = await import("../../dist/src/app/authoring.js");
   db = await import("../../dist/src/app/db.js");
   sql = (await import("../../dist/src/app/sql.js")).sql;
+  Creators = await import("../../dist/src/app/creators.js");
   P.setRuntime(stubRuntime());
 });
 
@@ -111,6 +112,86 @@ test("a tool filter nothing declares returns nothing", async () => {
   const out = await callTool(token, "search_packs", { tool: "kling-v2" });
   assert.match(out, /Nothing in the catalog matches/);
   assert.doesNotMatch(out, /Has Playwright/);
+});
+
+test("pack_details carries the listing, the permissions rail and the creator", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({
+    slug: `senior-engineer-${n}`,
+    name: "Senior Engineer",
+    descriptionLong: "Reads your code, writes tests and ships the fix.",
+    useCases: ["Fix a failing CI build"],
+    tools: [{ name: "bash", policy: "always_allow" }, { name: "write", policy: "always_allow" }],
+  });
+
+  const out = await callTool(token, "pack_details", { slug: pack.slug });
+  for (const needle of ["Reads your code", "bash, write", "runs", "version", "Use cases", "Fix a failing CI build"]) {
+    assert.match(out, new RegExp(needle), `expected to find ${JSON.stringify(needle)} in:\n${out}`);
+  }
+});
+
+test("pack_details shows the creator handle once a pack is claimed", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({ name: "Claimed Widget" });
+  const creatorAuthor = await A.signUp({ email: email("creator"), name: "Creator", password: "correct-horse", orgName: `Creator Co ${n}` });
+  const creator = await Creators.upsertCreator({
+    userId: creatorAuthor.userId, orgId: creatorAuthor.orgId, handle: `handle-${n}`, displayName: "The Creator",
+  });
+  // Attach the creator directly rather than relying on `claimUnownedPacks`
+  // (which only ever touches a pack with no author org at all) — this test
+  // is about `pack_details` rendering a handle off `creator_id`, not about
+  // the re-attribution migration.
+  const s = await sql();
+  await s.query("UPDATE packs SET creator_id = $1 WHERE id = $2", [creator.id, pack.id]);
+
+  const out = await callTool(token, "pack_details", { slug: pack.slug });
+  assert.match(out, new RegExp(`@handle-${n}`));
+});
+
+test("pack_details points at load_pack and no longer refuses to reveal instructions", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({ name: "Loadable Widget" });
+  const out = await callTool(token, "pack_details", { slug: pack.slug });
+  assert.match(out, /load_pack/);
+  assert.doesNotMatch(out, /not available through any tool/);
+});
+
+test("pack_details carries the reason line when one is given", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({ name: "Explained Widget" });
+  const out = await callTool(token, "pack_details", { slug: pack.slug, reason: "evaluating for a client" });
+  assert.match(out, /^evaluating for a client\n/);
+});
+
+test("an unlisted pack is 'no such pack' from pack_details, worded exactly like a missing slug", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const author = await A.signUp({ email: email("hidden-author2"), name: "Author", password: "correct-horse", orgName: "Hidden Co 2" });
+  const slug = `mcp-details-hidden-${++n}`;
+  await Auth.createPack(author.orgId, {
+    slug, name: "Hidden Details Pack", tagline: "x", author: "Someone", model: "claude-opus-5",
+    pricePoints: 0, upgradePoints: 0, instructions: "Do it.",
+  });
+  await P.publishPack(slug);
+  await Auth.setStatus(author.orgId, slug, "review"); // never listed
+
+  const missingSlug = `mcp-details-missing-${++n}`;
+  const [hidden, missing] = await Promise.all([
+    callTool(token, "pack_details", { slug }),
+    callTool(token, "pack_details", { slug: missingSlug }),
+  ]);
+  const expected = `There is no pack called "${slug}". Try search_packs.`;
+  assert.equal(hidden, expected);
+  assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
 });
 
 test("a pack in review is invisible by name and by exact slug", async () => {

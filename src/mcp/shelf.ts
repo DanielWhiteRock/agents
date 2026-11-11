@@ -4,6 +4,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as P from "../app/platform.js";
 import { sql } from "../app/sql.js";
 import { stringsFromJson } from "../packs/listing-shape.js";
+import { permissionSummary } from "../packs/permissions.js";
+import { ratingOf } from "../app/social.js";
 import { text, price, REASON } from "./reply.js";
 import { score } from "./relevance.js";
 import type { McpContext } from "./server.js";
@@ -66,6 +68,43 @@ async function toolNamesByPack(): Promise<Map<string, string[]>> {
 
 /** A pack's tags, as the lowercase tokens `category` is matched against. */
 const tagTokens = (tags: string): string[] => tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean);
+
+/**
+ * The handle behind a pack's `creator_id`, or null for a pack nobody has
+ * claimed — the same fact the website's own pack page shows, read the same
+ * way (`creators.ts` has no id-keyed lookup to call instead).
+ */
+async function creatorHandleOf(creatorId: string | null): Promise<string | null> {
+  if (!creatorId) return null;
+  const s = await sql();
+  const row = await s.one<{ handle: string }>("SELECT handle FROM creators WHERE id = $1", [creatorId]);
+  return row?.handle ?? null;
+}
+
+/**
+ * The permissions rail for one pack, in the agent's own words — the same
+ * `permissionSummary` the website's pack page renders, fed the same inputs:
+ * tool and MCP server *names* (never the author's declared policy, which
+ * never reaches the runtime — see `permissions.ts`), the web config out of
+ * `extras`, and the policy the run is actually configured with.
+ *
+ * Takes the whole `PackRow` rather than an id because `packExtras` needs
+ * `extras`, which `pack_tools`/`pack_mcp_servers` do not carry.
+ */
+export async function touches(pack: P.PackRow): Promise<string[]> {
+  const [tools, mcpServers, v] = await Promise.all([
+    P.packTools(pack.id),
+    P.packMcpServers(pack.id),
+    P.latestVersion(pack.id),
+  ]);
+  const policy = await P.effectivePolicy(v?.id ?? null);
+  return permissionSummary({
+    tools: tools.map((t) => t.name),
+    mcpServers,
+    web: P.packExtras(pack).web ?? {},
+    policy,
+  }).lines;
+}
 
 function orderBy(rows: ScoredPack[], sort: NonNullable<SearchArgs["sort"]>): ScoredPack[] {
   switch (sort) {
@@ -174,31 +213,62 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
   server.registerTool("pack_details", {
     title: "Look at one pack",
     description:
-      "Everything known about one pack: what it does, who wrote it, what it costs, which models its author "
-      + "permits, and whether this organisation owns it. Never returns the pack's instructions — those are the "
-      + "author's property and are not available through any tool.",
-    inputSchema: { slug: z.string().describe("The pack's slug, from search_packs.") },
-  }, async ({ slug }) => {
+      "Everything known about one pack: the full listing, its permissions rail, who wrote it, what it costs, "
+      + "which models its author permits, its creator and rating, and whether this organisation owns it. Does "
+      + "not return the pack's instructions directly — call load_pack for those.",
+    inputSchema: { slug: z.string().describe("The pack's slug, from search_packs."), reason: REASON },
+  }, async ({ slug, reason }) => {
     const p = await P.getPack(slug);
-    if (!p) return text(`There is no pack called "${slug}". Try search_packs.`);
+    // A pack in draft or in the review queue never reaches `search_packs`
+    // (`catalogFor` filters `status = 'listed'`) and must not become
+    // reachable just because its slug leaked out — so this answers exactly
+    // as it would for a slug nobody ever used.
+    if (!p || p.status !== "listed") return text(`There is no pack called "${slug}". Try search_packs.`, reason);
+
     const v = await P.latestVersion(p.id);
-    const owned = Boolean(v && (await P.entitled(ctx.orgId, v.id)));
+    const [owned, creatorHandle, stats, rating, rail] = await Promise.all([
+      v ? P.entitled(ctx.orgId, v.id) : Promise.resolve(false),
+      creatorHandleOf(p.creator_id),
+      P.packStats(p.id),
+      ratingOf(p.id),
+      touches(p),
+    ]);
     const pinned: string[] = JSON.parse(p.pinned_models);
+
+    const description = p.description.trim();
+    const useCases = stringsFromJson(p.use_cases);
+    const limitations = stringsFromJson(p.limitations);
+    const requirements = stringsFromJson(p.requirements);
+    const section = (label: string, items: string[]): string[] =>
+      items.length ? ["", `${label}:`, ...items.map((i) => `- ${i}`)] : [];
+
     return text([
       `${p.name} (${p.slug})`,
       p.tagline,
       "",
-      `Author: ${p.author}`,
+      `Author: ${p.author}${creatorHandle ? ` (creator: @${creatorHandle})` : ""}`,
       `Price: ${p.price_points === 0 ? "free" : `${price(p.price_points)} one-off`}`,
       `Updates: ${p.upgrade_points} points`,
       `Default model: ${p.model}${p.effort ? ` at ${p.effort} effort` : ""}`,
       pinned.length ? `Author restricted it to: ${pinned.join(", ")}` : "Runs on any permitted model",
       v ? `Published version: ${v.version}` : "Not yet published — it cannot be run",
       `Owned by you: ${owned ? "yes" : "no"}`,
+      ...(description ? ["", description] : []),
+      ...section("Use cases", useCases),
+      ...section("Limitations", limitations),
+      ...section("Requirements", requirements),
+      "",
+      "What it touches:",
+      ...rail.map((l) => `- ${l}`),
+      "",
+      `${stats.runs} run${stats.runs === 1 ? "" : "s"} · ${stats.buyers} buyer${stats.buyers === 1 ? "" : "s"}`
+      + (rating.average != null ? ` · ${rating.average.toFixed(1)}/5 (${rating.count} ratings)` : ""),
       "",
       owned
         ? `Start a run at ${ctx.baseUrl}/packs/${p.slug}`
         : `To buy it, open ${ctx.baseUrl}/packs/${p.slug} — payment needs a browser, so it cannot be completed here.`,
-    ].join("\n"));
+      "Instructions are not shown here, but load_pack returns them — free packs get them immediately, "
+      + "paid packs once this organisation owns them.",
+    ].join("\n"), reason);
   });
 }
