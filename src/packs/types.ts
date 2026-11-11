@@ -31,7 +31,7 @@ export type PackDefinition = {
   instructions: string;
   /** Author's name, shown in the catalog. */
   author: string;
-  /** Price in minor units (cents), one-off. */
+  /** Price in whole points, one-off. */
   pricePoints: number;
   /** What it is for, comma separated. The shelf's categories are these, counted. */
   tags?: string;

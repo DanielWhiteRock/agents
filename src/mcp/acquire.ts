@@ -66,8 +66,10 @@ export async function loadPack(
   try {
     markdown = await P.exportPack(ctx.orgId, slug);
   } catch (e) {
-    const m = String((e as Error)?.message ?? e);
-    if (m.includes("does not own")) {
+    // M5: `e instanceof P.NotEntitledError`, not `m.includes("does not
+    // own")` — `NotEntitledError` is exported from `platform.ts` precisely
+    // so this mapping cannot rot if that message is ever reworded.
+    if (e instanceof P.NotEntitledError) {
       return {
         ok: false,
         message: `${p.name} costs ${price(p.price_points)} and this organisation does not own it. `
@@ -190,9 +192,10 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
   server.registerTool("my_library", {
     title: "What this organisation owns",
     description:
-      "The packs this organisation has bought, with the version each entitlement is pinned to. A pack bought at "
-      + "version 2 keeps running version 2 until it is deliberately upgraded — and a row is marked when a newer "
-      + "version has since been published, so that staleness is never silent.",
+      "The packs this organisation has bought, with the version each entitlement is pinned to. That pinned "
+      + "version is what a run executes — but load_pack and export_pack always serve a pack's latest published "
+      + "version, which a pinned row may not include. A row is marked when a newer version has since been "
+      + "published, so that gap is never silent.",
     inputSchema: { reason: REASON },
   }, async ({ reason }) => {
     const s = await sql();
@@ -269,11 +272,27 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
     if (!p || p.status !== "listed") return text(notFound(slug), reason);
     const v = await P.latestVersion(p.id);
     if (!v) return text(`${p.name} has not been published yet, so there is nothing to install.`, reason);
-    if (await P.entitled(ctx.orgId, v.id)) {
+    // `P.mayExport`, not a bare `P.entitled` probe — `pack_details`,
+    // `load_pack`, `buy_pack` and `export_pack` all decide ownership this
+    // way (the author and the platform curator hold access with no
+    // `entitlements` row ever written for them). A bare `entitled` check
+    // here told an author "is not owned by this organisation… call
+    // buy_pack", and `buy_pack` then answered "already has access" —
+    // the same class of bug fixed everywhere else this surface decides
+    // ownership, just reached through this one remaining tool.
+    if (await P.mayExport(ctx.orgId, p, v.id)) {
       return text(`${p.name} version ${v.version} is already in your library. Run it at ${ctx.baseUrl}/packs/${p.slug}`, reason);
     }
+    // I6: a free pack's shortest correct route is `load_pack` — it hands
+    // the instructions over immediately, for nothing, with no purchase and
+    // no browser involved. Naming `buy_pack` first for something with
+    // nothing to buy sent every free-pack caller the long way round.
+    if (p.price_points === 0) {
+      return text(
+        `${p.name} is free — call load_pack to get its instructions right now, no purchase needed.`, reason);
+    }
     return text(
-      `${p.name} is not owned by this organisation. ${p.price_points === 0 ? "It is free" : `It costs ${price(p.price_points)}`}`
+      `${p.name} is not owned by this organisation. It costs ${price(p.price_points)}`
       + " — call buy_pack to buy it with points, right here, or open "
       + `${ctx.baseUrl}/packs/${p.slug} to buy it in a browser instead.`, reason);
   });
@@ -298,11 +317,18 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       const md = await P.exportPack(ctx.orgId, slug);
       return text(`Save this as ${slug}.md and apply it with \`ant apply ${slug}.md\`:\n\n${md}`, reason);
     } catch (e) {
-      const m = String((e as Error)?.message ?? e);
-      return text(m.includes("does not own")
-        ? `This organisation does not own ${slug}, so it cannot be exported. Call buy_pack to buy it, or open `
-          + `${ctx.baseUrl}/packs/${slug}`
-        : m, reason);
+      // M5: `e instanceof P.NotEntitledError`, not `m.includes("does not
+      // own")` — the same reasoning as `loadPack`'s catch above.
+      if (e instanceof P.NotEntitledError) {
+        // M4: name the price, the way `load_pack`'s own refusal does.
+        return text(
+          `${p.name} costs ${price(p.price_points)} and this organisation does not own it, so it cannot be `
+          + `exported. Call buy_pack to buy it, or open ${ctx.baseUrl}/packs/${slug}`, reason);
+      }
+      // M4: this was the only place on this surface handing an internal
+      // `Error.message` straight to an agent — a neutral sentence instead,
+      // the same shape `loadPack`'s own catch-all uses.
+      return text(`${p.name} could not be exported right now. Try again shortly.`, reason);
     }
   });
 

@@ -251,6 +251,25 @@ test("install_pack treats an unlisted pack exactly like a missing slug", async (
   assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
 });
 
+// I2: install_pack was the last tool deciding ownership through a bare
+// `P.entitled` probe instead of `P.mayExport` — every existing install_pack
+// test above uses an unlisted or missing slug, which is exactly why this
+// survived in `pack_details` until the last task and in `install_pack`
+// until this one: none of them exercise an author's own paid pack.
+test("install_pack tells an author they already own their own paid pack, not to buy it", async () => {
+  const authorSentence = "The author's own closely-guarded method, installed by nobody but its own author.";
+  const { pack, authorCookie } = await listedPack({
+    slug: `mcp-acquire-install-author-${++n}`, name: "Install Author Owned", pricePoints: 750,
+    instructions: authorSentence,
+  });
+  const authorBearer = await mintToken(authorCookie);
+
+  const out = await callTool(authorBearer, "install_pack", { slug: pack.slug });
+  assert.match(out, /already in your library/);
+  assert.doesNotMatch(out, /not owned by this organisation/);
+  assert.doesNotMatch(out, /buy_pack/);
+});
+
 test("export_pack treats an unlisted pack exactly like a missing slug (Ruling R15)", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);
@@ -273,6 +292,24 @@ test("export_pack treats an unlisted pack exactly like a missing slug (Ruling R1
   ]);
   assert.equal(hidden, `There is no pack called "${slug}". Try search_packs.`);
   assert.equal(missing, `There is no pack called "${missingSlug}". Try search_packs.`);
+});
+
+// M4/M5: export_pack's refusal names the price (as load_pack's does) and
+// uses `e instanceof P.NotEntitledError` rather than string-matching the
+// error message — and its catch-all for anything else never hands a raw
+// `Error.message` to the agent.
+test("export_pack refuses a non-owner by naming the price, and leaks no internal message", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-export-nonowner-${++n}`, name: "Export Non Owner", pricePoints: 400,
+  });
+
+  const out = await callTool(token, "export_pack", { slug: pack.slug });
+  assert.match(out, new RegExp(Reply.price(400).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(out, /buy_pack/);
+  assert.doesNotMatch(out, /\berror\b/i);
 });
 
 // ------------------------------------------------------------- Task 8: buy_pack

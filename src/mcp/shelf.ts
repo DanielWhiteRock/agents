@@ -326,7 +326,7 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
       "",
       `Author: ${p.author}${creatorHandle ? ` (creator: @${creatorHandle})` : ""}`,
       `Price: ${p.price_points === 0 ? "free" : `${price(p.price_points)} one-off`}`,
-      `Updates: ${p.upgrade_points} points`,
+      ...(p.upgrade_points > 0 ? [`Updates: ${price(p.upgrade_points)}`] : []),
       `Default model: ${p.model}${p.effort ? ` at ${p.effort} effort` : ""}`,
       pinned.length ? `Author restricted it to: ${pinned.join(", ")}` : "Runs on any permitted model",
       v ? `Published version: ${v.version}` : "Not yet published — it cannot be run",
@@ -344,7 +344,13 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
       "",
       owned
         ? `Start a run at ${ctx.baseUrl}/packs/${p.slug}`
-        : `To buy it, call buy_pack — or open ${ctx.baseUrl}/packs/${p.slug} to buy it in a browser instead.`,
+        : p.price_points === 0
+          // I6: a free pack's shortest correct route is load_pack — it hands
+          // the instructions over immediately, for nothing. Naming buy_pack
+          // first for something with nothing to buy sent every free-pack
+          // caller the long way round.
+          ? "This pack is free — call load_pack to get its instructions right now, no purchase needed."
+          : `To buy it, call buy_pack — or open ${ctx.baseUrl}/packs/${p.slug} to buy it in a browser instead.`,
       "Instructions are not shown here, but load_pack returns them — free packs get them immediately, "
       + "paid packs once this organisation owns them.",
     ].join("\n"), reason);
