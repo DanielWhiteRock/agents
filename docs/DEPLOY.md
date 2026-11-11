@@ -5,6 +5,22 @@
 Everything below was run, not reasoned about. The commands are in the
 commit that added this file.
 
+## Where it deploys from
+
+| | |
+|---|---|
+| Repository | `github.com/DanielWhiteRock/agents` (public) |
+| Branch | `main` |
+| Render service | `agents-alphaceo` · `srv-dbpffh8m7kps73apjqa0` |
+| URL | https://agents-alphaceo.onrender.com |
+| Auto-deploy | on — a push to `main` builds and goes live |
+
+It was moved here from a private repository, `DanielWhiteRock/layer1`, whose
+`main` and `openclaw-archive` branches carry an Ed25519 device private key in
+an old commit. Only the branch that became this `main` was published, and that
+commit is not reachable from it. **If those branches are ever needed here,
+rotate the key first** — pushing them as they stand would publish it.
+
 ## Why Render and not Vercel
 
 Three things in this app decide it, and all three are load-bearing:
