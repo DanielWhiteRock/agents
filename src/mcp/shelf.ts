@@ -153,7 +153,7 @@ export async function searchRows(ctx: McpContext, args: SearchArgs): Promise<{ r
       tools,
       score: score(query, {
         name: p.name, tagline: p.tagline, author: p.author, description: p.description,
-        useCases: stringsFromJson(p.use_cases), tags: p.tags, tools,
+        useCases: stringsFromJson(p.use_cases), tags: p.tags, tools, slug: p.slug,
       }),
     };
   });

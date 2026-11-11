@@ -103,6 +103,53 @@ test("an empty query returns a bounded ranked page, not the whole table", async 
   assert.match(firstEntry, /Trending Leader/);
 });
 
+// I1/M2: `slug` is now a scored field, so a listed pack is findable by its
+// own exact slug — the positive control that makes "a pack in review is
+// invisible … by exact slug" below a real assertion rather than a vacuous
+// one (before I1, a *listed* pack's own slug would not have matched either,
+// so that test passed whether or not the review-status filtering worked).
+test("a listed pack is findable by its own exact slug", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({ slug: `mcp-shelf-slugfind-${++n}`, name: "Slug Findable Widget" });
+
+  const out = await callTool(token, "search_packs", { query: pack.slug });
+  assert.match(out, /Slug Findable Widget/);
+});
+
+// M8: `search_packs`'s `category` filter had no test at all.
+test("a category filter restricts the shelf to packs tagged with it", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  await listedPack({ name: "Tagged Widget", tags: "widgetry" });
+  await listedPack({ name: "Untagged Gadget", tags: "gadgetry" });
+
+  const out = await callTool(token, "search_packs", { category: "widgetry" });
+  assert.match(out, /Tagged Widget/);
+  assert.doesNotMatch(out, /Untagged Gadget/);
+});
+
+// M8: no non-default `sort` mode had a test either.
+test("sort: most_used orders packs by run count, not catalog order", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const quiet = await listedPack({ name: "Most Used Quiet Worker" });
+  const busy = await listedPack({ name: "Most Used Busy Worker" });
+  const runner = await A.signUp({
+    email: email("mostused-runner"), name: "Runner", password: "correct-horse", orgName: `Most Used Runner Co ${n}`,
+  });
+  const busyVersion = await P.latestVersion(busy.id);
+  await insertRun(runner.orgId, runner.userId, busyVersion.id);
+
+  const out = await callTool(token, "search_packs", { query: "Most Used", sort: "most_used" });
+  const first = out.split("\n\n")[1];
+  assert.match(first, /Most Used Busy Worker/, `expected the pack with a run to sort first, got:\n${out}`);
+  void quiet;
+});
+
 test("a tool filter nothing declares returns nothing", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);
@@ -232,8 +279,19 @@ test("a pack in review is invisible by name and by exact slug", async () => {
   const token = await mintToken(cookie);
 
   const author = await A.signUp({ email: email("hidden-author"), name: "Author", password: "correct-horse", orgName: "Hidden Co" });
-  const slug = `mcp-shelf-hidden-${++n}`;
-  const name = "Hidden Pack In Review";
+  // Deliberately not the file's usual `mcp-shelf-...` prefix, and the name
+  // below is deliberately nonsense, not "...Pack..." or "...Review...": I1
+  // made `slug` a scored field and relaxed word matching to a leading
+  // boundary, both correctly — but that means "mcp" and "shelf" (shared by
+  // every other fixture's default slug in this file), "pack" (ditto), and
+  // "review" (which now correctly matches the shipped "Guardrails
+  // Reviewer" pack every fresh database seeds) would each turn this into a
+  // test of catalog pollution via real, listed packs rather than of the
+  // review-status invisibility it actually checks. A real slug is a
+  // meaningful, chosen string, not a shared test namespace prefix — so this
+  // one is deliberately unique instead of reusing the file's convention.
+  const slug = `zyxquol-concealed-${++n}`;
+  const name = "Zyxquol Vprxalt Qzorlak";
   await Auth.createPack(author.orgId, {
     slug, name, tagline: "x", author: "Someone", model: "claude-opus-5",
     pricePoints: 0, upgradePoints: 0, instructions: "Do it.",
