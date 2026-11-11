@@ -361,7 +361,11 @@ test("too little balance refuses with the top-up link and grants nothing", async
   const before = await Points.balanceMillipoints(orgId);
 
   const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
-  assert.match(out, new RegExp(`${server.baseUrl}/ledger/topup`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  // C1: the one sanctioned browser exit used to be a dead link — `/ledger/topup`
+  // is POST-only with no GET handler, so it 404s. `/ledger` is the page that
+  // actually holds the top-up form.
+  assert.match(out, new RegExp(`${server.baseUrl}/ledger`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(out, /\/ledger\/topup/);
   assert.doesNotMatch(out, /cipher/i);
   assertNoLeak(out, brokeBuyerSecret);
 
@@ -542,8 +546,44 @@ test("top_up returns a link and charges nothing", async () => {
   const before = await Points.balanceMillipoints(orgId);
 
   const out = await callTool(token, "top_up", { amount_points: 500 });
-  assert.match(out, new RegExp(`${server.baseUrl}/ledger/topup`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(out, new RegExp(`${server.baseUrl}/ledger`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(out, /\/ledger\/topup/);
   assert.equal(await Points.balanceMillipoints(orgId), before);
+});
+
+// C1 (Critical): the reviewer verified against a running build that
+// `GET /ledger` is 200 and `GET /ledger/topup` is 404 (that path is
+// POST-only). Both `buy_pack`'s insufficient-balance refusal and `top_up`
+// used to emit the dead `/ledger/topup` link; this fetches the link each one
+// actually emits now and asserts it resolves, so the next URL this surface
+// invents cannot rot the same way without a test noticing.
+test("the link buy_pack's insufficient-balance refusal emits actually resolves", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  // Deliberately no credit — balance starts at zero, so buy_pack refuses.
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-link-${++n}`, name: "Buy Link Pack", pricePoints: 500,
+  });
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
+  const match = /(https?:\/\/\S+\/ledger)\b/.exec(out);
+  assert.ok(match, `expected a /ledger link in the refusal:\n${out}`);
+
+  const res = await fetch(match[1], { headers: { cookie } });
+  assert.equal(res.status, 200, `expected ${match[1]} to resolve with 200, got ${res.status}`);
+});
+
+test("the link top_up emits actually resolves", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const out = await callTool(token, "top_up", { amount_points: 500 });
+  const match = /(https?:\/\/\S+\/ledger)\b/.exec(out);
+  assert.ok(match, `expected a /ledger link in the reply:\n${out}`);
+
+  const res = await fetch(match[1], { headers: { cookie } });
+  assert.equal(res.status, 200, `expected ${match[1]} to resolve with 200, got ${res.status}`);
 });
 
 test("my_library marks a row whose pack has a newer version", async () => {

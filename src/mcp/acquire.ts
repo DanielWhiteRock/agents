@@ -163,7 +163,7 @@ export async function buyPack(
     const bal = await balanceMillipoints(ctx.orgId);
     if (bal < owed) {
       return `${p.name} costs ${price(live)} and this organisation only has ${pts(bal)}. `
-        + `Top up at ${ctx.baseUrl}/ledger/topup`;
+        + `Top up at ${ctx.baseUrl}/ledger`;
     }
     try {
       await Pay.buyWithPoints({
@@ -244,13 +244,14 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       "Points are bought with a card, which this server cannot take — this returns the link to top up in a "
       + "browser. Nothing is charged here; this call never moves money or points by itself.",
     inputSchema: {
-      amount_points: z.number().int().positive().describe("How many points you intend to add, so the top-up page can be opened pre-filled."),
+      amount_points: z.number().int().positive().describe(
+        "How many points you intend to add — echoed back in the reply so the amount is clear before anyone pays."),
       reason: REASON,
     },
   }, async ({ amount_points, reason }) => {
     return text(
-      `To add ${price(amount_points)} to this organisation's balance, open ${ctx.baseUrl}/ledger/topup — `
-      + "this server cannot charge a card itself.", reason);
+      `To add ${price(amount_points)} to this organisation's balance, open ${ctx.baseUrl}/ledger and use the `
+      + "top-up form there — this server cannot charge a card itself.", reason);
   });
 
   server.registerTool("install_pack", {
