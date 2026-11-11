@@ -514,7 +514,7 @@ function catalogPack(creatorHandle: string | null = null, over: Partial<PackRow>
 describe("the catalog", () => {
   it("links a card's byline to the creator's page when there is one", () => {
     const h = catalogPage([catalogPack("typeui")], 1000);
-    expect(h).toMatch(/<a class="who-link" href="\/creators\/typeui"[^>]*>typeui\.sh<\/a>/);
+    expect(h).toMatch(/<a href="\/creators\/typeui"[^>]*>typeui\.sh<\/a>/);
   });
 
   it("leaves a card's byline as plain text when there is no creator", () => {
@@ -895,5 +895,56 @@ describe("editing a proposed listing", () => {
   it("takes an unlabelled first line as the question, so a hand-typed entry still lands", () => {
     const l = listingFromForm({ faq: "Does it write?\nA: No." });
     expect(l.faq).toEqual([{ q: "Does it write?", a: "No." }]);
+  });
+});
+
+// ------------------------------------------------------ the small omissions
+
+describe("the parts of the page that had nothing to say", () => {
+  it("offers a changelog note on the pack page's own first-publish form", () => {
+    // The editor's Lifecycle form has had this field since changelogs
+    // existed; the shortcut on the pack page — the one an author actually
+    // uses to publish a pack for the first time — did not, so a first
+    // version could never carry a note.
+    const h = packPage(
+      packRow(), undefined, false, ["claude-opus-5"], 0, undefined, null, null, true, NOTHING_KNOWN);
+    expect(h).toContain(`action="/packs/senior-engineer/publish"`);
+    expect(h).toContain(`name="note"`);
+    expect(h).toMatch(/never edited/);
+  });
+
+  it("shows a creator profile the error a refused question came back with", () => {
+    // `POST /threads` redirects to `${back}?err=…` when a question is
+    // refused — over the rate limit, say — and this page had no `err`
+    // parameter at all, so the refusal was silent on the one page it is
+    // most likely to happen from.
+    const h = creatorPage(
+      creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, { average: null, count: 0 }, null, 0, true,
+      "no more than 10 threads may be opened in one day");
+    expect(h).toContain("no more than 10 threads may be opened in one day");
+    expect(h).toContain(`class="note bad"`);
+  });
+
+  it("renders no error block when nothing went wrong", () => {
+    const h = creatorPage(
+      creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, { average: null, count: 0 }, null, 0, true);
+    expect(h).not.toContain(`class="note bad"`);
+  });
+
+  it("escapes the error rather than trusting a query string", () => {
+    const h = creatorPage(
+      creatorRow(), [], { packs: 0, runs: 0, orgs: 0 }, { average: null, count: 0 }, null, 0, true,
+      "<script>alert(1)</script>");
+    expect(h).not.toContain("<script>alert(1)</script>");
+  });
+
+  it("does not name a CSS class that does not exist", () => {
+    // `who-link` was never a rule in the stylesheet — the stacking that lets
+    // the byline sit above the card's overlay anchor is the inline style
+    // beside it, and a class name that looks load-bearing and is not is how
+    // the next person deletes the thing that actually works.
+    const h = catalogPage([catalogPack("typeui")], 1000);
+    expect(h).not.toContain("who-link");
+    expect(h).toContain(`href="/creators/typeui"`);
   });
 });

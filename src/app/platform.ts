@@ -6,6 +6,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { id, initDb, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
+import { ROLES } from "./roles.js";
 import { sql } from "./sql.js";
 import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -360,30 +361,15 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
 /**
  * The jobs we list, and how many workers do each.
  *
- * A marketplace of skills has to organise by topic, because a skill is not a
- * thing anybody hires — it is a part you would have to assemble. A worker is
- * already the assembly, so the shelf is organised the way hiring is: pick the
- * job, then pick which one. A role with nothing in it is not shown, because
- * listing a job we cannot fill is worse than not listing it.
+ * The list itself is in `./roles.ts`, which imports nothing: `views.ts` needs
+ * it to render a breadcrumb and the shelf's role strip, and reading it off
+ * this module dragged the Anthropic SDK and the runtime into the pure render
+ * module's import graph. Re-exported here so `P.ROLES` keeps working.
+ *
+ * A role with nothing in it is not shown, because listing a job we cannot
+ * fill is worse than not listing it.
  */
-export const ROLES: Array<{ id: string; name: string; blurb: string; icon: string }> = [
-  { id: "designer", name: "Designer", icon: "file",
-    blurb: "Restyles an interface by a named system, to that system's own numbers." },
-  { id: "engineer", name: "Engineer", icon: "tokens",
-    blurb: "Reads the code before changing it, and reviews like someone who maintains it." },
-  { id: "qa", name: "QA", icon: "check",
-    blurb: "Finds what breaks before a customer does, and writes the test that keeps it found." },
-  { id: "security", name: "Security", icon: "warn",
-    blurb: "Looks for the way in, names the risk plainly, and says what to do first." },
-  { id: "devops", name: "DevOps", icon: "catalog",
-    blurb: "Ships it, watches it, and makes the next deploy boring." },
-  { id: "marketer", name: "Marketer", icon: "runs",
-    blurb: "Turns a vague brief into a campaign with one outcome and one audience." },
-  { id: "support", name: "Support", icon: "info",
-    blurb: "Reads the inbox and tells you which tickets become problems." },
-  { id: "producer", name: "Producer", icon: "clock",
-    blurb: "Takes an idea and returns a brief a crew could turn up to." },
-];
+export { ROLES, type Role } from "./roles.js";
 
 export async function roles(): Promise<Array<{ id: string; name: string; blurb: string; icon: string; count: number }>> {
   const s = await sql();

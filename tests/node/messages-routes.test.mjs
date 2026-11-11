@@ -288,3 +288,31 @@ test("the eleventh POST /threads from one organisation in a day is refused with 
   const rows = await s.query("SELECT id FROM threads WHERE org_id = $1", [buyer.orgId]);
   assert.equal(rows.length, 10, "the eleventh attempt left no new thread behind");
 });
+
+test("a refused question asked from a creator profile says so on that profile", async () => {
+  // `POST /threads` redirects to `${back}?err=…`, and `/creators/:handle` had
+  // no `err` parameter at all — so a buyer who hit the daily limit from a
+  // creator's page saw their form clear and nothing else: no thread, no
+  // message, no reason.
+  const { creator } = await creatorWithPack();
+  const buyer = await org("Profile Asker Co");
+  const buyerCookie = await cookieFor(buyer.userId);
+  const back = `/creators/${creator.handle}`;
+
+  const ask = (subject) => fetch(`${server.baseUrl}/threads`, {
+    method: "POST", redirect: "manual",
+    headers: { cookie: buyerCookie, "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ creatorId: creator.id, subject, body: "A question.", back }),
+  });
+
+  for (let i = 0; i < 10; i++) assert.equal((await ask(`Q${i}`)).status, 303);
+  const refused = await ask("One too many");
+  const location = refused.headers.get("location");
+  assert.match(location, new RegExp(`^/creators/${creator.handle}\\?err=`),
+    "refused back to the page it was asked from");
+
+  const page = await fetch(`${server.baseUrl}${location}`, { headers: { cookie: buyerCookie } });
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.match(html, /no more than 10 threads/, "and the page says why");
+});

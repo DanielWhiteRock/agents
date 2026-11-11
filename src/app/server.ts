@@ -736,7 +736,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     })));
     return html(res, V.creatorPage(
       creator, packs, await Cr.creatorStats(creator.id), await S.creatorRating(creator.id), viewer, await bal(),
-      creator.org_id !== ctx.orgId));
+      creator.org_id !== ctx.orgId, url.searchParams.get("err") ?? undefined));
   }
 
   // ------------------------------------------------------------- messages

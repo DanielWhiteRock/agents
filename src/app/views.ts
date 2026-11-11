@@ -1,5 +1,5 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
-import { ROLES } from "./platform.js";
+import { ROLES } from "./roles.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import { listingToForm, type Listing } from "../packs/listing-shape.js";
 import type { CreatorRow } from "./creators.js";
@@ -574,13 +574,13 @@ export function catalogPage(
   // goes to a different page breaks that: an anchor cannot nest inside
   // another anchor, so the card is a <div> instead, with an invisible anchor
   // laid over the whole thing as the default click target. The byline link,
-  // when there is one, sits on top of that overlay (`who-link` carries the
-  // stacking) so a click there reaches the creator and nowhere else; every
-  // other pixel still falls through to the pack.
+  // when there is one, sits on top of that overlay — the inline
+  // position/z-index below is what puts it there — so a click there reaches
+  // the creator and nowhere else; every other pixel falls through to the pack.
   const cards = packs.map((p) => {
     const name = esc(p.author.split(" — ")[0] ?? p.author);
     const who = p.creatorHandle
-      ? `<a class="who-link" href="/creators/${esc(p.creatorHandle)}" style="position:relative;z-index:1">${name}</a>`
+      ? `<a href="/creators/${esc(p.creatorHandle)}" style="position:relative;z-index:1">${name}</a>`
       : name;
     return `<div class="card gig">
   <a href="/packs/${esc(p.slug)}" aria-label="${esc(p.name)}" style="position:absolute;inset:0;z-index:0"></a>
@@ -809,7 +809,13 @@ ${!owned && trial ? (trial.used
     the only guarantee worth having. Leave blank for a public repo.</p>
   </details>
   ${pinned.length ? `<p class="lede" style="margin-top:var(--s3);font-size:var(--t2)">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
-</form>` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
+</form>` : `<form method="post" action="/packs/${esc(p.slug)}/publish" class="row">
+  <label>What changed in this version?
+    <input type="text" name="note" placeholder="optional" size="30"></label>
+  <button class="btn" type="submit">Publish to the runtime</button>
+</form>
+<p class="lede" style="font-size:var(--t2)">A note is kept against the version it describes and never edited
+afterwards, because a version is immutable. Leave it blank if there is nothing to say.</p>`}
 ${stats.runs > 0 || stats.buyers > 0 ? `<div class="meters" style="margin-top:var(--s5)">
   ${stats.runs > 0 ? `<div class="meter"><div class="k">${icon("runs", "Runs")}</div>
     <div class="v">${stats.runs.toLocaleString("en-US")}</div></div>` : ""}
@@ -1844,12 +1850,21 @@ export function creatorPage(
   balance: number,
   /** False for the creator's own organisation looking at its own page — there is no one there to ask. */
   canAsk = false,
+  /**
+   * What went wrong with the last thing posted from this page. `POST /threads`
+   * redirects back here with `?err=…` when a question is refused — over the
+   * daily rate limit, or with an empty body — and without this the refusal
+   * was silent: the form cleared, nothing was sent, and the page said nothing
+   * about either fact.
+   */
+  err?: string,
 ): string {
   const bio = creator.bio.trim();
   const links = parseLinks(creator.links);
   const image = creator.avatar ? heroSrc(creator.avatar) : "";
 
   return layout(creator.display_name, `
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
 <nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a> <span aria-hidden="true">›</span>
   <span aria-current="page">${esc(creator.display_name)}</span></nav>
 <div class="row" style="align-items:center;margin-top:var(--s4)">
