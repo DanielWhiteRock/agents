@@ -693,10 +693,9 @@ export function frontPage(d: FrontData): string {
   <img class="heroStill" src="${ASSETS}/hero-poster.webp" alt="" decoding="async">
   <div class="heroInk">
     <h1>More jobs than people</h1>
-    <p class="lede">Hire somebody's whole method, not a file. A worker is one expert's
-    way of doing a job, packed into a folder — skills, tools, hooks, workflows,
-    commands, docs. Run it here and watch every step, or pull it into your own editor
-    and run it on the model you already pay for.</p>
+    <p class="lede">Hire somebody's whole method, not a file. Years of an expert's
+    judgement in one folder — their skills, their tools, their workflows. Run it here
+    and watch every step, or in your own editor on the model you already pay for.</p>
 
     <form class="funnel" method="get" action="/start">
       <label for="ask">What do you need done?</label>
@@ -723,14 +722,8 @@ ${d.asked !== undefined ? matchBlock(d) : ""}
     <li><b>${t.authors}</b><span>authors</span></li>
     ${t.runs > 0 ? `<li><b>${t.runs}</b><span>runs</span></li>` : ""}
   </ul>
-  <p class="lede">${t.runs > 0
-    ? `${t.runs} runs. That is not a typo — we built the shelf before we had the traffic,
-       and the honest version of that is a small number in plain type.`
-    : `The shelf came first and the traffic has not. We would rather say that here than
-       dress it up, because the same habit is what makes the rest of these numbers worth
-       reading.`}
-  There are no ratings, vote counts or user numbers on this page, because we do not
-  have any yet. When we do, they will be the real ones.</p>
+  <p class="lede">No ratings, no vote counts, no user numbers — we do not have any yet.
+  These are the ones we do have.</p>
 </section>
 
 ${shownRoles.length ? `<section>
@@ -740,10 +733,8 @@ ${shownRoles.length ? `<section>
       ${icon(r.icon, r.name, true)}<b>${esc(r.name)}</b><small>${r.count}</small>
       <span>${esc(r.blurb)}</span></a>`).join("")}
   </nav>
-  <p class="lede">The shelf is lopsided and you should see it before you hire. Design
-  has enough workers that you can choose between them. The rest have one or two each,
-  so read the author's notes and decide whether that one suits the job. We would
-  rather you learned this here than three minutes into a run.</p>
+  <p class="lede">The shelf is lopsided — design runs deep, the rest are one or two
+  each. Better you know that here than three minutes into a run.</p>
 </section>` : ""}
 
 ${mostRun.length ? `<section>
@@ -756,14 +747,13 @@ ${mostRun.length ? `<section>
 
 <section class="split">
   <div>
-    <h2>A worker is not a skill</h2>
-    <p class="lede">A skill is one file. You install it into your own agent, and then
-    you decide when it applies, what it may touch, what runs before it and what
-    happens when it fails. That deciding is the actual work.</p>
+    <h2>A worker, not a skill</h2>
+    <p class="lede">There is a person behind every one of these. A skill is one file;
+    a worker is their mastery — the skills they reach for, in the order they reach for
+    them, with the judgement they built over years of doing the job.</p>
     <p class="lede">Our Senior Engineer carries eleven skills that somebody who does
-    the job for a living decided belong together. On a marketplace of skills that is
-    eleven separate purchases and the assembly is yours. Here it arrives assembled,
-    with the reasoning intact.</p>
+    this for a living decided belong together. Elsewhere that is eleven purchases and
+    the assembly is yours. Here it arrives assembled, with the reasoning intact.</p>
     ${d.anatomy.length ? `<ul class="parts">
       ${d.anatomy.map((a) => `<li><b>${a.files}</b> ${esc(a.label.toLowerCase())}
         <small>across ${a.packs} ${a.packs === 1 ? "worker" : "workers"}</small></li>`).join("")}

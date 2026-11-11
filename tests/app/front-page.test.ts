@@ -43,16 +43,11 @@ describe("the stat strip", () => {
       totals: { packs: 71, roles: 2, authors: 6, skills: 146, runs: 5, pointsSpent: 12 },
     }));
     expect(h).toContain("<b>5</b><span>runs</span>");
-    expect(h).toContain("5 runs. That is not a typo");
-  });
-
-  it("says the shelf came first either way, so the zero is not hidden", () => {
-    expect(frontPage(data())).toContain("The shelf came first and the traffic has not");
   });
 
   it("promises no rating it cannot show", () => {
     const h = frontPage(data());
-    expect(h).toContain("no ratings, vote counts or user numbers");
+    expect(h).toContain("No ratings, no vote counts, no user numbers");
   });
 });
 

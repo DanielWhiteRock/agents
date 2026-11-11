@@ -37,10 +37,14 @@ What changes is not that they trust us, but that they no longer have to: the tra
 **Headline**
 More jobs than people
 
-**Sub-headline**
-Hire somebody's whole method, not a file.
+**Body (shipped)**
+Hire somebody's whole method, not a file. Years of an expert's judgement in one folder — their skills, their tools, their workflows. Run it here and watch every step, or in your own editor on the model you already pay for.
 
-**Body**
+> Shortened from the draft below, and the second way to run a worker moved up
+> into it. This is where somebody decides whether the thing is for them, so it
+> carries the person and both routes and stops.
+
+**Draft**
 A worker here is one expert's way of doing a job, packed into a folder. Skills, tools, hooks, workflows, commands, docs. You hire it, it runs on our servers with your budget, and you watch it work while it works.
 
 **Buttons**
@@ -63,7 +67,14 @@ The numbers, unrounded
 **The strip**
 72 workers · 147 skills · 5 roles filled · 6 authors · 3 runs
 
-**Body**
+**Body (shipped)**
+No ratings, no vote counts, no user numbers — we do not have any yet. These are the ones we do have.
+
+> Cut to one line. The paragraph below spent five sentences explaining a
+> decision the strip already demonstrates; the figures argue for themselves and
+> the explanation was the part that sounded defensive.
+
+**Draft**
 Three runs. That is not a typo. We built the shelf before we had the traffic, and the honest version of that is a small number in large type. There are no ratings, vote counts or user numbers on this page, because we do not have any yet. When we do, they will be the real ones.
 
 ---
@@ -76,7 +87,13 @@ Five roles filled, one of them deeply
 **The breakdown**
 Designer 67 · Engineer 2 · Marketer 1 · Support 1 · Producer 1
 
-**Body**
+**Body (shipped)**
+The shelf is lopsided — design runs deep, the rest are one or two each. Better you know that here than three minutes into a run.
+
+> Cut to two lines, keeping the warning and dropping the inventory: the role
+> cards directly above already print the counts.
+
+**Draft**
 The shelf is lopsided and you should see it before you hire. Design has enough workers that you can actually choose between them. Engineering has two. Marketing, support and production have one each, so read the author's notes first and decide whether that one suits the job. We would rather you learned this here than three minutes into a run.
 
 ---
@@ -84,12 +101,16 @@ The shelf is lopsided and you should see it before you hire. Design has enough w
 ## 4 · What's in a worker
 
 **Headline**
-A worker is not a skill
+A worker, not a skill
 
 **Body**
-A skill is one file. You install it into your own agent, and then you decide when it applies, what it may touch, what runs before it and what happens when it fails. That deciding is the actual work.
+There is a person behind every one of these. A skill is one file; a worker is their mastery — the skills they reach for, in the order they reach for them, with the judgement they built over years of doing the job.
 
-Our Senior Engineer carries eleven skills that somebody who does the job for a living decided belong together. On a skills marketplace that is eleven separate purchases and the assembly is yours. Here it arrives assembled, with the reasoning intact.
+Our Senior Engineer carries eleven skills that somebody who does this for a living decided belong together. Elsewhere that is eleven purchases and the assembly is yours. Here it arrives assembled, with the reasoning intact.
+
+> The opening line used to be about file counts. It is about the person now,
+> because that is the actual claim: you are hiring what somebody learned, and
+> the folder is only how it travels.
 
 **The six parts, listed**
 
