@@ -27,6 +27,9 @@ const MIN = Number(args[args.indexOf("--min") + 1]) || 0;
 
 /** Every screen a person can reach, with how to get there. */
 const SCREENS = [
+  // The only page a visitor sees before signing in, so it is judged signed out.
+  { name: "Front page", path: "/", anonymous: true },
+  { name: "Front page (searched)", path: "/start?q=brutalism", anonymous: true },
   { name: "Catalog", path: "/" },
   { name: "Catalog (searched)", path: "/?q=support" },
   { name: "Catalog (no matches)", path: "/?q=zzzznope" },
@@ -259,8 +262,16 @@ const CHECKS = [
     rule: "Wayfinding — the current section is stated, not inferred",
     async run(page, _ctx, screen) {
       if (screen.anonymous) return { pass: true, skip: true };
-      const marked = await page.evaluate(() => document.querySelectorAll("nav [aria-current=page]").length);
-      return marked === 1 ? { pass: true } : { pass: false, detail: `${marked} nav items marked current, expected 1` };
+      // Per nav, not per screen: a breadcrumb trail marking where it ends and
+      // the top nav marking the section are both right, and both at once is
+      // still right. What is wrong is one nav marking two of its own items.
+      const perNav = await page.evaluate(() => [...document.querySelectorAll("nav")]
+        .map((n) => n.querySelectorAll("[aria-current=page]").length));
+      const over = perNav.filter((c) => c > 1);
+      if (over.length) return { pass: false, detail: `a nav marks ${over[0]} of its own items current` };
+      return perNav.some((c) => c === 1)
+        ? { pass: true }
+        : { pass: false, detail: "no nav says which section this screen is in" };
     },
   },
   {

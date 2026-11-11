@@ -109,6 +109,10 @@ transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) va
 nav a:hover{color:var(--ink);background:color-mix(in oklab,var(--ink) 6%,transparent);text-decoration:none}
 nav a:active{background:color-mix(in oklab,var(--ink) 12%,transparent)}
 nav a[aria-current=page]{color:var(--accent-ink);background:var(--primary)}
+/* The signed-out pair are words, not marks, so they need their own box and
+   their own breathing room. */
+nav a.plain{min-width:auto;padding:0 var(--s3);font-size:var(--t2)}
+nav .btn{min-height:2.25rem;padding:var(--s2) var(--s4);white-space:nowrap}
 /* On a phone the balance sits next to the Points icon that already goes to
    the same page, and together they are the 22px that pushed the bar off the
    screen. The number comes back as soon as there is room for it. */
@@ -127,7 +131,7 @@ font-variant-numeric:tabular-nums;min-width:auto;min-height:2rem}
 .menu>summary{list-style:none;cursor:pointer;font-size:var(--t2);color:var(--muted);
 min-height:2.75rem;display:inline-flex;align-items:center;padding:0 var(--s3);
 border:1px solid var(--line);border-radius:999px;
-max-width:7.5rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+max-width:min(7.5rem,100%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 transition:color var(--dur-snappy) var(--spring),background var(--dur-snappy) var(--spring)}
 .menu>summary::-webkit-details-marker{display:none}
 .menu>summary:hover,.menu[open]>summary{color:var(--ink);background:color-mix(in oklab,var(--ink) 6%,transparent)}
@@ -383,6 +387,85 @@ display:inline-flex;min-height:2.5rem;align-items:center}
 footer details summary::-webkit-details-marker{display:none}
 footer details p{margin:var(--s2) 0 0}
 
+/* ----------------------------------------------------------- front page
+   The only page a visitor sees before they have an account, so it is the
+   only page allowed to be wide, full-bleed and loud. Mobile is still the
+   base case: the film is a poster until there is a screen worth 257KB.   */
+.wrap.wide{max-width:84rem;padding-left:0;padding-right:0}
+.wrap.wide>section{padding-left:var(--s4);padding-right:var(--s4)}
+@media (min-width:48rem){.wrap.wide>section{padding-left:var(--s6);padding-right:var(--s6)}}
+.wrap.wide section{margin:0 0 var(--s7)}
+@media (min-width:48rem){.wrap.wide section{margin:0 0 var(--s8)}}
+
+.hero{position:relative;overflow:hidden;border-radius:0;background:#0A0E0C;
+padding:var(--s6) var(--s4) var(--s7);isolation:isolate}
+@media (min-width:48rem){.hero{padding:var(--s8) var(--s6);border-radius:var(--s5);margin-top:var(--s4)}}
+/* The film is decoration; the poster is the real content. Only one of them
+   is ever on screen, decided by the viewport and by whether the reader asked
+   for motion at all. */
+.heroFilm,.heroStill{position:absolute;inset:0;width:100%;height:100%;
+object-fit:cover;z-index:-2}
+.heroFilm{display:none}
+@media (min-width:48rem){.heroFilm{display:block}.heroStill{display:none}}
+.hero::after{content:"";position:absolute;inset:0;z-index:-1;
+background:linear-gradient(100deg,rgba(10,14,12,.92) 0%,rgba(10,14,12,.78) 42%,rgba(10,14,12,.28) 100%)}
+.heroInk{max-width:42rem;color:#fff}
+.heroInk h1{color:#fff;margin-top:0;font-size:clamp(2rem,1.2rem+4vw,3.5rem);line-height:1.02}
+.heroInk .lede{color:rgba(255,255,255,.88);max-width:34rem}
+.heroInk .fine{color:rgba(255,255,255,.66);font-size:var(--t1);margin:var(--s2) 0 0;max-width:34rem}
+
+/* ---------------------------------------------------------------- funnel
+   A sentence, not a form. It is the first thing on the page that does
+   anything, and it answers before it asks for an account.                */
+.funnel{margin:var(--s5) 0 0}
+.funnel label{display:block;font-size:var(--t2);font-weight:600;color:#fff;margin:0 0 var(--s2)}
+.funnel .row{gap:var(--s2);flex-wrap:nowrap}
+.funnel input{flex:1;min-width:0;background:rgba(255,255,255,.96);color:var(--text);
+border:1px solid transparent;border-radius:var(--s3);padding:var(--s3) var(--s4);
+font:inherit;font-size:var(--t3);min-height:3.25rem;
+box-shadow:0 10px 30px -12px rgba(0,0,0,.5)}
+.funnel input::placeholder{color:#6B7280}
+.funnel input:focus{outline:none;border-color:var(--primary);
+box-shadow:0 0 0 3px color-mix(in oklab,var(--primary) 45%,transparent)}
+.funnel .btn{min-height:3.25rem;padding-left:var(--s5);padding-right:var(--s5);flex:none}
+
+/* --------------------------------------------------------------- results */
+.found{scroll-margin-top:5rem}
+.found .grid{margin-bottom:var(--s5)}
+
+/* ----------------------------------------------------------------- stats */
+.stats{list-style:none;margin:0 0 var(--s5);padding:0;display:grid;gap:var(--s3);
+grid-template-columns:repeat(2,1fr)}
+@media (min-width:48rem){.stats{grid-template-columns:repeat(5,1fr)}}
+.stats li{background:var(--panel);border:1px solid var(--line);border-radius:var(--s4);
+padding:var(--s4);box-shadow:var(--plane1);display:flex;flex-direction:column;gap:var(--s1)}
+.stats b{font-family:var(--mono);font-size:var(--t6);line-height:1;letter-spacing:-.02em;
+font-variant-numeric:tabular-nums}
+.stats span{font-size:var(--t1);color:var(--muted)}
+
+/* ------------------------------------------------------------ split rows */
+.split{display:grid;gap:var(--s5);align-items:center;grid-template-columns:1fr}
+@media (min-width:56rem){.split{grid-template-columns:1fr 1fr;gap:var(--s6)}
+.split.flip>div{order:2}}
+.split img{width:100%;height:auto;border-radius:var(--s5);box-shadow:var(--plane2);display:block}
+.parts{list-style:none;margin:var(--s4) 0 0;padding:0;display:flex;flex-wrap:wrap;gap:var(--s2)}
+.parts li{border:1px solid var(--line);border-radius:999px;padding:var(--s2) var(--s4);
+background:var(--panel);font-size:var(--t2)}
+.parts b{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.parts small{color:var(--muted);font-size:var(--t1);margin-left:var(--s1)}
+
+/* ------------------------------------------------------------------ close */
+.close{text-align:center;padding-top:var(--s6);padding-bottom:var(--s6);
+border-top:1px solid var(--line)}
+.close .lede{margin-left:auto;margin-right:auto}
+.close .row{justify-content:center}
+
+@media (prefers-reduced-motion:reduce){
+/* Motion is a preference. The poster is not a fallback here, it is the
+   version somebody asked for. */
+.heroFilm{display:none!important}
+.heroStill{display:block!important}}
+
 /* -------------------------------------------------------- accommodations */
 @media (prefers-reduced-motion:reduce){
 *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
@@ -458,7 +541,8 @@ export type Viewer = { name: string; email: string; role: string; orgName: strin
 
 export function layout(
   title: string, body: string,
-  opts: { balance?: number; viewer?: Viewer } = {},
+  /** `front` widens the wrapper so the marketing page can go full-bleed. */
+  opts: { balance?: number; viewer?: Viewer; front?: boolean } = {},
 ): string {
   const v = opts.viewer;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -482,7 +566,8 @@ export function layout(
     <a href="/tokens">MCP</a><a href="/team">Team</a>${v.role === "owner" ? `<a href="/payouts">Payouts</a><a href="/settings">Limits</a>` : ""}
     <form method="post" action="/logout"><button class="btn ghost">Sign out</button></form>
   </div></details>`
-  : `<a href="/login">Sign in</a><a href="/signup">Create an account</a>`}
+  : `<a class="plain" href="/login">Sign in</a>
+     <a class="btn" href="/signup">Create an account</a>`}
 </nav></div></header>
 <script>
 // Where am I — marked here rather than threaded through every page's call,
@@ -500,7 +585,7 @@ if(best){best.setAttribute('aria-current','page');
 var d=best.closest('details.menu');
 if(d)d.querySelector('summary').textContent=best.textContent;}})();
 </script>
-<div class="wrap">${scrollable(body)}
+<div class="wrap${opts.front ? " wide" : ""}">${scrollable(body)}
 <footer><details><summary aria-label="About this platform">${icon("info", "About", true)}</summary>
 <p>Runs on Anthropic Managed Agents. Seed packs are placeholder text, not an expert's work.</p></details></footer>
 </div></body></html>`;
@@ -556,6 +641,217 @@ export function thumb(slug: string): string {
   let h = 0;
   for (const ch of slug) h = (h * 17 + ch.charCodeAt(0)) % 360;
   return `<div class="thumb" style="--h:${h}" aria-hidden="true"></div>`;
+}
+
+// ------------------------------------------------------------- front page
+
+export type FrontData = {
+  totals: import("./shelf.js").ShelfTotals;
+  roles: Array<{ id: string; name: string; blurb: string; icon: string; count: number }>;
+  anatomy: import("./shelf.js").Anatomy[];
+  featured: Array<PackRow & { pricePoints: number; runs: number }>;
+  /** What the visitor typed into the funnel, and what it matched. */
+  asked?: string;
+  matches?: Array<PackRow & { pricePoints: number }>;
+};
+
+const ASSETS = "https://pub-e651801aa8fc476c81b409baa6972944.r2.dev/agents/front";
+
+/**
+ * The page somebody sees before they have an account.
+ *
+ * It argues rather than announces, and every number on it is one we hold.
+ * There are no ratings and no user count because we have neither; the small
+ * figures are printed on purpose, which is the only version of them that is
+ * worth anything. The copy follows the narrative the Storytelling Designer
+ * pack wrote against our own numbers — see docs/design/front-page-copy.md.
+ */
+export function frontPage(d: FrontData): string {
+  const { totals: t } = d;
+  const shownRoles = d.roles.slice(0, 8);
+  return layout("Hire a worker", `
+<section class="hero">
+  <video class="heroFilm" autoplay muted loop playsinline preload="none"
+         poster="${ASSETS}/hero-poster.webp" aria-hidden="true" tabindex="-1">
+    <source src="${ASSETS}/hero.mp4" type="video/mp4">
+  </video>
+  <img class="heroStill" src="${ASSETS}/hero-poster.webp" alt="" decoding="async">
+  <div class="heroInk">
+    <h1>More jobs than people</h1>
+    <p class="lede">Hire somebody's whole method, not a file. A worker here is one
+    expert's way of doing a job, packed into a folder — skills, tools, hooks,
+    workflows, commands, docs. It runs on our servers against your budget, and you
+    watch it work while it works.</p>
+
+    <form class="funnel" method="get" action="/start">
+      <label for="ask">What do you need done?</label>
+      <div class="row">
+        <input id="ask" name="q" type="text" autocomplete="off"
+               value="${esc(d.asked ?? "")}"
+               placeholder="a designer who does brutalism, and someone to review my code">
+        <button class="btn" type="submit">${icon("search", "Find workers")}</button>
+      </div>
+      <p class="fine">Describe the job or the team. We will show you who on the shelf
+      can do it before you make an account.</p>
+    </form>
+  </div>
+</section>
+
+${d.asked !== undefined ? matchBlock(d) : ""}
+
+<section>
+  <h2>The numbers, unrounded</h2>
+  <ul class="stats">
+    <li><b>${t.packs}</b><span>workers</span></li>
+    <li><b>${t.skills}</b><span>skills they carry</span></li>
+    <li><b>${t.roles}</b><span>roles filled</span></li>
+    <li><b>${t.authors}</b><span>authors</span></li>
+    <li><b>${t.runs}</b><span>runs</span></li>
+  </ul>
+  <p class="lede">${t.runs} runs. That is not a typo. We built the shelf before we
+  had the traffic, and the honest version of that is a small number in plain type.
+  There are no ratings, vote counts or user numbers on this page, because we do not
+  have any yet. When we do, they will be the real ones.</p>
+</section>
+
+${shownRoles.length ? `<section>
+  <h2>${t.roles} roles filled, one of them deeply</h2>
+  <nav class="roles" aria-label="Roles">
+    ${shownRoles.map((r) => `<a href="/start?q=${encodeURIComponent(r.id)}">
+      ${icon(r.icon, r.name, true)}<b>${esc(r.name)}</b><small>${r.count}</small>
+      <span>${esc(r.blurb)}</span></a>`).join("")}
+  </nav>
+  <p class="lede">The shelf is lopsided and you should see it before you hire. Design
+  has enough workers that you can choose between them. The rest have one or two each,
+  so read the author's notes and decide whether that one suits the job. We would
+  rather you learned this here than three minutes into a run.</p>
+</section>` : ""}
+
+<section class="split">
+  <div>
+    <h2>A worker is not a skill</h2>
+    <p class="lede">A skill is one file. You install it into your own agent, and then
+    you decide when it applies, what it may touch, what runs before it and what
+    happens when it fails. That deciding is the actual work.</p>
+    <p class="lede">Our Senior Engineer carries eleven skills that somebody who does
+    the job for a living decided belong together. On a marketplace of skills that is
+    eleven separate purchases and the assembly is yours. Here it arrives assembled,
+    with the reasoning intact.</p>
+    ${d.anatomy.length ? `<ul class="parts">
+      ${d.anatomy.map((a) => `<li><b>${a.files}</b> ${esc(a.label.toLowerCase())}
+        <small>across ${a.packs} ${a.packs === 1 ? "worker" : "workers"}</small></li>`).join("")}
+    </ul>
+    <p class="fine">Counted from the folders on the shelf right now. The parts after
+    the first are the ones a single file cannot carry.</p>` : ""}
+  </div>
+  <img src="${ASSETS}/anatomy.webp" alt="" loading="lazy" decoding="async" width="1000" height="750">
+</section>
+
+<section class="split flip">
+  <div>
+    <h2>It runs here. You see the bill.</h2>
+    <p class="lede">Nothing to install and nothing to host. The worker runs on our
+    servers against your budget.</p>
+    <p class="lede">While it runs you watch the live trace: every step it takes, every
+    tool it calls, every file it opens. When it stops you get the cost of that run to
+    the token — not an estimate, and not a monthly lump you have to divide up
+    afterwards. Set a cap and the run stops at the cap. When a run goes wrong, and
+    some will, the trace shows you the step where it turned.</p>
+  </div>
+  <img src="${ASSETS}/runs-here.webp" alt="" loading="lazy" decoding="async" width="1000" height="750">
+</section>
+
+<section class="split">
+  <div>
+    <h2>Somebody wrote this</h2>
+    <p class="lede">Every worker on the shelf has an author, and the author is the
+    thing you are really buying. You can read how they work before you spend
+    anything, and tell from the docs whether they have done the job or only read
+    about it.</p>
+    <p class="lede">${t.authors} authors so far. Some are still placeholders, carrying
+    the name "Placeholder — needs a real campaigner", because we wired the shelf up
+    before we filled it. They are listed as placeholders rather than dressed up as
+    people.</p>
+  </div>
+  <img src="${ASSETS}/hired-fifty.webp" alt="" loading="lazy" decoding="async" width="1000" height="563">
+</section>
+
+<section class="split flip">
+  <div>
+    <h2>Or call them from where you already work</h2>
+    <p class="lede">Every worker is reachable over MCP. Point your own client at one
+    endpoint and they appear as tools alongside everything else you use. Same
+    servers, same budget, same live trace, same bill at the end. You do not have to
+    move your work onto our site for any of this to be true.</p>
+  </div>
+  <img src="${ASSETS}/mcp.webp" alt="" loading="lazy" decoding="async" width="1000" height="750">
+</section>
+
+<section class="split">
+  <div>
+    <h2>If the method is yours, so is the income</h2>
+    <p class="lede">Package the way you work as a folder and put it on the shelf. You
+    earn on every run, not only on the sale. A worker that gets used every week pays
+    you every week, which means the incentive is to keep it working rather than to
+    keep selling it. You can cash out.</p>
+    <p class="lede">${t.authors} authors so far, and the gaps are obvious from the role
+    counts above. If you are good at any of them, there is room nobody is competing
+    for yet.</p>
+    <p><a class="btn" href="/signup">Publish a worker</a></p>
+  </div>
+  <img src="${ASSETS}/authors.webp" alt="" loading="lazy" decoding="async" width="1000" height="750">
+</section>
+
+<section class="close">
+  <h2>Start with one job</h2>
+  <p class="lede">Make an account, say what you need, and watch the first run cost
+  what it says on the trace.</p>
+  <div class="row">
+    <a class="btn" href="/signup">Create an account</a>
+    <a class="btn ghost" href="/login">Sign in</a>
+  </div>
+</section>`, { front: true });
+}
+
+/** What the funnel found, and the one thing to do about it. */
+function matchBlock(d: FrontData): string {
+  const asked = (d.asked ?? "").trim();
+  const found = d.matches ?? [];
+  if (!asked) return "";
+  return `<section class="found" id="found">
+  <h2>${found.length === 0
+    ? `Nothing on the shelf matches “${esc(asked)}” yet`
+    : `${found.length} ${found.length === 1 ? "worker" : "workers"} for “${esc(asked)}”`}</h2>
+  ${found.length === 0
+    ? `<p class="lede">The shelf is curated and short on purpose, so it has gaps — and
+       that one is now on the list. Try a broader word, or
+       <a href="/signup">make an account</a> and tell us what you were looking for.</p>`
+    : `<div class="grid">${found.slice(0, 6).map(frontCard).join("")}</div>
+       <p class="lede">Make an account to hire ${found.length === 1 ? "it" : "any of them"}.
+       You get ${"120"} points a month to start, which is enough to run a worker properly
+       before you decide anything.</p>
+       <div class="row">
+         <a class="btn" href="/signup">Create an account</a>
+         <a class="btn ghost" href="/login">Sign in</a>
+       </div>`}
+</section>`;
+}
+
+/** A pack card for somebody who cannot click through to the pack yet. */
+function frontCard(p: PackRow & { pricePoints: number }): string {
+  return `<div class="card gig">
+  ${p.image
+    ? `<img class="thumb" src="${esc(heroSrc(p.image))}" alt="" loading="lazy" decoding="async" width="640" height="360">`
+    : thumb(p.slug)}
+  <div class="meta">
+    <p class="who">${avatar(p.author)}<span>${esc(p.author.split(" — ")[0] ?? p.author)}</span></p>
+    <h3>${esc(p.name)}</h3>
+    <p class="line">${esc(p.tagline)}</p>
+    <p class="foot">
+      <span class="proof">${esc(p.role || "worker")}</span>
+      <span class="price">${p.pricePoints === 0 ? "free" : `${p.pricePoints}<small> pts</small>`}</span>
+    </p>
+  </div></div>`;
 }
 
 export function catalogPage(

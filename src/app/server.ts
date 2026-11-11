@@ -12,6 +12,7 @@ import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceMillipoints, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
+import * as Shelf from "./shelf.js";
 import * as Cr from "./creators.js";
 import * as L from "./listing.js";
 import * as S from "./social.js";
@@ -63,6 +64,8 @@ function clearCookie(res: http.ServerResponse): void {
 
 /** Routes reachable without being signed in. Everything else requires a session. */
 const PUBLIC = /^\/(login|signup|healthz|invite\/[A-Za-z0-9_-]+)$/;
+/** Pages a visitor sees before they have an account. */
+const OPEN = /^\/(|start)$/;
 
 function body(req: http.IncomingMessage): Promise<Record<string, string>> {
   return new Promise((resolve, reject) => {
@@ -1384,6 +1387,34 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   }
 
   if (await accountRoutes(req, res)) return;
+
+  // The front door. A visitor with no account gets the marketing page and the
+  // funnel; everybody else falls through to the signed-in catalog below.
+  const guest = !(await A.sessionFromToken(cookies(req)[COOKIE]))
+    && !(await A.sessionFromApiToken(req.headers.authorization));
+  if (guest && method === "GET" && OPEN.test(path)) {
+    const asked = (url.searchParams.get("q") ?? "").trim();
+    const [totals, roles, anatomy, signals] = await Promise.all([
+      Shelf.shelfTotals(), P.roles(), Shelf.anatomy(), Shelf.packSignals(),
+    ]);
+    const withPrice = async (rows: P.PackRow[]) =>
+      rows.map((r) => ({ ...r, pricePoints: Pay.pricePoints(r), runs: signals.get(r.id)?.runs ?? 0 }));
+    // The funnel searches the real shelf. Showing somebody a result they
+    // cannot have is worse than showing them nothing, so a miss says so.
+    const matches = asked ? await withPrice(await P.listPacks(asked)) : undefined;
+    const featured = (await withPrice(await P.listPacks()))
+      .sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name)).slice(0, 6);
+    return html(res, V.frontPage({
+      totals, roles, anatomy, featured,
+      ...(asked ? { asked } : path === "/start" ? { asked: "" } : {}),
+      ...(matches ? { matches } : {}),
+    }));
+  }
+  // A visitor who reaches /start with an account belongs on the catalog.
+  if (!guest && method === "GET" && path === "/start") {
+    const q = url.searchParams.get("q");
+    return redirect(res, q ? `/?q=${encodeURIComponent(q)}` : "/");
+  }
 
   // A cookie for the browser, a bearer token for everything else — so the CLI
   // and an agent reach the same routes with the same permissions.
