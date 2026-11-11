@@ -81,6 +81,6 @@ export const ROLES: RoleRow[] = [
     blurb: "Gets it out, and writes up honestly what happened when it broke." },
   { rank: 7, id: "security", name: "Security", icon: "warn", listed: true,
     blurb: "Looks for the way in, names the risk plainly, and says what to do first." },
-  { rank: 8, id: "agent", name: "Agent", icon: "trace", listed: true,
+  { rank: 8, id: "agent", name: "Agents Engineering", icon: "trace", listed: true,
     blurb: "Builds the worker, not the answer — and tests that it fires when it should." },
 ];

@@ -6,6 +6,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { id, initDb, listRoles, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
+import type { Role } from "./roles.js";
 import { sql } from "./sql.js";
 import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -383,6 +384,22 @@ export async function roles(): Promise<Array<{ id: string; name: string; blurb: 
     .filter((r) => r.listed)
     .map((r) => ({ id: r.id, name: r.name, blurb: r.blurb, icon: r.icon, count: counts.get(r.id) ?? 0 }))
     .filter((r) => r.count > 0);
+}
+
+/**
+ * The single row a pack's `role` column names, for the breadcrumb.
+ *
+ * Reads `listRoles()` — the same table `roles()` counts against, not the
+ * `ROLES` seed — so renaming a role here is what the breadcrumb shows too,
+ * which is the gap `views.ts`'s own doc comment flagged: a pure render
+ * module cannot read this table itself, so the route resolves it and hands
+ * it in. `null` for a role id matching no row, retired or never one; the
+ * breadcrumb drops the segment rather than guessing.
+ */
+export async function roleOf(roleId: string): Promise<Role | null> {
+  if (!roleId) return null;
+  const r = (await listRoles()).find((row) => row.id === roleId);
+  return r ? { id: r.id, name: r.name, blurb: r.blurb, icon: r.icon } : null;
 }
 
 /** The tags actually present on a set of packs, counted. */

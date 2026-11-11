@@ -155,6 +155,7 @@ const NOTHING_KNOWN: PackPageExtras = {
   votes: { count: 0, voted: false },
   saved: false,
   changelog: [],
+  role: { id: "engineer", name: "Engineer", blurb: "Reads the code before changing it.", icon: "tokens" },
 };
 
 const FULL: Listing = {
@@ -266,17 +267,29 @@ describe("the pack page", () => {
     expect(render()).not.toContain("Built on");
   });
 
-  it("puts the role from P.ROLES in the breadcrumb", () => {
+  it("puts the role the route resolved in the breadcrumb", () => {
     const h = render();
     expect(h).toContain("Workers");
     expect(h).toContain(`<a href="/?q=engineer">Engineer</a>`);
     expect(h).toContain("Senior Engineer");
   });
 
-  it("drops the role out of the breadcrumb when a pack has none", () => {
-    const h = render({ pack: { role: "" } });
+  it("drops the role out of the breadcrumb when a pack's role matches no row", () => {
+    const h = render({ pack: { role: "" }, extras: { role: null } });
     expect(h).toContain("Workers");
     expect(h).not.toContain("?q=engineer");
+  });
+
+  // This is the regression that matters: the breadcrumb used to read the
+  // `ROLES` constant directly, so renaming a role in the table updated the
+  // shelf's role strip but not this. It now renders whatever `extras.role`
+  // is — resolved by the route against the table — so a renamed row with the
+  // same id shows the new name, without `roles.ts` or the `ROLES` constant
+  // being touched at all.
+  it("follows a role renamed in the table, not the ROLES constant", () => {
+    const h = render({ extras: { role: { id: "engineer", name: "Platform Engineer", blurb: "x", icon: "tokens" } } });
+    expect(h).toContain(`<a href="/?q=engineer">Platform Engineer</a>`);
+    expect(h).not.toContain(">Engineer<");
   });
 
   it("no longer promises that the method stays secret", () => {

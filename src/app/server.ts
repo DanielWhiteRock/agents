@@ -220,7 +220,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const [
       owned, turns, budgetCents, tried, tools, mcpServers, policy, creatorHandle,
       stats, files, refundDays, rating, reviews, mayReview, myReview, votes, saved, changelog,
-      modelList, balance,
+      modelList, balance, role,
     ] = await Promise.all([
       v ? P.entitled(ctx.orgId, v.id) : Promise.resolve(false),
       settingInt("trial_turns"),
@@ -242,6 +242,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       P.changelogOf(p.id),
       models(),
       bal(),
+      P.roleOf(p.role),
     ]);
     const trial = v && !owned ? { turns, budgetCents, used: tried } : null;
     // The permissions rail is derived from what the run is configured with,
@@ -272,6 +273,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       votes,
       saved,
       changelog,
+      role,
     };
     return html(res, V.packPage(p, v, owned, modelList, balance,
       url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));

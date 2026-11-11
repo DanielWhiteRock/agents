@@ -1,5 +1,5 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
-import { ROLES, type IconName } from "./roles.js";
+import { type IconName, type Role } from "./roles.js";
 import { capPerRole } from "./shelf.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
 import { faqRemovedBy, listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
@@ -1002,6 +1002,14 @@ export type PackPageExtras = {
   rating: Rating;
   /** Written opinions worth showing — a rating, a body, or both; newest edit first. */
   reviews: Array<{ byline: string | null; rating: number | null; body: string; createdAt: string }>;
+  /**
+   * The row the pack's `role` column names, read from the same table the
+   * shelf's role strip reads — not the `ROLES` seed — so renaming a role
+   * there is what the breadcrumb shows too. `null` when the pack's role
+   * matches no row (never tagged, or the row has since been renamed out from
+   * under it); the breadcrumb then drops the segment rather than guessing.
+   */
+  role: Role | null;
   /** Whether this viewing organisation has a completed, non-trial run and may submit one. */
   mayReview: boolean;
   /** This organisation's own review, so the form edits it instead of handing back a blank one. */
@@ -1042,10 +1050,12 @@ const stars = (n: number): string => "★".repeat(n) + "☆".repeat(5 - n);
  *
  * The role segment is a link into the shelf filtered by that role, which is
  * the page it claims to be a step down from. A pack with no role loses the
- * segment rather than showing an empty one.
+ * segment rather than showing an empty one. `role` is resolved by the route
+ * against the `roles` table, not read off a constant here — this module
+ * imports nothing from the service layer, so it renders whatever it is
+ * given.
  */
-function breadcrumb(p: PackRow): string {
-  const role = ROLES.find((r) => r.id === p.role);
+function breadcrumb(p: PackRow, role: Role | null): string {
   const sep = ` <span aria-hidden="true">›</span> `;
   return `<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a>${sep}<span>Workers</span>${
     role ? `${sep}<a href="/?q=${encodeURIComponent(role.id)}">${esc(role.name)}</a>` : ""
@@ -1072,12 +1082,12 @@ export function packPage(
   const choices = (pinned.length ? pinned : models);
   const {
     listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator,
-    rating, reviews, mayReview, myReview, votes, saved, changelog,
+    rating, reviews, mayReview, myReview, votes, saved, changelog, role,
   } = extras;
   const free = p.price_points === 0;
   return layout(p.name, `
 ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
-${breadcrumb(p)}
+${breadcrumb(p, role)}
 <h1>${esc(p.name)}</h1>
 <p class="lede">${esc(p.tagline)}</p>
 <div class="row" style="margin-bottom:var(--s2)">

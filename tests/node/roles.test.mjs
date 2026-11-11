@@ -125,3 +125,61 @@ test("an icon views.ts cannot draw is rejected, loudly, and nothing is written",
   assert.deepEqual((await db.listRoles()).find((r) => r.id === R.ROLES[0].id), R.ROLES[0],
     "and leaves the role as it was");
 });
+
+// ----------------------------------------------------------- the breadcrumb
+//
+// `views.ts` is a pure render module with no database access, so the pack
+// page's breadcrumb cannot read `platform.roles()` itself — it renders
+// whatever role object it is handed. The route (`server.ts`) is the thing
+// that resolves it, with `P.roleOf`, against this same table. This is the
+// regression that matters: before that wiring existed, the breadcrumb read
+// the `ROLES` constant directly, so renaming a role here moved the shelf's
+// role strip but not this. Driving `db.putRole` → `P.roleOf` → `V.packPage`
+// end to end, without touching `roles.ts` at all, is the strongest check
+// that it cannot regress back to the constant.
+test("renaming a role in the table changes the pack page's breadcrumb", async () => {
+  const V = await import("../../dist/src/app/views.js");
+  const packId = await listPackAs("engineer");
+  const pack = await P.packById(packId);
+  const viewer = { name: "T", email: "t@roles.test", role: "owner", orgName: "Roles Test Co" };
+  const extrasFor = (role) => ({
+    listing: null, stats: { runs: 0, buyers: 0, version: 1 }, permissions: [],
+    files: { files: 0, skills: 0, tree: [] }, updatedAt: null, builtOn: null, refundDays: 14,
+    creator: null, rating: { average: null, count: 0, distribution: [0, 0, 0, 0, 0] },
+    reviews: [], mayReview: false, myReview: null, votes: { count: 0, voted: false },
+    saved: false, changelog: [], role,
+  });
+  const render = async () => V.packPage(
+    pack, undefined, false, [], 0, undefined, viewer, null, false, extrasFor(await P.roleOf("engineer")));
+
+  const before_ = await render();
+  assert.match(before_, /<a href="\/\?q=engineer">Engineer<\/a>/, "starts out reading the seeded name");
+
+  await db.putRole({ ...R.ROLES.find((r) => r.id === "engineer"), name: "Platform Engineer" });
+  try {
+    const after_ = await render();
+    assert.match(after_, /<a href="\/\?q=engineer">Platform Engineer<\/a>/,
+      "the breadcrumb follows a rename in the table");
+    assert.doesNotMatch(after_, />Engineer</, "the old, seeded name is gone, not merely joined by the new one");
+  } finally {
+    await db.putRole(R.ROLES.find((r) => r.id === "engineer"));
+  }
+});
+
+test("a pack whose role matches no row renders the breadcrumb without a role segment", async () => {
+  const V = await import("../../dist/src/app/views.js");
+  const packId = await listPackAs("retired-ghost-role");
+  const pack = await P.packById(packId);
+  const viewer = { name: "T", email: "t2@roles.test", role: "owner", orgName: "Roles Test Co" };
+  const extras = {
+    listing: null, stats: { runs: 0, buyers: 0, version: 1 }, permissions: [],
+    files: { files: 0, skills: 0, tree: [] }, updatedAt: null, builtOn: null, refundDays: 14,
+    creator: null, rating: { average: null, count: 0, distribution: [0, 0, 0, 0, 0] },
+    reviews: [], mayReview: false, myReview: null, votes: { count: 0, voted: false },
+    saved: false, changelog: [], role: await P.roleOf("retired-ghost-role"),
+  };
+  const h = V.packPage(pack, undefined, false, [], 0, undefined, viewer, null, false, extras);
+  assert.equal(extras.role, null, "an id matching no row resolves to null");
+  assert.doesNotMatch(h, /\?q=retired-ghost-role/, "no role segment for a role nothing names");
+  assert.match(h, /<span>Workers<\/span>/, "the rest of the breadcrumb still renders");
+});
