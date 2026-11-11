@@ -941,6 +941,74 @@ describe("what the approval screen promises about the FAQ", () => {
   });
 });
 
+// ----------------------------------------- naming what approval would remove
+//
+// "The questions in that box become the whole of the pack's FAQ" is true and
+// still leaves the author to work out what that costs them — in particular
+// for an answer published out of the inbox *since* they saved the draft,
+// which they have never seen in the box. The screen holds both sides, so it
+// can simply say which answers are about to come off the page.
+
+describe("the answers approving a saved draft would take off the page", () => {
+  /** A live FAQ with two published answers, against a draft that keeps one. */
+  const removingOne = (over: Record<string, unknown> = {}) => listingApprovalPage(approvalArgs({
+    live: { ...FULL, faq: [FULL.faq[0]!, { q: "Does it need network access?", a: "No." }] },
+    draft: { ...FULL, faq: [FULL.faq[0]!] },
+    draftAuthor: "human",
+    generatedAt: "2026-11-10T09:00:00.000Z",
+    ...over,
+  }));
+
+  it("says how many, and names them", () => {
+    const h = removingOne();
+    expect(h).toMatch(/will remove 1 answer/i);
+    expect(h).toContain("Does it need network access?");
+  });
+
+  it("counts more than one in the plural", () => {
+    const h = listingApprovalPage(approvalArgs({
+      live: { ...FULL, faq: [{ q: "One?", a: "a" }, { q: "Two?", a: "b" }] },
+      draft: { ...FULL, faq: [] },
+      draftAuthor: "human", generatedAt: "2026-11-10T09:00:00.000Z",
+    }));
+    expect(h).toMatch(/will remove 2 answers/i);
+  });
+
+  it("says nothing when the draft keeps every answer that is live", () => {
+    const h = listingApprovalPage(approvalArgs({
+      live: FULL, draft: FULL, draftAuthor: "human", generatedAt: "2026-11-10T09:00:00.000Z",
+    }));
+    expect(h).not.toMatch(/will remove/i);
+  });
+
+  it("matches a question whatever case and padding it was typed in, as the merge does", () => {
+    const h = listingApprovalPage(approvalArgs({
+      live: { ...FULL, faq: [{ q: "Does It Write To The Branch?", a: "No." }] },
+      draft: { ...FULL, faq: [{ q: "  does it write to the branch?  ", a: "No, it only reads." }] },
+      draftAuthor: "human", generatedAt: "2026-11-10T09:00:00.000Z",
+    }));
+    expect(h).not.toMatch(/will remove/i);
+  });
+
+  it("asks nothing of a generated draft, which cannot remove an answer", () => {
+    expect(removingOne({ draftAuthor: "generator" })).not.toMatch(/will remove/i);
+  });
+
+  it("does not tell a member to edit a box they do not have", () => {
+    expect(removingOne({ canApprove: false })).not.toMatch(/will remove/i);
+  });
+
+  it("escapes the question it names", () => {
+    const h = listingApprovalPage(approvalArgs({
+      live: { ...FULL, faq: [{ q: "<script>alert(1)</script>", a: "No." }] },
+      draft: { ...FULL, faq: [] },
+      draftAuthor: "human", generatedAt: "2026-11-10T09:00:00.000Z",
+    }));
+    expect(h).not.toContain("<script>alert(1)</script>");
+    expect(h).toContain("&lt;script&gt;");
+  });
+});
+
 // ------------------------------------------------------ the small omissions
 
 describe("the parts of the page that had nothing to say", () => {

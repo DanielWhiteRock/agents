@@ -10,7 +10,7 @@ if (!process.env.DATABASE_URL) {
   process.env.DB_PATH = join(mkdtempSync(join(tmpdir(), "listing-")), "t.db");
 }
 
-let A, P, Auth, L, M, Cr, db, sql;
+let A, P, Auth, L, M, Cr, db, sql, setSql;
 let n = 0;
 const email = () => `l${++n}-${Date.now()}@example.com`;
 
@@ -44,7 +44,7 @@ before(async () => {
   L = await import("../../dist/src/app/listing.js");
   M = await import("../../dist/src/app/messages.js");
   Cr = await import("../../dist/src/app/creators.js");
-  sql = (await import("../../dist/src/app/sql.js")).sql;
+  ({ sql, setSql } = await import("../../dist/src/app/sql.js"));
   await db.initDb();
   P.setRuntime(stubRuntime());
 });
@@ -651,6 +651,88 @@ test("an import's write computed from a stale FAQ read lands nothing at all", as
   const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
   assert.ok(questions.includes(question.body), "the answer published in the gap survives");
   assert.ok(!questions.includes("From the folder?"), "and the stale write landed nothing");
+});
+
+/**
+ * The writer that looked like a fourth: a plain details-form save.
+ *
+ * `packFields` in `server.ts` carries no listing field at all, and `updatePack`
+ * wrote every absent one back as the value it had read — so `faq = <what I
+ * read two awaits ago>`, which erases an answer published out of the inbox in
+ * between. The column is now left out of the SET list unless the caller states
+ * a FAQ, so a details-form save does not write it at all.
+ */
+/**
+ * Asserted against the statement rather than through a race, deliberately.
+ *
+ * Driving the two writers with `Promise.all` proves nothing here: the
+ * interleaving Node produces runs the save's write before the publish's, so
+ * such a test passes with the column written back as well. What the fix
+ * actually claims is narrower and checkable — the column is not in the
+ * statement — and a recording `Sql` can be asked exactly that.
+ */
+const recordingSql = (row) => {
+  const writes = [];
+  return {
+    dialect: "sqlite",
+    writes,
+    async query(text, params = []) {
+      if (/^\s*UPDATE/i.test(text)) {
+        writes.push({ text, params });
+        return [{ id: row.id }];
+      }
+      return /FROM packs/i.test(text) ? [row] : [];
+    },
+    async one(text, params) { return (await this.query(text, params))[0]; },
+    async exec() {},
+    async close() {},
+  };
+};
+
+test("a details-form save leaves the FAQ out of the statement altogether", async () => {
+  const { orgId, pack } = await makePack();
+  const live = JSON.stringify([{ q: "Already live?", a: "Yes." }]);
+  const fake = recordingSql({ ...pack, faq: live });
+  const real = await sql();
+  setSql(fake);
+  try {
+    // The details form: no listing field mentioned at all.
+    await Auth.updatePack(orgId, pack.slug, { ...INPUT, slug: pack.slug, tagline: "A sharper line" });
+    // And a caller that does state a FAQ, which must still write one.
+    await Auth.updatePack(orgId, pack.slug, {
+      ...INPUT, slug: pack.slug, faq: [{ q: "Stated outright?", a: "Yes." }],
+    });
+  } finally { setSql(real); }
+
+  const [withoutFaq, withFaq] = fake.writes;
+  assert.ok(withoutFaq && withFaq, "both saves ran");
+  assert.doesNotMatch(withoutFaq.text, /faq =/,
+    "a caller that states no FAQ does not write the column, so there is no race to lose");
+  assert.ok(!withoutFaq.params.some((p) => String(p) === live),
+    "and the value it read is not even sent");
+  assert.equal(withoutFaq.params.length, 21, "twenty-one parameters, none of them the FAQ");
+  assert.match(withFaq.text, /faq = \$22/, "a caller that states one still writes it");
+  assert.ok(withFaq.params.some((p) => String(p).includes("Stated outright?")));
+  assert.equal(withFaq.params.length, 22);
+});
+
+test("a details-form save still cannot wipe the five listing fields it does not mention", async () => {
+  // The other half of "absent means leave it alone": `faq` is left alone by
+  // not being written, the rest by being written back as they were, and both
+  // have to stay true.
+  const { orgId, pack } = await makePack();
+  await L.saveDraft(pack.id, DRAFT, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  await Auth.updatePack(orgId, pack.slug, { ...INPUT, slug: pack.slug, tagline: "A sharper line" });
+
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.equal(live.description, DRAFT.description);
+  assert.deepEqual(live.useCases, DRAFT.useCases);
+  assert.deepEqual(live.limitations, DRAFT.limitations);
+  assert.deepEqual(live.requirements, DRAFT.requirements);
+  assert.deepEqual(live.scenarios, DRAFT.scenarios);
+  assert.deepEqual(live.faq, DRAFT.faq, "the FAQ included, which is now left alone by not being written");
 });
 
 test("an import's write with the FAQ it really read goes through", async () => {

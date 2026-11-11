@@ -245,8 +245,11 @@ export async function saveGeneratedDraft(
  * `publishToFaq` in `messages.ts`, where a creator quotes a buyer's question
  * and their own answer onto the page, and `importPack`'s merge in
  * `authoring.ts`, where a folder's own `faq:` block arrives. Interleave two of
- * those read-modify-write cycles and the loser's entry is gone — the exact content loss the FAQ merge
- * exists to prevent, arrived at from the other direction.
+ * those read-modify-write cycles and the loser's entry is gone — the exact
+ * content loss the FAQ merge exists to prevent, arrived at from the other
+ * direction. (`updatePack` is not a fourth: it leaves the column out of its
+ * SET list unless its caller states a FAQ, so a details-form save is not a
+ * writer of it at all.)
  *
  * There is no transaction primitive to reach for: `src/app/sql.ts` exposes
  * `query`/`one`/`exec`/`close`, and adding one is a change with its own
@@ -263,14 +266,11 @@ export async function saveGeneratedDraft(
  * `FAQ_WRITE_ATTEMPTS` and `FaqContendedError` live in `errors.ts` because
  * `authoring.ts` needs them too and may not import this module; re-exported
  * above, since the condition is this module's subject.
- */
-
-/**
- * Read `packs.faq`, let the caller decide what it should become, and write it
- * back only if nobody else changed it in between.
  *
- * The one place `packs.faq` is appended to, so a second writer cannot be
- * added without inheriting the guard.
+ * All of which is what the function below does: read `packs.faq`, let the
+ * caller decide what it should become, and write it back only if nobody else
+ * changed it in between. It is the one place `packs.faq` is appended to, so a
+ * second appender cannot be added without inheriting the guard.
  */
 export async function updateFaq(packId: string, next: (live: FaqEntry[]) => FaqEntry[]): Promise<void> {
   const s = await sql();

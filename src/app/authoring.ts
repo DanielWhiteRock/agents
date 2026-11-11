@@ -162,13 +162,23 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
 /**
  * Only the author's organisation may edit, and a slug never changes.
  *
- * `expect.faq` makes the whole statement conditional on `packs.faq` still
- * holding the value the caller computed its own `input.faq` from, and raises
- * `FaqContendedError` when it does not. Only the FAQ needs it: every other
- * listing field is prose one author writes, while `packs.faq` has three
- * read-modify-write writers and losing the race there deletes an answer a
- * creator wrote to a buyer. See `updateFaq` in `listing.ts` for why this is a
- * compare-and-set and not a transaction.
+ * Every absent listing field is written back as the value this function just
+ * read, so that a caller which never mentions one cannot wipe it. For five of
+ * the six that is harmless — they are prose only the author writes, so
+ * nobody else's value can be in flight. `faq` is the exception: `publishToFaq`
+ * writes it too, from a creator's inbox, so writing back a value read two
+ * awaits ago erases an answer that landed in between. A plain details-form
+ * save mentions no listing field at all, and that was enough to lose one.
+ *
+ * So `faq` is left out of the SET list entirely unless the caller states it.
+ * Not a guard, not a merge — no write, so there is nothing to race with, and
+ * `packs.faq`'s writers stay the three that mean to write it.
+ *
+ * `expect.faq` is for the caller that does state it: it makes the whole
+ * statement conditional on the column still holding the value that caller
+ * computed from, and raises `FaqContendedError` when it does not. See
+ * `updateFaq` in `listing.ts` for why this is a compare-and-set and not a
+ * transaction.
  */
 export async function updatePack(
   orgId: string, slug: string, input: PackInput, expect?: { faq: string },
@@ -178,13 +188,19 @@ export async function updatePack(
   if (pack.author_org_id !== orgId) throw new NotTheAuthorError();
   validate(input);
   const s = await sql();
-  const guard = expect ? " AND COALESCE(faq, '') = $23" : "";
+  // `faq` is the last assignment and the last-but-one parameter precisely so
+  // that leaving it out needs no renumbering of the twenty-one before it. An
+  // unreferenced `$n` is not free: Postgres infers a type per parameter up to
+  // the highest one used, so a gap in the middle is a "could not determine
+  // data type" error rather than an ignored value.
+  const faqSet = input.faq === undefined ? "" : ", faq = $22";
+  const guard = expect ? ` AND COALESCE(faq, '') = $${input.faq === undefined ? 22 : 23}` : "";
   const written = await s.query<{ id: string }>(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
        author_payout_email = $11, tags = $13, image = $14, role = $15,
-       description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21,
-       scenarios = $22
+       description = $16, use_cases = $17, limitations = $18, requirements = $19, built_on = $20,
+       scenarios = $21${faqSet}
      WHERE id = $12${guard} RETURNING id`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
@@ -194,14 +210,15 @@ export async function updatePack(
       input.role?.trim() || pack.role,
       // A caller that never mentions the listing (the plain pack-details form,
       // for instance) must not wipe one set through the import or listing
-      // flows — so an absent field keeps the row's current value.
+      // flows — so an absent field keeps the row's current value. `faq` is
+      // the one that does this by not being written at all; see above.
       input.descriptionLong?.trim() ?? pack.description,
       input.useCases ? JSON.stringify(input.useCases) : pack.use_cases,
       input.limitations ? JSON.stringify(input.limitations) : pack.limitations,
-      input.faq ? JSON.stringify(input.faq) : pack.faq,
       input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
       input.builtOn?.trim() ?? pack.built_on,
       input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios,
+      ...(input.faq === undefined ? [] : [JSON.stringify(input.faq)]),
       ...(expect ? [expect.faq] : [])]);
   // A conditional write that matched nothing means somebody else wrote the
   // FAQ between the caller's read and this statement. Nothing here changed,
@@ -402,10 +419,6 @@ export async function importPack(args: {
     // throw.
     useCases: parsed.useCases.length ? parsed.useCases : stringsFromJson(existing?.use_cases),
     limitations: parsed.limitations.length ? parsed.limitations : stringsFromJson(existing?.limitations),
-    // The FAQ is the one listing field that merges instead of replacing, and
-    // the merge is recomputed under a compare-and-set in
-    // `updateMergingFaq` below — this value is the one a *new* pack is
-    // created with, where there is nothing to merge with and nobody to race.
     // The FAQ is the one listing field that merges instead of replacing.
     // Every other field is prose only the author writes, so a folder that
     // states one is the author changing their mind. An FAQ entry can also
@@ -414,6 +427,10 @@ export async function importPack(args: {
     // a `faq:` block has no idea those exist. Replacing wholesale deleted
     // them, with no way back but the thread they came from. The live entries
     // win on a repeated question, same rule `approveDraft` follows.
+    //
+    // This value is the one a *new* pack is created with, where there is
+    // nothing to merge against and nobody to race; on an update it is
+    // recomputed under a compare-and-set by `updateMergingFaq`.
     faq: mergeFaq(faqFromJson(existing?.faq), parsed.faq),
     scenarios: parsed.scenarios.length ? parsed.scenarios : scenariosFromJson(existing?.scenarios),
     requirements: parsed.requirements.length ? parsed.requirements : stringsFromJson(existing?.requirements),

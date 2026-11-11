@@ -1,7 +1,7 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
 import { ROLES } from "./roles.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
-import { listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
+import { faqRemovedBy, listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
 import type { CreatorRow } from "./creators.js";
 import type { Rating } from "./social.js";
 import type { InboxThread, MyThread } from "./messages.js";
@@ -1730,6 +1730,16 @@ export function listingApprovalPage(args: {
   const { pack: p, live, draft } = args;
   const behind = draft !== null && args.sourceVersion !== null && args.currentVersion !== null
     && args.sourceVersion !== args.currentVersion;
+  // What approving would take off the page. Only a draft its author saved can
+  // remove an answer — a generated one's FAQ is merged with what is live — and
+  // this is computed from `live` at render time, so an answer published out of
+  // the inbox since the draft was saved shows up here too, which is the one
+  // case the author could not otherwise have known about.
+  // Only asked of the owner who can act on it: the copy tells them to put a
+  // question back in a box a member does not have.
+  const removing = draft !== null && args.canApprove && args.draftAuthor === "human" && live
+    ? faqRemovedBy(live.faq, draft.faq)
+    : [];
   return layout(`Listing for ${p.name}`, `
 ${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
 ${args.saved ? `<div class="note">Draft saved. It is still a draft — approve it below to put it in front of buyers.</div>` : ""}
@@ -1758,6 +1768,11 @@ ${behind ? `<div class="note">This draft describes version ${args.sourceVersion}
     ${args.canApprove ? listingEditor(p.slug, draft, args.draftAuthor) : listingSections(draft)}
   </div>
 </div>
+${removing.length ? `<div class="note bad" style="margin-top:var(--s4)"><strong>Approving will remove ${
+  removing.length === 1 ? "1 answer" : `${removing.length} answers`} now on the page.</strong>
+Not in the FAQ box above, so publishing this draft takes ${removing.length === 1 ? "it" : "them"} down:
+${bullets(removing.map((f) => f.q))}
+Put the question back in the box if that is not what you meant.</div>` : ""}
 ${args.canApprove ? `<form method="post" action="/packs/${esc(p.slug)}/listing/approve" style="margin-top:var(--s4)">
   <button class="btn" type="submit">Approve and publish this listing</button>
 </form>
