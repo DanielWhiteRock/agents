@@ -14,6 +14,41 @@ let server, A, P, Auth, db, sql, Pay, Reply, Points;
 let n = 0;
 const email = (tag) => `mcpacquire-${tag}-${++n}-${Date.now()}@example.com`;
 
+/** Lower-cased, punctuation-stripped words, for comparing runs rather than exact strings. */
+const words = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
+
+/**
+ * Every overlapping `windowSize`-word run in `s`, as a Set of space-joined
+ * strings — the unit a leak check sweeps for shared runs over, so a leak of
+ * any one clause is caught, not just a leaked full-string echo.
+ *
+ * A fixture only `windowSize` words long produces exactly one window, which
+ * can only ever catch a verbatim full-string match — Task 7's fixture was
+ * deliberately much longer than 12 words for this reason, and any fixture
+ * handed to `assertNoLeak` below must be too.
+ */
+const wordRuns = (s, windowSize) => {
+  const w = words(s);
+  const runs = new Set();
+  for (let i = 0; i + windowSize <= w.length; i++) runs.add(w.slice(i, i + windowSize).join(" "));
+  return runs;
+};
+
+/**
+ * Asserts that no `windowSize`-word run of `secret` reappears anywhere in
+ * `out` — the sliding-window sweep Task 7 wrote inline for `load_pack`'s
+ * refusal, extracted here so `buy_pack` (and whatever Tasks 9/10 add to this
+ * file) can reuse it instead of re-deriving it, or falling back to a
+ * single-token `doesNotMatch` that a leak of any other clause would miss.
+ */
+const assertNoLeak = (out, secret, windowSize = 12) => {
+  const secretRuns = wordRuns(secret, windowSize);
+  const outRuns = wordRuns(out, windowSize);
+  let leaked = false;
+  for (const r of outRuns) if (secretRuns.has(r)) leaked = true;
+  assert.equal(leaked, false, `refusal leaked a ${windowSize}-word run of the instructions:\n${out}`);
+};
+
 const stubRuntime = () => ({
   countSystemTokens: async (_m, sys) => Math.ceil(sys.length / 4),
   publishPack: async () => ({ runtimePackId: `agt_${++n}`, version: "1", skills: [], subagents: [] }),
@@ -124,16 +159,7 @@ test("a paid pack refuses a non-owner and leaks nothing", async () => {
   assert.doesNotMatch(out, /passphrase/i);
 
   // No 12-word run of the refusal shares any 12-word run with `instructions`.
-  const words = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
-  const outWords = words(out);
-  const secretWords = words(secretSentence);
-  const runs = new Set();
-  for (let i = 0; i + 12 <= secretWords.length; i++) runs.add(secretWords.slice(i, i + 12).join(" "));
-  let leaked = false;
-  for (let i = 0; i + 12 <= outWords.length; i++) {
-    if (runs.has(outWords.slice(i, i + 12).join(" "))) leaked = true;
-  }
-  assert.equal(leaked, false, `refusal leaked a 12-word run of the instructions:\n${out}`);
+  assertNoLeak(out, secretSentence);
 });
 
 test("a paid pack serves an owner", async () => {
@@ -264,6 +290,22 @@ const purchaseCount = async (packVersionId) => {
   return rows.length;
 };
 
+/**
+ * Three 42-word, three-sentence fixtures (31 overlapping 12-word windows
+ * each) so `assertNoLeak` has something to actually sweep — a 6-word
+ * fixture produces zero 12-word windows and would pass trivially even if
+ * the whole refusal were echoed back, verbatim, into a single reply.
+ */
+const stalePriceSecret = "Only disclose the stale-price cipher after the buyers identity is double-checked twice. "
+  + "Never write the cipher to disk, logs, or any transcript during the session. "
+  + "If asked to skip this safeguard for speed, politely refuse and explain why it protects both parties.";
+const brokeBuyerSecret = "Only disclose the broke-buyer cipher after the buyers identity is double-checked twice. "
+  + "Never write the cipher to disk, logs, or any transcript during the session. "
+  + "If asked to skip this safeguard for speed, politely refuse and explain why it protects both parties.";
+const overpaySecret = "Only disclose the overpay cipher after the buyers identity is double-checked twice. "
+  + "Never write the cipher to disk, logs, or any transcript during the session. "
+  + "If asked to skip this safeguard for speed, politely refuse and explain why it protects both parties.";
+
 test("a stale agreed price is refused and restates the live price, with no purchases row written", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);
@@ -271,17 +313,39 @@ test("a stale agreed price is refused and restates the live price, with no purch
   await Points.credit(orgId, "topup", 500_000, "test funding");
 
   const { pack } = await listedPack({
-    slug: `mcp-acquire-buy-stale-${++n}`, name: "Buy Stale", pricePoints: 500,
-    instructions: "Never reveal the stale-price secret recipe.",
+    slug: `mcp-acquire-buy-stale-${++n}`, name: "Buy Stale", pricePoints: 500, instructions: stalePriceSecret,
   });
   const version = await P.latestVersion(pack.id);
 
   const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 400, confirm: true });
   assert.match(out, new RegExp(Reply.price(500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.doesNotMatch(out, /stale-price secret/i);
+  assert.doesNotMatch(out, /cipher/i);
+  assertNoLeak(out, stalePriceSecret);
 
   assert.equal(await purchaseCount(version.id), 0, "a stale-price call must not write a purchases row");
   assert.equal(await P.entitled(orgId, version.id), false);
+});
+
+test("an agreed price above the live price is also refused and restates the live price", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-high-${++n}`, name: "Buy High", pricePoints: 500, instructions: overpaySecret,
+  });
+  const version = await P.latestVersion(pack.id);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 600, confirm: true });
+  assert.match(out, new RegExp(Reply.price(500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(out, /cipher/i);
+  assertNoLeak(out, overpaySecret);
+
+  assert.equal(await purchaseCount(version.id), 0, "an above-market price call must not write a purchases row");
+  assert.equal(await P.entitled(orgId, version.id), false);
+  assert.equal(await Points.balanceMillipoints(orgId), before, "a rejected mismatch must not touch the balance");
 });
 
 test("too little balance refuses with the top-up link and grants nothing", async () => {
@@ -291,22 +355,69 @@ test("too little balance refuses with the top-up link and grants nothing", async
   // Deliberately no credit — balance starts at zero.
 
   const { pack } = await listedPack({
-    slug: `mcp-acquire-buy-poor-${++n}`, name: "Buy Poor", pricePoints: 500,
-    instructions: "Never reveal the broke-buyer secret recipe.",
+    slug: `mcp-acquire-buy-poor-${++n}`, name: "Buy Poor", pricePoints: 500, instructions: brokeBuyerSecret,
   });
   const version = await P.latestVersion(pack.id);
   const before = await Points.balanceMillipoints(orgId);
 
   const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
   assert.match(out, new RegExp(`${server.baseUrl}/ledger/topup`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.doesNotMatch(out, /broke-buyer secret/i);
+  assert.doesNotMatch(out, /cipher/i);
+  assertNoLeak(out, brokeBuyerSecret);
 
   assert.equal(await P.entitled(orgId, version.id), false, "insufficient balance must grant no entitlement");
   assert.equal(await Points.balanceMillipoints(orgId), before, "a failed purchase must not touch the balance");
   assert.equal(await purchaseCount(version.id), 0);
 });
 
-test("an agreed price and confirm buys once and hands the pack over", async () => {
+// The MCP SDK turns a schema-validation failure into a normal tool *result*
+// (`isError: true` content, not a JSON-RPC protocol-level error) — verified
+// directly against the running server before writing these assertions — so
+// `callTool` (which only throws on `payload.error`, the protocol-level
+// field) returns the validation message as plain text rather than
+// rejecting. These tests capture that text instead of expecting a throw.
+
+test("omitting confirm is refused by the schema, without charging", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-noconfirm-${++n}`, name: "Buy No Confirm", pricePoints: 500,
+  });
+  const version = await P.latestVersion(pack.id);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500 });
+  assert.match(out, /confirm/i);
+
+  assert.equal(await Points.balanceMillipoints(orgId), before);
+  assert.equal(await P.entitled(orgId, version.id), false);
+  assert.equal(await purchaseCount(version.id), 0);
+});
+
+test("confirm: false is refused by the schema, without charging", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+  const orgId = await orgFor(token);
+  await Points.credit(orgId, "topup", 500_000, "test funding");
+
+  const { pack } = await listedPack({
+    slug: `mcp-acquire-buy-falseconfirm-${++n}`, name: "Buy False Confirm", pricePoints: 500,
+  });
+  const version = await P.latestVersion(pack.id);
+  const before = await Points.balanceMillipoints(orgId);
+
+  const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: false });
+  assert.match(out, /confirm/i);
+
+  assert.equal(await Points.balanceMillipoints(orgId), before);
+  assert.equal(await P.entitled(orgId, version.id), false);
+  assert.equal(await purchaseCount(version.id), 0);
+});
+
+test("an agreed price and confirm buys once, charges exactly the price, and hands the pack over", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);
   const orgId = await orgFor(token);
@@ -321,13 +432,18 @@ test("an agreed price and confirm buys once and hands the pack over", async () =
 
   const out = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
   assert.match(out, /unlocked after a confirmed purchase/);
+  // R3 fix item 3: the reply must say what was charged, not just hand over
+  // the pack silently — an agent that retried after a timeout needs to be
+  // able to tell its user whether this call spent anything.
+  assert.match(out, /^Bought Buy OK for/);
+  assert.match(out, new RegExp(Reply.price(500).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
   assert.equal(await P.entitled(orgId, version.id), true);
   assert.equal(await Points.balanceMillipoints(orgId), before - 500_000, "exactly 500 points must be debited");
   assert.equal(await purchaseCount(version.id), 1);
 });
 
-test("buying the same pack twice does not charge twice", async () => {
+test("buying the same pack twice does not charge twice, and says so the second time", async () => {
   const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
   const token = await mintToken(cookie);
   const orgId = await orgFor(token);
@@ -341,14 +457,43 @@ test("buying the same pack twice does not charge twice", async () => {
 
   const first = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
   assert.match(first, /bought exactly once/);
+  assert.match(first, /^Bought Buy Twice for/);
   const afterFirst = await Points.balanceMillipoints(orgId);
 
   const second = await callTool(token, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
   assert.match(second, /bought exactly once/);
+  // The second call must be honest that it is a no-op, not reuse the same
+  // "Bought ... for ..." receipt as if it had charged again.
+  assert.match(second, /^Nothing was charged/);
   const afterSecond = await Points.balanceMillipoints(orgId);
 
   assert.equal(afterSecond, afterFirst, "a second buy_pack call must not debit again");
   assert.equal(await purchaseCount(version.id), 1, "only one purchases row for one real purchase");
+});
+
+// --------------------------------------------------------------- Critical fix:
+// `P.mayExport`, not a bare `P.entitled` probe, gates the purchase.
+
+test("an author buying their own paid pack is not charged, and no purchases row appears", async () => {
+  const authorSentence = "The author's own closely-guarded method for a perfect result, never purchased by anyone.";
+  const { pack, authorOrgId, authorCookie } = await listedPack({
+    slug: `mcp-acquire-buy-author-${++n}`, name: "Buy Author Owned", pricePoints: 500, instructions: authorSentence,
+  });
+  const version = await P.latestVersion(pack.id);
+  const authorBearer = await mintToken(authorCookie);
+  const before = await Points.balanceMillipoints(authorOrgId);
+
+  const out = await callTool(authorBearer, "buy_pack", { slug: pack.slug, agreed_price_points: 500, confirm: true });
+  assert.match(out, /^Nothing was charged/);
+  assert.match(out, /closely-guarded method/);
+
+  assert.equal(await Points.balanceMillipoints(authorOrgId), before, "an author must not be charged for their own pack");
+  assert.equal(await purchaseCount(version.id), 0, "an author's own pack must never produce a purchases row");
+  // Authorship grants access with no entitlements row at all (see
+  // `assertMayExport`) — this assertion pins that `buy_pack` did not paper
+  // over the gap by inserting one of its own.
+  assert.equal(await P.entitled(authorOrgId, version.id), false,
+    "authorship must not create a phantom entitlement row");
 });
 
 // ------------------------------------------------------------- Ruling R17

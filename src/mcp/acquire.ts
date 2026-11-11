@@ -108,12 +108,36 @@ export async function loadPack(
  * pack must not be purchasable, and must read as byte-identical to a missing
  * slug.
  *
- * Already owning the pack is a silent no-op, not a refusal: it skips
- * `buyWithPoints` entirely (so there is no second ledger row and no second
- * `purchases` row) and just hands back what `load_pack` would already give
- * this organisation. `buyWithPoints` is the single purchase path — this
- * function never grants the entitlement itself, so there is exactly one
- * place a double-grant bug could creep in, and it isn't here.
+ * Already having access is a silent no-op, not a refusal — but "already
+ * having access" is `P.mayExport`, not a bare `P.entitled` probe. An author
+ * or the platform curator org can read a pack with *no* `entitlements` row
+ * at all (`assertMayExport`'s first two clauses), so checking `entitled`
+ * alone would miss them and send them through `buyWithPoints` to be charged
+ * full price for something they already have free — worse, `buyWithPoints`
+ * skips the author-share credit precisely when the buyer *is* the author,
+ * so that charge would not even circulate back to them. `P.mayExport` is
+ * the one boolean form of that same decision (`assertMayExport` is now a
+ * thin wrapper over it), so this file never re-implements the author/curator
+ * clauses itself.
+ *
+ * Skipping `buyWithPoints` whenever `mayExport` is already true also means
+ * there is no second ledger row and no second `purchases` row on a repeat
+ * call — `buyWithPoints` is the single purchase path (it does not
+ * short-circuit for an org that already has an entitlement: it would debit,
+ * credit the author's share, and insert a second `purchases` row all over
+ * again, only the `entitlements` insert itself is idempotent) — and this
+ * function never grants the entitlement itself either, so there is exactly
+ * one place a double-grant bug could creep in, and it isn't here.
+ *
+ * The balance is checked *before* calling `buyWithPoints`, not inferred from
+ * whatever it throws: `buyWithPoints` does `debit`, `credit`, an INSERT, and
+ * `grant` as four separate statements with no transaction wrapping them, so
+ * a failure partway through could leave points spent with nothing granted —
+ * and that failure must not be reported as "insufficient balance" when the
+ * balance was actually fine a moment ago. Checking first makes "insufficient
+ * balance" a claim this function can stand behind; anything `buyWithPoints`
+ * still throws after that is reported as an unexplained failure that may
+ * have partially applied, not misdiagnosed as a shortfall.
  */
 export async function buyPack(
   ctx: McpContext, args: { slug: string; agreed_price_points: number; confirm: true },
@@ -131,25 +155,35 @@ export async function buyPack(
       + "Call buy_pack again with the current price if you still want it.";
   }
 
-  if (!(await P.entitled(ctx.orgId, v.id))) {
+  let receipt: string;
+  if (await P.mayExport(ctx.orgId, p, v.id)) {
+    receipt = `Nothing was charged — this organisation already has access to ${p.name}.`;
+  } else {
+    const owed = live * 1000;
+    const bal = await balanceMillipoints(ctx.orgId);
+    if (bal < owed) {
+      return `${p.name} costs ${price(live)} and this organisation only has ${pts(bal)}. `
+        + `Top up at ${ctx.baseUrl}/ledger/topup`;
+    }
     try {
       await Pay.buyWithPoints({
         orgId: ctx.orgId, userId: ctx.userId, packVersionId: v.id, packId: p.id,
         pricePoints: live, description: p.name,
       });
     } catch {
-      // `buyWithPoints` only ever throws here for one reason once the price
-      // has already matched and the pack is unowned: not enough balance. It
-      // checks the balance before writing anything, so nothing was debited
-      // or granted — safe to report the live balance back unchanged.
-      const bal = await balanceMillipoints(ctx.orgId);
-      return `${p.name} costs ${price(live)} and this organisation only has ${pts(bal)}. `
-        + `Top up at ${ctx.baseUrl}/ledger/topup`;
+      // The balance was just confirmed sufficient, so this is not a
+      // shortfall — it is an unexplained failure partway through a
+      // non-atomic sequence of writes, and may have already moved points
+      // without granting anything. Say so plainly rather than guessing.
+      return `${p.name} could not be bought right now. Check ${ctx.baseUrl}/ledger before trying again — `
+        + "points may have moved even though the pack was not granted.";
     }
+    const newBal = await balanceMillipoints(ctx.orgId);
+    receipt = `Bought ${p.name} for ${price(live)}. New balance: ${pts(newBal)}.`;
   }
 
   const result = await loadPack(ctx, slug);
-  return result.ok ? result.markdown : result.message;
+  return `${receipt}\n\n${result.ok ? result.markdown : result.message}`;
 }
 
 export function registerAcquire(server: McpServer, ctx: McpContext): void {
@@ -238,8 +272,9 @@ export function registerAcquire(server: McpServer, ctx: McpContext): void {
       "Spends this organisation's points to buy a pack, then hands over its instructions the same way load_pack "
       + "does. `agreed_price_points` must equal the pack's current price exactly — pass the number you already "
       + "told the person who authorized this, in points — or the call is refused and the live price is restated "
-      + "rather than charged. `confirm` must be true. Buying a pack already owned is a no-op: it is not charged "
-      + "again.",
+      + "rather than charged. `confirm` must be true. Calling this for a pack the organisation can already read — "
+      + "already bought, authored, or curated by the platform — is a no-op: nothing is charged, and the reply says "
+      + "so. The reply always states whether anything was charged and, if so, the new balance.",
     inputSchema: {
       slug: z.string().describe("The pack's slug, from search_packs."),
       agreed_price_points: z.number().describe(
