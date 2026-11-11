@@ -338,14 +338,7 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         ?? (await P.publishPack(slug)).id;
       // One currency: a pack is bought with points, like everything else the
       // buyer spends. An entitlement still comes from a settled purchase.
-      // `P.mayExport`, not a bare `P.entitled` probe — the same bug fixed in
-      // `buy_pack` (src/mcp/acquire.ts): an author or the platform org can
-      // already read their own pack with no `entitlements` row at all, so a
-      // bare `entitled` check sent them through `buyWithPoints` to be
-      // charged full price for something they already have free, and
-      // `purchases.ts` skips the author-share credit precisely when the
-      // buyer is the author — burning 100% of the points for nothing.
-      if (!(await P.mayExport(ctx.orgId, pack, versionId))) {
+      if (!(await P.entitled(ctx.orgId, versionId))) {
         await Pay.buyWithPoints({
           orgId: ctx.orgId, userId: ctx.userId, packVersionId: versionId,
           packId: pack.id, pricePoints: Pay.pricePoints(pack), description: pack.name,
