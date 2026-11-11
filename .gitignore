@@ -8,3 +8,8 @@ data/
 
 .superpowers/
 .claude/worktrees/
+
+# Written by `agents sync`: which host a pack folder was last pushed to.
+# Local state, not something to pin into the repo for everyone.
+.agents.json
+packs/*/.agents.json
