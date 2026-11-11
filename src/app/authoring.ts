@@ -140,11 +140,14 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const s = await sql();
   const packId = id("pk");
   await s.query(
-    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
-       model, effort, pinned_models, extras, instructions, tags, image, role, status,
+    // `price_cents` is written explicitly, as 0 — see `seedCatalog`. It is the
+    // dead half of the old money model, but it is NOT NULL and has no DEFAULT
+    // on any database that predates the millipoints rename.
+    `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_cents, price_points,
+       upgrade_points, model, effort, pinned_models, extras, instructions, tags, image, role, status,
        author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on,
        scenarios)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24,$25)`,
+     VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24,$25)`,
     [packId, slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),

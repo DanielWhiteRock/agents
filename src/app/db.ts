@@ -70,7 +70,20 @@ CREATE TABLE IF NOT EXISTS packs (
   tagline TEXT NOT NULL,
   author TEXT NOT NULL,
   author_org_id TEXT,
-  price_cents INTEGER NOT NULL DEFAULT 0,
+  -- No DEFAULT, deliberately. This column predates the millipoints rename, so
+  -- on every database that has been through it price_cents is NOT NULL with
+  -- no default — CREATE TABLE IF NOT EXISTS cannot add one to a table that
+  -- already exists, and there is no migration that can, because SQLite has no
+  -- way to alter a column's default. Declaring a default here that an upgraded
+  -- database does not have is the trap this file fell into: inserts that
+  -- omitted the column worked on a fresh database and failed at boot on a real
+  -- one. Writers pass it explicitly instead.
+  --
+  -- The rule the upgrade test enforces: a DEFAULT in this schema is only
+  -- honest on a column that an ALTER TABLE ... ADD COLUMN migration also
+  -- introduces with the same default, which is where every other one below
+  -- came from.
+  price_cents INTEGER NOT NULL,
   price_points INTEGER NOT NULL DEFAULT 0,
   tags TEXT NOT NULL DEFAULT '',
   role TEXT NOT NULL DEFAULT '',

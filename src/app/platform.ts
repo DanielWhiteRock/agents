@@ -499,10 +499,17 @@ export async function seedCatalog(): Promise<number> {
   const s = await sql();
   let n = 0;
   for (const p of SEED_PACKS) {
+    // `price_cents` is written explicitly, as 0. It is the dead half of the
+    // old money model — packs are priced in points — but it is still NOT NULL,
+    // and on a database that predates the rename it has no DEFAULT, because
+    // `CREATE TABLE IF NOT EXISTS` cannot add one to a table that already
+    // exists. Leaving it out booted fine on a fresh database and killed the
+    // process on an upgraded one, which is how the live service ended up
+    // never deploying.
     const rows = await s.query(
-      `INSERT INTO packs (id, slug, name, tagline, author, price_points, upgrade_points, model, effort,
-         pinned_models, instructions, tags, image, status, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
+      `INSERT INTO packs (id, slug, name, tagline, author, price_cents, price_points, upgrade_points,
+         model, effort, pinned_models, instructions, tags, image, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,0,$6,$7,$8,$9,$10,$11,$13,$14,'listed',$12)
        ON CONFLICT (slug) DO NOTHING RETURNING id`,
       [id("pk"), p.slug, p.name, p.tagline, p.author, p.pricePoints, p.upgradePoints, p.model,
         p.effort ?? "", JSON.stringify(p.pinnedModels ?? []), p.instructions, now(),
