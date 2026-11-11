@@ -7,6 +7,9 @@ import { parsePackMarkdown, type ParsedPack } from "../packs/import.js";
 import {
   findCommands, findHooks, findWorkflows, normaliseTree, validateTree, type PackTree,
 } from "../packs/tree.js";
+import {
+  faqFromJson, mergeFaq, scenariosFromJson, stringsFromJson,
+} from "../packs/listing-shape.js";
 
 /**
  * Creating, editing, withdrawing and deleting packs — the supply side.
@@ -45,8 +48,25 @@ export type PackInput = {
   role?: string;
   pinnedModels?: string[];
   mcpServers?: Array<{ name: string; url: string }>;
+  /** What the pack's `tools:` block declared — a name and its permission
+   *  policy per tool. Undefined leaves the stored set alone on an update
+   *  (a plain details-form save does not carry this); an explicit array,
+   *  including an empty one, replaces it — the same rule `importPack` already
+   *  gives mcpServers. */
+  tools?: Array<{ name: string; policy: string }>;
   payoutEmail?: string;
   extras?: P.PackExtras;
+  /** The listing a buyer reads before they buy, carried in from a folder or
+   *  written in the browser. Plain fields rather than `Listing` itself —
+   *  `listing.ts` imports `authoring.ts`, not the other way round. */
+  descriptionLong?: string;
+  useCases?: string[];
+  limitations?: string[];
+  faq?: Array<{ q: string; a: string }>;
+  /** Written examples of a session — never a recorded run, never a buyer's brief. */
+  scenarios?: Array<{ brief: string; reached: string[]; output: string }>;
+  requirements?: string[];
+  builtOn?: string;
 };
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -69,6 +89,48 @@ function validate(input: PackInput): void {
   if (!Number.isInteger(input.upgradePoints) || input.upgradePoints < 0) {
     throw new PackConflictError("update points must be a whole number, or zero");
   }
+  for (const tool of input.tools ?? []) {
+    if (!TOOL_POLICIES.has(tool.policy)) {
+      throw new PackConflictError(
+        `tools: "${tool.name}" declares permission_policy "${tool.policy}", which is not one of `
+        + `${[...TOOL_POLICIES].join(", ")}`);
+    }
+  }
+}
+
+/**
+ * The three policies the platform's agent config actually has.
+ *
+ * A pack's `tools:` block is author-supplied text parsed out of their own
+ * `agent.md`, and this is the one field of it with a closed set of values —
+ * so it is checked before it becomes a stored fact, alongside every other
+ * reason a pack is refused. A typo reaching `pack_tools` is a word the
+ * runtime has never heard of, recorded as what a worker may do; refusing it
+ * with the author's own spelling in the message is the only useful answer.
+ */
+const TOOL_POLICIES = new Set(["always_allow", "always_ask", "auto"]);
+
+/**
+ * Tools and MCP servers are child rows, not columns — written after the pack
+ * row exists rather than threaded into the hand-built INSERT/UPDATE above,
+ * which is already long enough that one more positional placeholder is a
+ * transposition waiting to happen. Replace-all: delete what is there, insert
+ * the current set.
+ */
+async function saveTools(s: Awaited<ReturnType<typeof sql>>, packId: string,
+  tools: Array<{ name: string; policy: string }>): Promise<void> {
+  await s.query("DELETE FROM pack_tools WHERE pack_id = $1", [packId]);
+  for (const t of tools) {
+    await s.query("INSERT INTO pack_tools (pack_id, name, policy) VALUES ($1,$2,$3)", [packId, t.name, t.policy]);
+  }
+}
+
+async function saveMcpServers(s: Awaited<ReturnType<typeof sql>>, packId: string,
+  servers: Array<{ name: string; url: string }>): Promise<void> {
+  await s.query("DELETE FROM pack_mcp_servers WHERE pack_id = $1", [packId]);
+  for (const m of servers) {
+    await s.query("INSERT INTO pack_mcp_servers (pack_id, name, url) VALUES ($1,$2,$3)", [packId, m.name, m.url]);
+  }
 }
 
 export async function createPack(orgId: string, input: PackInput): Promise<P.PackRow> {
@@ -76,16 +138,24 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   const slug = normaliseSlug(input.slug || input.name);
   if (await P.getPack(slug)) throw new PackConflictError(`there is already a pack at /packs/${slug}`);
   const s = await sql();
+  const packId = id("pk");
   await s.query(
     `INSERT INTO packs (id, slug, name, tagline, author, author_org_id, price_points, upgrade_points,
-       model, effort, pinned_models, extras, instructions, tags, image, status,
-       author_payout_email, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,'draft',$14,$15)`,
-    [id("pk"), slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
+       model, effort, pinned_models, extras, instructions, tags, image, role, status,
+       author_payout_email, created_at, description, use_cases, limitations, faq, requirements, built_on,
+       scenarios)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$16,$17,$18,'draft',$14,$15,$19,$20,$21,$22,$23,$24,$25)`,
+    [packId, slug, input.name.trim(), input.tagline.trim(), input.author.trim() || "unattributed",
       orgId, input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, now(),
-      input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? ""]);
+      input.tags?.trim() ?? "", input.image?.trim() || null, input.role?.trim() ?? "",
+      input.descriptionLong?.trim() ?? "", JSON.stringify(input.useCases ?? []),
+      JSON.stringify(input.limitations ?? []), JSON.stringify(input.faq ?? []),
+      JSON.stringify(input.requirements ?? []), input.builtOn?.trim() ?? "",
+      JSON.stringify(input.scenarios ?? [])]);
+  await saveTools(s, packId, input.tools ?? []);
+  await saveMcpServers(s, packId, input.mcpServers ?? []);
   return (await P.getPack(slug))!;
 }
 
@@ -99,13 +169,33 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
   await s.query(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
-       author_payout_email = $11, tags = $13, image = $14, role = $15 WHERE id = $12`,
+       author_payout_email = $11, tags = $13, image = $14, role = $15,
+       description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21,
+       scenarios = $22
+     WHERE id = $12`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
       input.instructions.trim(), input.payoutEmail?.trim() || null, pack.id,
       input.tags?.trim() ?? pack.tags, input.image?.trim() || pack.image,
-      input.role?.trim() || pack.role]);
+      input.role?.trim() || pack.role,
+      // A caller that never mentions the listing (the plain pack-details form,
+      // for instance) must not wipe one set through the import or listing
+      // flows — so an absent field keeps the row's current value.
+      input.descriptionLong?.trim() ?? pack.description,
+      input.useCases ? JSON.stringify(input.useCases) : pack.use_cases,
+      input.limitations ? JSON.stringify(input.limitations) : pack.limitations,
+      input.faq ? JSON.stringify(input.faq) : pack.faq,
+      input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
+      input.builtOn?.trim() ?? pack.built_on,
+      input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios]);
+  // Undefined means this caller never mentioned the field (the plain
+  // details-form save, for instance) and the stored set is left alone;
+  // an explicit array — including an empty one — replaces it, so re-importing
+  // a folder whose tools: block shrank or whose mcp_servers disappeared is
+  // honoured rather than ignored.
+  if (input.tools !== undefined) await saveTools(s, pack.id, input.tools);
+  if (input.mcpServers !== undefined) await saveMcpServers(s, pack.id, input.mcpServers);
   return (await P.getPack(slug))!;
 }
 
@@ -133,8 +223,32 @@ export async function setStatus(actorOrgId: string, slug: string, status: PackSt
   } else if (!isCurator) {
     throw new NotTheCuratorError();
   }
+  // The debut date, written once. The pack page's trust rail says "reviewed
+  // and listed on <date>", and that date has to survive a withdrawal and a
+  // relisting — a pack that came back to the shelf is not a new pack. So the
+  // first time it reaches `listed` is the stamp, and nothing moves it after.
+  const listedAt = status === "listed" ? (pack.listed_at ?? now()) : pack.listed_at;
   const s = await sql();
-  await s.query("UPDATE packs SET status = $1 WHERE id = $2", [status, pack.id]);
+  await s.query("UPDATE packs SET status = $1, listed_at = $2 WHERE id = $3", [status, listedAt, pack.id]);
+}
+
+/**
+ * The curator's one knob on shelf order: a plain integer, lower first, null
+ * to clear it. Until there is real usage to rank by, this is the only honest
+ * signal a curated shelf has — so only the curator may set it, same gate as
+ * every other `/curate` action.
+ */
+export async function setFeaturedRank(actorOrgId: string, slug: string, rank: number | null): Promise<void> {
+  const pack = await P.getPack(slug);
+  if (!pack) throw new PackConflictError(`no pack at /packs/${slug}`);
+  const curator = await platformOrgId();
+  if (curator === null || curator !== actorOrgId) throw new NotTheCuratorError();
+  if (rank != null && !Number.isFinite(rank)) {
+    throw new PackConflictError("featured rank must be a finite number or empty");
+  }
+  const s = await sql();
+  await s.query("UPDATE packs SET featured_rank = $1 WHERE id = $2",
+    [rank == null ? null : Math.round(rank), pack.id]);
 }
 
 /**
@@ -222,7 +336,32 @@ export async function importPack(args: {
       ? parsed.pinnedModels
       : existing ? JSON.parse(existing.pinned_models) : args.defaults?.pinnedModels ?? [],
     mcpServers: parsed.mcpServers,
+    tools: parsed.tools,
     payoutEmail: args.defaults?.payoutEmail ?? existing?.author_payout_email ?? undefined,
+    // Same precedence as above: the folder wins when it says something, an
+    // approved listing already on the pack survives otherwise, so a re-import
+    // of just the instructions does not wipe a listing an author wrote in
+    // the browser.
+    descriptionLong: parsed.descriptionLong ?? existing?.description ?? "",
+    // Parsed through the shared shape module rather than `JSON.parse`: these
+    // columns are read back off a row this process did not necessarily write,
+    // and `listing.ts` makes "tolerate a malformed column" an explicit
+    // invariant everywhere else. A hand-fixed row should not make an import
+    // throw.
+    useCases: parsed.useCases.length ? parsed.useCases : stringsFromJson(existing?.use_cases),
+    limitations: parsed.limitations.length ? parsed.limitations : stringsFromJson(existing?.limitations),
+    // The FAQ is the one listing field that merges instead of replacing.
+    // Every other field is prose only the author writes, so a folder that
+    // states one is the author changing their mind. An FAQ entry can also
+    // arrive from a real buyer exchange — `publishToFaq` quotes a question
+    // and the creator's own answer onto this column — and a folder carrying
+    // a `faq:` block has no idea those exist. Replacing wholesale deleted
+    // them, with no way back but the thread they came from. The live entries
+    // win on a repeated question, same rule `approveDraft` follows.
+    faq: mergeFaq(faqFromJson(existing?.faq), parsed.faq),
+    scenarios: parsed.scenarios.length ? parsed.scenarios : scenariosFromJson(existing?.scenarios),
+    requirements: parsed.requirements.length ? parsed.requirements : stringsFromJson(existing?.requirements),
+    builtOn: parsed.builtOn ?? existing?.built_on ?? "",
     extras: {
       ...(parsed.anthropicSkills.length ? { anthropicSkills: parsed.anthropicSkills } : {}),
       ...(parsed.advisorModel ? { advisorModel: parsed.advisorModel } : {}),

@@ -100,6 +100,32 @@ CREATE TABLE IF NOT EXISTS pack_files (
   PRIMARY KEY (pack_id, path)
 );
 
+-- The tools a pack's agent.md declares and the permission policy each one
+-- carries (always_allow, always_ask, auto — checked on the way in by
+-- authoring.ts). Read, never authored by hand in the browser.
+--
+-- The permissions rail renders the NAMES from here and not the policy: a
+-- pack's declared policy never reaches the runtime, because publishPack
+-- builds the agent config from the global destructive_tool_policy setting and
+-- forces always_ask where the pack ships a PreToolUse hook. The policy column
+-- is kept as a record of what the author asked for, which is not the same
+-- fact as what the run does.
+CREATE TABLE IF NOT EXISTS pack_tools (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  name TEXT NOT NULL,
+  policy TEXT NOT NULL,
+  PRIMARY KEY (pack_id, name)
+);
+
+-- The MCP servers a pack's agent.md wires up. Same story as pack_tools: a
+-- folder's own declaration, kept so the rail can name what it connects to.
+CREATE TABLE IF NOT EXISTS pack_mcp_servers (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  PRIMARY KEY (pack_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS pack_versions (
   id TEXT PRIMARY KEY,
   pack_id TEXT NOT NULL REFERENCES packs(id),
@@ -294,6 +320,127 @@ CREATE TABLE IF NOT EXISTS author_earnings (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS author_earnings_unpaid ON author_earnings(pack_id, payout_id);
+
+-- Listing content the author is drafting but has not yet put in front of
+-- buyers. A pack keeps selling on its last approved copy while this one is
+-- edited, the same separation versions give instructions.
+CREATE TABLE IF NOT EXISTS pack_listing_drafts (
+  pack_id TEXT PRIMARY KEY REFERENCES packs(id),
+  description TEXT NOT NULL DEFAULT '',
+  use_cases TEXT NOT NULL DEFAULT '',
+  limitations TEXT NOT NULL DEFAULT '',
+  faq TEXT NOT NULL DEFAULT '',
+  scenarios TEXT NOT NULL DEFAULT '',
+  requirements TEXT NOT NULL DEFAULT '',
+  generated_at TEXT NOT NULL,
+  -- The published version this draft was generated from, so a later publish
+  -- can tell a stale draft from one still describing what is actually live.
+  source_version INTEGER
+);
+
+-- A creator: the person or org behind a pack, with a page of their own
+-- instead of a bare string in packs.author. One per organisation — the same
+-- org_id a pack's author_org_id already points to — so saving a profile
+-- twice edits one row rather than creating a second.
+CREATE TABLE IF NOT EXISTS creators (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id) UNIQUE,
+  handle TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  bio TEXT NOT NULL DEFAULT '',
+  avatar TEXT,
+  -- An array of { label, url }, stored as JSON text like pinned_models and
+  -- extras already are elsewhere in this schema.
+  links TEXT NOT NULL DEFAULT '[]',
+  -- Curator-set, nothing more: there is no self-serve verification flow.
+  verified INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+
+-- An organisation's position on a pack, one row per org, editable forever.
+-- rating is nullable — a review can carry text with no star — but nothing in
+-- social.ts's aggregate counts a row where it is null. byline is a name
+-- chosen at submit time; an anonymous review stores no byline at all, and
+-- user_id is kept for audit only, never for display: the individual's name
+-- and email live in users, not here.
+CREATE TABLE IF NOT EXISTS pack_reviews (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  rating INTEGER CHECK (rating IS NULL OR (rating BETWEEN 1 AND 5)),
+  body TEXT NOT NULL DEFAULT '',
+  byline TEXT,
+  anonymous INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (pack_id, org_id)
+);
+
+-- A lighter signal than a review: "this looks good", needing no run at all.
+-- One vote per organisation per pack.
+CREATE TABLE IF NOT EXISTS pack_votes (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  value INTEGER NOT NULL,
+  PRIMARY KEY (pack_id, org_id)
+);
+
+-- A bookmark. One per organisation per pack; user_id is whoever last toggled it.
+CREATE TABLE IF NOT EXISTS pack_saves (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (pack_id, org_id)
+);
+
+-- A private conversation between one buyer organisation (org_id) and one
+-- creator (creator_id), scoped to a pack where it started from one —
+-- pack_id is nullable for a thread opened straight from a creator's profile
+-- instead. Never visible to a third organisation: messages.ts checks
+-- membership on every read and write, not just here.
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY,
+  pack_id TEXT REFERENCES packs(id),
+  creator_id TEXT NOT NULL REFERENCES creators(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  subject TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS threads_creator ON threads(creator_id, last_at);
+CREATE INDEX IF NOT EXISTS threads_org ON threads(org_id, last_at);
+
+-- One message in a thread, from either side of it. published_at is stamped
+-- the moment this exact message is quoted into a pack's FAQ, so the same
+-- answer is never appended twice.
+CREATE TABLE IF NOT EXISTS thread_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES threads(id),
+  org_id TEXT NOT NULL REFERENCES orgs(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  body TEXT NOT NULL,
+  published_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS thread_messages_thread ON thread_messages(thread_id, created_at);
+
+-- What changed in a published version, in the author's own words. The one
+-- exception to listing metadata attaching to the pack, not the version: a
+-- changelog note describes the version it ships with, and a version is
+-- immutable, so the note is captured at publish and never edited afterwards.
+-- Optional — most publishes have nothing to say — so a row exists only where
+-- an author actually wrote one. No note is ever invented for a version that
+-- shipped before this table existed.
+CREATE TABLE IF NOT EXISTS pack_changelog (
+  pack_id TEXT NOT NULL REFERENCES packs(id),
+  version INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (pack_id, version)
+);
 `;
 
 const SUBSTITUTIONS = {
@@ -399,6 +546,66 @@ const MIGRATIONS = [
   // is 120 points a month, so a premium worker lands near half of one and
   // leaves something to run it with.
   "UPDATE packs SET price_points = price_cents / 400 WHERE price_points = 0 AND price_cents > 0",
+  // A tagline sells a click; it does not tell a buyer what the thing does,
+  // when it fails, or what it costs them to be wrong about it. That is a
+  // listing's job, and it starts empty rather than null — nothing to parse
+  // before an author has written anything.
+  "ALTER TABLE packs ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN use_cases TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN limitations TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN faq TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN scenarios TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE packs ADD COLUMN requirements TEXT NOT NULL DEFAULT ''",
+  // When a curator last signed off on the listing text above, so a later edit
+  // can be told apart from the copy that was actually reviewed.
+  "ALTER TABLE packs ADD COLUMN listing_approved_at TEXT",
+  // Stamped when the pack's `instructions` are edited — the method a listing
+  // describes having changed under it — so the author's own approval screen
+  // can suggest a regeneration. Nothing a buyer sees changes: stale approved
+  // copy stays live, because blanking a page because somebody fixed a typo
+  // would be worse than a slightly dated description.
+  "ALTER TABLE packs ADD COLUMN listing_stale_at TEXT",
+  // When the pack first reached the catalog, kept apart from created_at (which
+  // is when the draft was started) so a shelf can sort by debut, not by paperwork.
+  "ALTER TABLE packs ADD COLUMN listed_at TEXT",
+  // Upstream credit and licence: whose work this pack rests on, kept
+  // deliberately apart from `author`, which says who stands behind it running
+  // here. Re-attribution moves the old byline into this column, so a credit
+  // like "Dietrich Gebert, Cursor, Poteto — MIT" survives a change of owner.
+  "ALTER TABLE packs ADD COLUMN built_on TEXT",
+  // `setStatus` stamps listed_at from now on, but the packs already on the
+  // shelf reached it before the column existed. created_at is the only honest
+  // value available for them — it is not the day they were listed, but it is a
+  // date they really have, and the alternative is a rail that says nothing
+  // about a curated pack. Guarded on NULL so it never overwrites a real stamp,
+  // which also makes it harmless if it is ever reapplied.
+  "UPDATE packs SET listed_at = created_at WHERE listed_at IS NULL AND status = 'listed'",
+  // Null until a pack is attributed to a creator record (Task 7). packs.author
+  // stays as the display fallback until then, so nothing breaks on day one.
+  "ALTER TABLE packs ADD COLUMN creator_id TEXT",
+  // The one number a curator can set per row on /curate. Null for every pack
+  // nobody has placed — which, with essentially no runs, ratings or votes yet
+  // across the catalog, is almost all of them. `rankPacks` puts a set rank
+  // ahead of everything else, so this is the only honest ordering signal a
+  // freshly curated shelf actually has.
+  "ALTER TABLE packs ADD COLUMN featured_rank INTEGER",
+  // Seed data's one safety mechanism is `scripts/seed-social.mjs` refusing to
+  // run anywhere but a local SQLite database — not a filter here. Every
+  // aggregate (packStats, ratingOf, the distribution, the vote count, creator
+  // totals, the shelf order) counts a seeded row exactly like a real one, on
+  // purpose: a seed that aggregates quietly excluded would render nothing,
+  // which defeats the reason it exists. `is_seed` marks the rows that script
+  // wrote, on the four tables whose own identity it invents — an org, a run,
+  // a review, a vote — so `--wipe` can find and remove precisely those rows
+  // and never a real buyer's. No query outside that script ever reads it.
+  "ALTER TABLE orgs ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE runs ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE pack_reviews ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE pack_votes ADD COLUMN is_seed INTEGER NOT NULL DEFAULT 0",
+  // Every pack on the shelf shares one creator after re-attribution, and the
+  // creator profile page selects by exactly this column — a sequential scan
+  // of `packs` per profile load, and per catalog join.
+  "CREATE INDEX IF NOT EXISTS packs_creator ON packs(creator_id)",
 ];
 
 /**

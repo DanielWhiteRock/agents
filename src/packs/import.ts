@@ -27,6 +27,10 @@ export type ParsedPack = {
   author?: string;
   instructions: string;
   mcpServers: Array<{ name: string; url: string }>;
+  /** `tools:`'s `configs[].name` and `configs[].permission_policy.type`, read
+   *  and kept rather than discarded — what the permissions rail is derived
+   *  from. */
+  tools: Array<{ name: string; policy: string }>;
   pinnedModels: string[];
   /** Anthropic's prebuilt skills a pack asks for: pptx, xlsx, docx, pdf. */
   anthropicSkills: string[];
@@ -34,6 +38,18 @@ export type ParsedPack = {
   advisorModel?: string;
   /** Where the web tools may look. One list or the other, never both. */
   web?: { allowedDomains?: string[]; blockedDomains?: string[] };
+  /** The long body of the listing — `description` keeps meaning the tagline. */
+  descriptionLong?: string;
+  useCases: string[];
+  limitations: string[];
+  faq: Array<{ q: string; a: string }>;
+  /** Written examples of a session: the brief, what it touched, what came back. */
+  scenarios: Array<{ brief: string; reached: string[]; output: string }>;
+  requirements: string[];
+  /** Upstream credit and licence — whose work this pack rests on, e.g.
+   *  "Dietrich Gebert, Cursor, Poteto — MIT". Not the byline, which says who
+   *  stands behind it running here. */
+  builtOn?: string;
   /** Keys present in the file that this reader does not understand. */
   unknownKeys: string[];
 };
@@ -83,6 +99,11 @@ const KNOWN = new Set([
   // browser, which meant a folder was never the whole pack and anybody
   // publishing a set of them had a manual step per pack.
   "price", "tags", "image", "role",
+  // The listing a buyer reads before they buy — a folder's chance to carry
+  // one in, rather than publishing to a blank pack page. `description_long`
+  // is deliberately not `description`: that key already means the tagline,
+  // and every existing agent.md relies on it keeping that meaning.
+  "description_long", "use_cases", "limitations", "faq", "scenarios", "requirements", "built_on",
 ]);
 
 const list = (v: string): string[] =>
@@ -108,11 +129,18 @@ export function splitFrontMatter(text: string): { front: string; body: string } 
 export function parsePackMarkdown(text: string): ParsedPack {
   const { front, body } = splitFrontMatter(text);
   const out: ParsedPack = {
-    instructions: "", mcpServers: [], pinnedModels: [], anthropicSkills: [], unknownKeys: [],
+    instructions: "", mcpServers: [], tools: [], pinnedModels: [], anthropicSkills: [],
+    useCases: [], limitations: [], faq: [], scenarios: [], requirements: [], unknownKeys: [],
   };
 
   const lines = front.split("\n");
   let topKey = "";
+  // Set the moment a `permission_policy:` line is seen under `tools`, and
+  // consumed by the very next `type:` line nested under it. Anything else in
+  // between — a fresh `- name:`, or the toolset's own `- type:` line that
+  // precedes any config — clears it, so a tool's name does not pick up a
+  // stray `type:` that belongs to something else.
+  let awaitingToolPolicy = false;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
     if (!line.trim() || line.trim().startsWith("#")) continue;
@@ -145,6 +173,11 @@ export function parsePackMarkdown(text: string): ParsedPack {
       // `advisor: claude-opus-5` as a scalar, or an object on the lines below.
       if (topKey === "advisor" && value) out.advisorModel = unquote(value);
       if (topKey === "pinned_models" && value) out.pinnedModels = list(value);
+      if (topKey === "description_long" && value) out.descriptionLong = unquote(value);
+      if (topKey === "use_cases" && value) out.useCases = list(value);
+      if (topKey === "limitations" && value) out.limitations = list(value);
+      if (topKey === "requirements" && value) out.requirements = list(value);
+      if (topKey === "built_on" && value) out.builtOn = unquote(value);
       continue;
     }
 
@@ -159,6 +192,31 @@ export function parsePackMarkdown(text: string): ParsedPack {
     if (topKey === "mcp_servers") {
       if (key === "name") out.mcpServers.push({ name: value, url: "" });
       if (key === "url" && out.mcpServers.length) out.mcpServers[out.mcpServers.length - 1]!.url = value;
+    }
+    if (topKey === "tools") {
+      if (key === "name" && value) {
+        out.tools.push({ name: value, policy: "" });
+        awaitingToolPolicy = false;
+      } else if (key === "permission_policy") {
+        awaitingToolPolicy = true;
+      } else if (key === "type" && awaitingToolPolicy && out.tools.length) {
+        out.tools[out.tools.length - 1]!.policy = value;
+        awaitingToolPolicy = false;
+      } else {
+        awaitingToolPolicy = false;
+      }
+    }
+    if (topKey === "faq") {
+      if (key === "q") out.faq.push({ q: value, a: "" });
+      if (key === "a" && out.faq.length) out.faq[out.faq.length - 1]!.a = value;
+    }
+    // Same shape as `faq` above: the first key of an entry opens it, the rest
+    // fill it in, and a key arriving before any entry is ignored rather than
+    // attached to whatever came before.
+    if (topKey === "scenarios") {
+      if (key === "brief") out.scenarios.push({ brief: value, reached: [], output: "" });
+      if (key === "reached" && out.scenarios.length) out.scenarios[out.scenarios.length - 1]!.reached = list(value);
+      if (key === "output" && out.scenarios.length) out.scenarios[out.scenarios.length - 1]!.output = value;
     }
     if (topKey === "skills") {
       // Anthropic's prebuilt skills are referenced by short name. A pack's own
@@ -179,6 +237,7 @@ export function parsePackMarkdown(text: string): ParsedPack {
     }
   }
   out.mcpServers = out.mcpServers.filter((m) => m.name && m.url);
+  out.tools = out.tools.filter((t) => t.name && t.policy);
 
   // The exported body carries the platform wrapper and a provenance comment
   // above the author's text. Strip both so a round trip does not accumulate

@@ -12,6 +12,12 @@ import * as Sch from "./schedules.js";
 import { sql } from "./sql.js";
 import { balanceByBucket, balanceMillipoints, credit, fmt } from "../billing/points.js";
 import * as P from "./platform.js";
+import * as Cr from "./creators.js";
+import * as L from "./listing.js";
+import * as S from "./social.js";
+import * as M from "./messages.js";
+import { permissionSummary } from "../packs/permissions.js";
+import { listingFromForm } from "../packs/listing-shape.js";
 import * as V from "./views.js";
 
 const PORT = Number(process.env["PORT"] ?? 4317);
@@ -110,6 +116,74 @@ async function packNameOf(packVersionId: string): Promise<string> {
   return (await P.packById(v.pack_id))?.name ?? "?";
 }
 
+/** The handle behind a pack's `creator_id`, or null for a pack nobody has claimed. */
+async function creatorHandleOf(creatorId: string | null): Promise<string | null> {
+  if (!creatorId) return null;
+  const s = await sql();
+  const row = await s.one<{ handle: string }>("SELECT handle FROM creators WHERE id = $1", [creatorId]);
+  return row?.handle ?? null;
+}
+
+/**
+ * Written opinions worth showing — a rating, a body, or both. A review row
+ * with neither (both left blank at submit time) conveys nothing and is
+ * dropped here rather than rendered as a nameless, empty card.
+ */
+async function reviewsOf(
+  packId: string,
+): Promise<Array<{ byline: string | null; rating: number | null; body: string; createdAt: string }>> {
+  const s = await sql();
+  const rows = await s.query<{ byline: string | null; rating: number | string | null; body: string; created_at: string }>(
+    `SELECT byline, rating, body, created_at FROM pack_reviews
+      WHERE pack_id = $1 AND (rating IS NOT NULL OR body <> '')
+      ORDER BY updated_at DESC`,
+    [packId],
+  );
+  return rows.map((r) => ({
+    byline: r.byline, rating: r.rating == null ? null : Number(r.rating), body: r.body, createdAt: r.created_at,
+  }));
+}
+
+/** This organisation's own review, if it has submitted one — so the form edits it, not a blank. */
+async function myReviewOf(
+  packId: string, orgId: string,
+): Promise<{ rating: number | null; body: string; byline: string; anonymous: boolean } | null> {
+  const s = await sql();
+  const row = await s.one<{ rating: number | string | null; body: string; byline: string | null; anonymous: number | string }>(
+    "SELECT rating, body, byline, anonymous FROM pack_reviews WHERE pack_id = $1 AND org_id = $2",
+    [packId, orgId],
+  );
+  if (!row) return null;
+  return {
+    rating: row.rating == null ? null : Number(row.rating), body: row.body,
+    byline: row.byline ?? "", anonymous: Boolean(Number(row.anonymous)),
+  };
+}
+
+/**
+ * How many organisations marked this pack useful, and whether this one
+ * already has. `-1` is a real, legitimate stored value — a downvote — and
+ * is not "useful" in either direction: both queries filter to `value > 0`
+ * so a downvote neither inflates the count nor flips this viewer's own
+ * button to "Marked useful".
+ */
+async function votesOf(packId: string, orgId: string): Promise<{ count: number; voted: boolean }> {
+  const s = await sql();
+  const rows = await s.query<{ ok: number }>(
+    "SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND value > 0", [packId]);
+  const mine = await s.one<{ ok: number }>(
+    "SELECT 1 AS ok FROM pack_votes WHERE pack_id = $1 AND org_id = $2 AND value > 0", [packId, orgId]);
+  return { count: rows.length, voted: Boolean(mine) };
+}
+
+/** Whether this organisation has bookmarked the pack. */
+async function isSaved(packId: string, orgId: string): Promise<boolean> {
+  const s = await sql();
+  return Boolean(
+    await s.one<{ ok: number }>("SELECT 1 AS ok FROM pack_saves WHERE pack_id = $1 AND org_id = $2", [packId, orgId]),
+  );
+}
+
 // ------------------------------------------------------------------ routes
 
 async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: Ctx): Promise<void> {
@@ -122,15 +196,18 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
 
   if (method === "GET" && path === "/") {
     const q = (url.searchParams.get("q") ?? "").trim();
-    const packs = await Promise.all((await P.listPacks(q)).map(async (p) => {
-      const v = await P.latestVersion(p.id);
-      return {
-        ...p,
-        published: Boolean(v),
-        owned: Boolean(v && (await P.entitled(ctx.orgId, v.id))),
-        pricePoints: Pay.pricePoints(p),
-        stats: await P.packStats(p.id),
-      };
+    // One query for the whole shelf. This used to be four sequential round
+    // trips per pack — the latest version, this organisation's entitlement to
+    // it, `packStats` (three subqueries of its own) and the creator's handle —
+    // which is ~280 queries for seventy packs on the first page a signed-in
+    // buyer sees, through a pool capped at eight connections. And since
+    // re-attribution gave every listed pack the same creator, 68 of those
+    // were fetching one string.
+    const packs = (await P.catalogFor(ctx.orgId, q)).map((p) => ({
+      ...p,
+      published: p.latestVersionId !== null,
+      pricePoints: Pay.pricePoints(p),
+      stats: { runs: p.runs, buyers: p.buyers, version: p.version },
     }));
     return html(res, V.catalogPage(packs, await bal(), viewer, q, P.tagsOf(packs), await P.roles()));
   }
@@ -140,19 +217,76 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     const p = await P.getPack(packMatch[1]!);
     if (!p) return html(res, V.layout("Not found", "<h1>No such pack</h1>"), 404);
     const v = await P.latestVersion(p.id);
-    const owned = Boolean(v && (await P.entitled(ctx.orgId, v.id)));
-    const trial = v && !owned
-      ? { turns: await settingInt("trial_turns"), budgetCents: await settingInt("trial_budget_cents"),
-          used: await P.hasTriedPack(ctx.orgId, p.id) }
-      : null;
-    return html(res, V.packPage(p, v, owned, await models(), await bal(),
-      url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId));
+    // Everything below depends on the pack and its latest version and on
+    // nothing else, so it is fetched at once rather than in a chain of
+    // fourteen awaits: the page renders in one round trip's worth of latency
+    // instead of fourteen, which matters most on the pool-capped deployment
+    // where each one also holds a connection.
+    const [
+      owned, turns, budgetCents, tried, tools, mcpServers, policy, creatorHandle,
+      stats, files, refundDays, rating, reviews, mayReview, myReview, votes, saved, changelog,
+      modelList, balance,
+    ] = await Promise.all([
+      v ? P.entitled(ctx.orgId, v.id) : Promise.resolve(false),
+      settingInt("trial_turns"),
+      settingInt("trial_budget_cents"),
+      P.hasTriedPack(ctx.orgId, p.id),
+      P.packTools(p.id),
+      P.packMcpServers(p.id),
+      P.effectivePolicy(v?.id ?? null),
+      creatorHandleOf(p.creator_id),
+      P.packStats(p.id),
+      P.packFileSummary(p.id),
+      settingInt("refund_window_days"),
+      S.ratingOf(p.id),
+      reviewsOf(p.id),
+      S.mayReview(ctx.orgId, p.id),
+      myReviewOf(p.id, ctx.orgId),
+      votesOf(p.id, ctx.orgId),
+      isSaved(p.id, ctx.orgId),
+      P.changelogOf(p.id),
+      models(),
+      bal(),
+    ]);
+    const trial = v && !owned ? { turns, budgetCents, used: tried } : null;
+    // The permissions rail is derived from what the run is configured with,
+    // not from what the author declared: `pack_tools` supplies the tool names
+    // and `effectivePolicy` the posture — the platform setting, forced to
+    // always_ask by a PreToolUse hook, exactly as `publishPack` baked it.
+    // A pack with no tools recorded (every pack published before they were
+    // persisted) gets the platform-level statement instead.
+    const permissions = permissionSummary({
+      tools: tools.map((t) => t.name),
+      mcpServers,
+      web: P.packExtras(p).web ?? {},
+      policy,
+    }).lines;
+    const extras: V.PackPageExtras = {
+      listing: L.hasListing(p) ? L.listingOf(p) : null,
+      stats,
+      permissions,
+      files,
+      updatedAt: v?.created_at ?? null,
+      builtOn: p.built_on,
+      refundDays,
+      creator: creatorHandle && p.creator_id ? { id: p.creator_id, handle: creatorHandle } : null,
+      rating,
+      reviews,
+      mayReview,
+      myReview,
+      votes,
+      saved,
+      changelog,
+    };
+    return html(res, V.packPage(p, v, owned, modelList, balance,
+      url.searchParams.get("err") ?? undefined, viewer, trial, p.author_org_id === ctx.orgId, extras));
   }
 
   const pubMatch = /^\/packs\/([a-z0-9-]+)\/publish$/.exec(path);
   if (method === "POST" && pubMatch) {
     ownerOnly();
-    try { await P.publishPack(pubMatch[1]!); }
+    const f = await body(req);
+    try { await P.publishPack(pubMatch[1]!, f["note"]); }
     catch (e) { return redirect(res, `/packs/${pubMatch[1]}?err=${encodeURIComponent(msg(e))}`); }
     return redirect(res, `/packs/${pubMatch[1]}`);
   }
@@ -224,6 +358,48 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       });
       return redirect(res, `/runs/${run.id}`);
     } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+  }
+
+  const reviewMatch = /^\/packs\/([a-z0-9-]+)\/review$/.exec(path);
+  if (method === "POST" && reviewMatch) {
+    const slug = reviewMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const f = await body(req);
+    try {
+      await S.submitReview({
+        orgId: ctx.orgId, userId: ctx.userId, packId: pack.id,
+        rating: f["rating"] ? Number(f["rating"]) : undefined,
+        body: f["body"] ?? "",
+        byline: f["byline"] ?? "",
+        anonymous: f["anonymous"] === "on",
+      });
+    } catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
+  }
+
+  // "This looks good" — no run required, so no eligibility check belongs
+  // here either; `vote()` itself clamps an in-range value and rejects
+  // anything that is not a finite number.
+  const voteMatch = /^\/packs\/([a-z0-9-]+)\/vote$/.exec(path);
+  if (method === "POST" && voteMatch) {
+    const slug = voteMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const f = await body(req);
+    try { await S.vote(ctx.orgId, pack.id, Number(f["value"] ?? "1")); }
+    catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
+  }
+
+  const saveMatch = /^\/packs\/([a-z0-9-]+)\/save$/.exec(path);
+  if (method === "POST" && saveMatch) {
+    const slug = saveMatch[1]!;
+    const pack = await P.getPack(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    try { await S.toggleSave(ctx.orgId, ctx.userId, pack.id); }
+    catch (e) { return redirect(res, `/packs/${slug}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
   }
 
   if (method === "POST" && path === "/runs") {
@@ -520,6 +696,118 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     return redirect(res, "/authors");
   }
 
+  // ------------------------------------------------------------- creators
+  // `/creators/me` is checked ahead of the `/creators/:handle` pattern below,
+  // since "me" would otherwise parse as a handle.
+  if (method === "GET" && path === "/creators/me") {
+    const mine = await Cr.creatorForOrg(ctx.orgId);
+    return html(res, V.creatorEditorPage({
+      creator: mine ?? null, canEdit: ctx.role === "owner", balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+  if (method === "POST" && path === "/creators/me") {
+    ownerOnly();
+    const f = await body(req);
+    const links = (f["links"] ?? "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+      const i = line.indexOf("|");
+      return i === -1 ? { label: line, url: "" } : { label: line.slice(0, i).trim(), url: line.slice(i + 1).trim() };
+    }).filter((l) => l.url);
+    try {
+      const created = await Cr.upsertCreator({
+        orgId: ctx.orgId, userId: ctx.userId,
+        handle: f["handle"] ?? "", displayName: f["displayName"] ?? "",
+        bio: f["bio"], avatar: f["avatar"], links,
+      });
+      return redirect(res, `/creators/${created.handle}`);
+    } catch (e) { return redirect(res, `/creators/me?err=${encodeURIComponent(msg(e))}`); }
+  }
+  const creatorMatch = /^\/creators\/([a-zA-Z0-9_-]+)$/.exec(path);
+  if (method === "GET" && creatorMatch) {
+    const creator = await Cr.creatorByHandle(creatorMatch[1]!);
+    if (!creator) return html(res, V.layout("Not found", "<h1>No such creator</h1>", { viewer }), 404);
+    const s2 = await sql();
+    const rows = await s2.query<P.PackRow>(
+      "SELECT * FROM packs WHERE creator_id = $1 AND status = 'listed' ORDER BY name", [creator.id]);
+    const packs = await Promise.all(rows.map(async (p) => ({
+      ...p,
+      pricePoints: Pay.pricePoints(p),
+      stats: await P.packStats(p.id),
+    })));
+    return html(res, V.creatorPage(
+      creator, packs, await Cr.creatorStats(creator.id), await S.creatorRating(creator.id), viewer, await bal(),
+      creator.org_id !== ctx.orgId, url.searchParams.get("err") ?? undefined));
+  }
+
+  // ------------------------------------------------------------- messages
+  // A private line between a buyer organisation and a creator. GET /inbox
+  // shows whichever side of that this organisation is on: threads asked of
+  // its own creator profile, if it has one, and threads it has itself
+  // opened with someone else's. Neither `threadsFor` nor `threadsForOrg`
+  // ever returns a thread belonging to a third organisation, so there is
+  // nothing to filter at this layer — the scoping is in the query.
+  if (method === "GET" && path === "/inbox") {
+    const mine = await Cr.creatorForOrg(ctx.orgId);
+    return html(res, V.inboxPage({
+      asked: mine ? await M.threadsFor(mine.id) : [],
+      mine: await M.threadsForOrg(ctx.orgId),
+      selfOrgId: ctx.orgId, viewer, balance: await bal(),
+      err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+
+  if (method === "POST" && path === "/threads") {
+    const f = await body(req);
+    // An allowlist, not a blacklist: the form only ever sets this to one of
+    // the two pages a thread can be opened from. A blacklist of "looks like
+    // an external host" prefixes is the wrong shape for this — "//evil" is
+    // one such prefix, but so is "/\evil" (a backslash is an equivalent
+    // path separator to a browser's URL parser in the relative-slash state,
+    // so "/\evil.example/x" resolves to "http://evil.example/x" exactly
+    // like "//evil.example/x" does) and there is no reason to assume those
+    // are the only two. Anything that is not exactly one of the pages this
+    // form is rendered on falls back to /inbox.
+    const backField = f["back"] ?? "";
+    const back = /^\/packs\/[a-z0-9-]+$/.test(backField) || /^\/creators\/[a-zA-Z0-9_-]+$/.test(backField)
+      ? backField : "/inbox";
+    try {
+      await M.openThread({
+        orgId: ctx.orgId, userId: ctx.userId, creatorId: f["creatorId"] ?? "",
+        packId: f["packId"] || null, subject: f["subject"] ?? "", body: f["body"] ?? "",
+      });
+    } catch (e) { return redirect(res, `${back}?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, "/inbox");
+  }
+
+  const replyMatch = /^\/threads\/([a-z0-9_]+)\/reply$/.exec(path);
+  if (method === "POST" && replyMatch) {
+    const f = await body(req);
+    try {
+      await M.reply({ threadId: replyMatch[1]!, orgId: ctx.orgId, userId: ctx.userId, body: f["body"] ?? "" });
+    } catch (e) {
+      // A third organisation's reply gets the same 404 a bad thread ID would
+      // — not a redirect-with-error, which would at least confirm the
+      // thread exists.
+      if (statusOf(e) === 404) return html(res, V.layout("Not found", "<h1>No such thread</h1>", { viewer }), 404);
+      return redirect(res, `/inbox?err=${encodeURIComponent(msg(e))}`);
+    }
+    return redirect(res, "/inbox");
+  }
+
+  const faqMatch = /^\/threads\/([a-z0-9_]+)\/publish$/.exec(path);
+  if (method === "POST" && faqMatch) {
+    const f = await body(req);
+    const mine = await Cr.creatorForOrg(ctx.orgId);
+    if (!mine) return html(res, V.layout("Not found", "<h1>No such thread</h1>", { viewer }), 404);
+    try {
+      await M.publishToFaq(mine.id, faqMatch[1]!, f["questionId"] ?? "", f["answerId"] ?? "");
+    } catch (e) {
+      if (statusOf(e) === 404) return html(res, V.layout("Not found", "<h1>No such thread</h1>", { viewer }), 404);
+      return redirect(res, `/inbox?err=${encodeURIComponent(msg(e))}`);
+    }
+    return redirect(res, "/inbox");
+  }
+
   // ------------------------------------------------------------- authoring
   const packFields = (f: Record<string, string>): Au.PackInput => ({
     slug: f["slug"] ?? "", name: f["name"] ?? "", tagline: f["tagline"] ?? "",
@@ -557,8 +845,16 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
     if (pack.author_org_id !== ctx.orgId && !curator) throw new Au.NotTheAuthorError();
     if (method === "POST") {
       ownerOnly();
-      try { await Au.updatePack(pack.author_org_id!, slug, { ...packFields(await body(req)), slug }); }
+      const fields = packFields(await body(req));
+      try { await Au.updatePack(pack.author_org_id!, slug, { ...fields, slug }); }
       catch (e) { return redirect(res, `/packs/${slug}/edit?err=${encodeURIComponent(msg(e))}`); }
+      // An edited method may no longer be what the live listing describes, so
+      // the listing is dated rather than silently left to claim it still is.
+      // Marked from here and not from inside `updatePack`: `listing.ts`
+      // imports `authoring.ts` for the authority pattern, and the reverse
+      // edge would be an import cycle whose first link is evaluated at module
+      // load — a runtime failure, not a typecheck one.
+      if (fields.instructions.trim() !== pack.instructions.trim()) await L.markStale(pack.id);
       return redirect(res, `/packs/${slug}/edit`);
     }
     const v = await P.latestVersion(pack.id);
@@ -567,6 +863,78 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
       models: await models(), balance: await bal(), viewer,
       err: url.searchParams.get("err") ?? undefined, isCurator: curator,
     }));
+  }
+
+  // ----------------------------------------------------- listing approval
+  //
+  // Generated copy reaches a buyer through exactly one door, and this is it.
+  // `scripts/generate-listings.mjs` writes drafts and nothing else; nothing
+  // but the approve route below copies a draft onto the pack. Same gate as
+  // the editor — the author's own organisation, or the curator — because this
+  // is publishing, not drafting.
+
+  /** The pack, gated the way the editor gates it: its own organisation, or the curator. */
+  const myPackOr403 = async (slug: string): Promise<P.PackRow | null> => {
+    const pack = await P.getPack(slug);
+    if (!pack) return null;
+    const curator = (await platformOrgId()) === ctx.orgId;
+    if (pack.author_org_id !== ctx.orgId && !curator) throw new Au.NotTheAuthorError();
+    return pack;
+  };
+  const listingMatch = /^\/packs\/([a-z0-9-]+)\/listing$/.exec(path);
+  if (method === "GET" && listingMatch) {
+    const pack = await myPackOr403(listingMatch[1]!);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const pending = await L.draftWithMeta(pack.id);
+    const v = await P.latestVersion(pack.id);
+    return html(res, V.listingApprovalPage({
+      pack,
+      live: L.hasListing(pack) ? L.listingOf(pack) : null,
+      draft: pending?.listing ?? null,
+      generatedAt: pending?.generatedAt ?? null,
+      sourceVersion: pending?.sourceVersion ?? null,
+      currentVersion: v?.version ?? null,
+      canApprove: ctx.role === "owner",
+      saved: url.searchParams.get("saved") === "1",
+      balance: await bal(), viewer,
+      err: url.searchParams.get("err") ?? undefined,
+    }));
+  }
+  // The author's own edit of a draft, which is the half of "edits freely, and
+  // approves" that did not exist: the six listing fields had exactly two
+  // writers, a folder import and the generator, so approval was
+  // approve-verbatim or nothing. Same gate as the approve route below —
+  // editing a draft is not publishing, but it is still the pack's own
+  // organisation's business and nobody else's. `saveDraft` upserts and runs
+  // the copy-quality guard, so a hand-written paste of the method is refused
+  // here exactly as a generated one is.
+  if (method === "POST" && listingMatch) {
+    ownerOnly();
+    const slug = listingMatch[1]!;
+    const pack = await myPackOr403(slug);
+    if (!pack) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    const f = await body(req);
+    try {
+      // The draft keeps the version it was generated from, so the "from
+      // version N" badge still says what the model actually described. A
+      // listing written here with no draft behind it is of the current one.
+      const pending = await L.draftWithMeta(pack.id);
+      const sourceVersion = pending?.sourceVersion ?? (await P.latestVersion(pack.id))?.version ?? null;
+      await L.saveDraft(pack.id, listingFromForm(f), sourceVersion);
+    } catch (e) { return redirect(res, `/packs/${slug}/listing?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}/listing?saved=1`);
+  }
+  const approveMatch = /^\/packs\/([a-z0-9-]+)\/listing\/approve$/.exec(path);
+  if (method === "POST" && approveMatch) {
+    ownerOnly();
+    const slug = approveMatch[1]!;
+    // Authority first, so a stranger gets a flat refusal rather than a
+    // redirect to a page they cannot read. `approveDraft` checks it again
+    // itself — every caller inherits the gate, not just this route.
+    if (!(await myPackOr403(slug))) return html(res, V.layout("Not found", "<h1>No such pack</h1>", { viewer }), 404);
+    try { await L.approveDraft(ctx.orgId, slug); }
+    catch (e) { return redirect(res, `/packs/${slug}/listing?err=${encodeURIComponent(msg(e))}`); }
+    return redirect(res, `/packs/${slug}`);
   }
 
   const subMatch = /^\/packs\/([a-z0-9-]+)\/submit$/.exec(path);
@@ -644,6 +1012,11 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
         orgId: ctx.orgId, files: clean,
         ...(typeof payload?.slug === "string" ? { slugOverride: payload.slug } : {}),
       });
+      // A folder replaced the whole pack body, so the live listing is dated
+      // until someone has read it against what now ships. Marked here rather
+      // than in `authoring.ts` for the same reason the editor route does it:
+      // `listing.ts` imports `authoring.ts`, never the other way round.
+      if (!out.created) await L.markStale(out.pack.id);
       res.writeHead(200, { "content-type": "application/json" });
       return void res.end(JSON.stringify({
         slug: out.pack.slug, created: out.created, status: out.pack.status,
@@ -662,14 +1035,24 @@ async function route(req: http.IncomingMessage, res: http.ServerResponse, ctx: C
   if (method === "GET" && path === "/curate") {
     if ((await platformOrgId()) !== ctx.orgId) throw new Au.NotTheCuratorError();
     const s2 = await sql();
-    const listed = await s2.query<{ slug: string; name: string; author: string }>(
-      "SELECT slug, name, author FROM packs WHERE status = 'listed' ORDER BY name");
+    const listed = await s2.query<{ slug: string; name: string; author: string; featured_rank: number | null }>(
+      "SELECT slug, name, author, featured_rank FROM packs WHERE status = 'listed' ORDER BY name");
     return html(res, V.curatePage({
       queue: (await Au.submittedPacks()).map((q) => ({
         slug: q.slug, name: q.name, author: q.author, tagline: q.tagline, price_points: Number(q.price_points),
       })),
-      listed, balance: await bal(), viewer,
+      listed, balance: await bal(), viewer, err: url.searchParams.get("err") ?? undefined,
     }));
+  }
+  const featuredRankMatch = /^\/packs\/([a-z0-9-]+)\/featured-rank$/.exec(path);
+  if (method === "POST" && featuredRankMatch) {
+    ownerOnly();
+    const f = await body(req);
+    const raw = (f["featuredRank"] ?? "").trim();
+    try {
+      await Au.setFeaturedRank(ctx.orgId, featuredRankMatch[1]!, raw === "" ? null : Number(raw));
+      return redirect(res, "/curate");
+    } catch (e) { return redirect(res, `/curate?err=${encodeURIComponent(msg(e))}`); }
   }
 
   // ------------------------------------------------------------- schedules

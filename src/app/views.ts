@@ -1,5 +1,10 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
+import { ROLES } from "./roles.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
+import { listingToForm, type Listing } from "../packs/listing-shape.js";
+import type { CreatorRow } from "./creators.js";
+import type { Rating } from "./social.js";
+import type { InboxThread, MyThread } from "./messages.js";
 
 export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -139,6 +144,18 @@ min-height:2.5rem;display:flex;align-items:center}
 .menu>div a[aria-current=page]{background:color-mix(in oklab,var(--primary) 18%,transparent);font-weight:600}
 .menu>div form{margin-top:var(--s1);border-top:1px solid var(--line);padding-top:var(--s1)}
 .menu>div .btn{width:100%;justify-content:flex-start}
+
+/* ---------------------------------------------------------- breadcrumb
+   A nav landmark, so it has to undo what the chrome's own nav rules do to
+   one: no auto margin pushing it right, and links sized as text rather than as
+   44px tap targets, because a breadcrumb is a sentence you read before it is
+   a control you press.                                                      */
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);
+margin:var(--s5) 0 0;font-size:var(--t1);color:var(--muted)}
+.crumbs a{display:inline-flex;align-items:center;min-width:0;min-height:2rem;
+padding:0 var(--s1);margin:0 calc(var(--s1) * -1);border-radius:var(--s1);color:var(--muted)}
+.crumbs a:hover{color:var(--ink);background:none;text-decoration:underline}
+.crumbs [aria-current=page]{color:var(--ink)}
 
 /* ---------------------------------------------------------------- icons */
 .ic{display:inline-flex;align-items:center;gap:var(--s2);position:relative}
@@ -323,6 +340,9 @@ padding:var(--s4);box-shadow:var(--plane1);margin:0 0 var(--s4)}
 min-width:3.5rem;text-align:right}
 .chips{display:flex;flex-wrap:wrap;gap:var(--s2);margin:var(--s2) 0 0}
 .chips .tag b{font-weight:600;color:var(--ink)}
+/* A file manifest holds paths longer than a phone is wide, and the page is
+   the thing that must not slide sideways. The path breaks; the page does not. */
+.chips.paths .tag{max-width:100%;word-break:break-all}
 .ctx .fine{font-size:var(--t1);color:var(--muted);margin:var(--s3) 0 0;line-height:1.5}
 
 /* ---------------------------------------------------------------- trace */
@@ -416,6 +436,7 @@ const ICONS: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="8"/><path d="M12 11v5M12 8h.01"/>',
   warn: '<path d="M12 4l9 16H3zM12 10v4M12 17h.01"/>',
   check: '<path d="M4 12l5 5L20 6"/>',
+  inbox: '<path d="M4 4h16v12H4zM4 4l8 7 8-7M4 20h16"/>',
 };
 
 /** An icon with its name beside it; `only` hides the word but keeps it readable. */
@@ -452,6 +473,7 @@ export function layout(
 <nav>
   ${v ? `<a href="/" title="Catalog">${icon("catalog", "Catalog", true)}</a>
   <a href="/runs" title="Runs">${icon("runs", "Runs", true)}</a>
+  <a href="/inbox" title="Inbox">${icon("inbox", "Inbox", true)}</a>
   <a href="/ledger" title="Points">${icon("points", "Points", true)}</a>
   ${opts.balance !== undefined ? `<a class="bal" href="/ledger" title="${esc(pts(opts.balance))} left">${esc(pts(opts.balance).replace(" points", "").replace(" point", ""))}</a>` : ""}
   <details class="menu"><summary>${esc(v.name)}</summary><div>
@@ -538,18 +560,35 @@ export function thumb(slug: string): string {
 
 export function catalogPage(
   packs: Array<PackRow & { published: boolean; owned: boolean; pricePoints: number;
-    stats: { runs: number; buyers: number; version: number } }>,
+    stats: { runs: number; buyers: number; version: number };
+    /** The pack's creator, when `author` is backed by a real creator record. */
+    creatorHandle: string | null }>,
   balance: number, viewer: Viewer = null, query = "",
   cats: Array<{ tag: string; count: number }> = [],
   roles: Array<{ id: string; name: string; blurb: string; icon: string; count: number }> = [],
 ): string {
   // Name, face, one line, price. Everything else is on the pack's own page.
-  const cards = packs.map((p) => `<a class="card gig" href="/packs/${esc(p.slug)}">
+  //
+  // The card used to be one big <a> around everything — simplest markup, and
+  // right as long as every click on it meant the same thing. A byline that
+  // goes to a different page breaks that: an anchor cannot nest inside
+  // another anchor, so the card is a <div> instead, with an invisible anchor
+  // laid over the whole thing as the default click target. The byline link,
+  // when there is one, sits on top of that overlay — the inline
+  // position/z-index below is what puts it there — so a click there reaches
+  // the creator and nowhere else; every other pixel falls through to the pack.
+  const cards = packs.map((p) => {
+    const name = esc(p.author.split(" — ")[0] ?? p.author);
+    const who = p.creatorHandle
+      ? `<a href="/creators/${esc(p.creatorHandle)}" style="position:relative;z-index:1">${name}</a>`
+      : name;
+    return `<div class="card gig">
+  <a href="/packs/${esc(p.slug)}" aria-label="${esc(p.name)}" style="position:absolute;inset:0;z-index:0"></a>
   ${p.image
     ? `<img class="thumb" src="${esc(heroSrc(p.image))}" alt="" loading="lazy" decoding="async" width="640" height="480">`
     : thumb(p.slug)}
   <div class="meta">
-    <p class="who">${avatar(p.author)}<span>${esc(p.author.split(" — ")[0] ?? p.author)}</span></p>
+    <p class="who">${avatar(p.author)}<span>${who}</span></p>
     <h3>${esc(p.name)}</h3>
     <p class="line">${esc(p.tagline)}</p>
     <p class="foot">
@@ -558,7 +597,8 @@ export function catalogPage(
         : `<span class="proof new">new</span>`}
       <span class="price">${p.pricePoints === 0 ? "free" : `${p.pricePoints.toLocaleString("en-US")}<small> pts</small>`}</span>
     </p>
-  </div></a>`).join("");
+  </div></div>`;
+  }).join("");
   const found = packs.length;
   return layout("Catalog", `<h1>Hire a worker</h1>
 <p class="lede">Buy once. It runs here. You see what every run cost.</p>
@@ -601,33 +641,158 @@ ${found === 0 && !query ? `<p class="lede">The shelf is empty.</p>` : `<div clas
     { balance, viewer });
 }
 
+/**
+ * Everything the pack page says that is not already a column on the pack.
+ *
+ * One object rather than nine more positional parameters, and deliberately
+ * open: the creator card, the rating, the save and the vote land in here as
+ * they are built, without this signature moving again.
+ */
+export type PackPageExtras = {
+  /** The live listing, or null when the pack has none — `hasListing` decides. */
+  listing: Listing | null;
+  /** Counted from our own tables: completed non-trial runs, owning orgs, version. */
+  stats: { runs: number; buyers: number; version: number };
+  /** `permissionSummary(...).lines` — derived from what the pack stored, not declared. */
+  permissions: string[];
+  /** The manifest of the version a buyer would get. */
+  files: { files: number; skills: number; tree: string[] };
+  /** When the latest version was published. */
+  updatedAt: string | null;
+  /** Whose work this rests on, and under what licence. Not the byline. */
+  builtOn: string | null;
+  /** The purchase refund window, in days, so the buy card can state it. */
+  refundDays: number;
+  /**
+   * Who `p.author` is, when that string is backed by a real creator record.
+   * `null` for a pack nobody has claimed yet — the byline still shows
+   * `p.author`, it just does not go anywhere.
+   */
+  creator: { id: string; handle: string } | null;
+  /**
+   * Average, count and the five-bucket spread, straight off `ratingOf`.
+   * `average` stays `null` below `RATING_THRESHOLD`; the page's one rule is
+   * to never go around that by computing its own average from `distribution`.
+   */
+  rating: Rating;
+  /** Written opinions worth showing — a rating, a body, or both; newest edit first. */
+  reviews: Array<{ byline: string | null; rating: number | null; body: string; createdAt: string }>;
+  /** Whether this viewing organisation has a completed, non-trial run and may submit one. */
+  mayReview: boolean;
+  /** This organisation's own review, so the form edits it instead of handing back a blank one. */
+  myReview: { rating: number | null; body: string; byline: string; anonymous: boolean } | null;
+  /** How many organisations marked this useful, and whether this one already has. */
+  votes: { count: number; voted: boolean };
+  /** Whether this organisation has bookmarked the pack. */
+  saved: boolean;
+  /**
+   * What changed in each version an author actually wrote a note for,
+   * newest first. Empty for every pack published before this existed —
+   * `changelogOf` never invents one — so the section renders nothing for
+   * them, per the page's own rule.
+   */
+  changelog: Array<{ version: number; note: string; createdAt: string }>;
+};
+
+/** A stored timestamp as a date. The hour a curator clicked is not news. */
+const day = (iso: string): string => iso.slice(0, 10);
+
+const bullets = (items: string[], cls = ""): string =>
+  `<ul${cls ? ` class="${cls}"` : ""}>${items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`;
+
+/** A stored block of prose, split on blank lines. Authors write paragraphs. */
+const paragraphs = (text: string): string =>
+  text.split(/\n{2,}/).map((t) => t.trim()).filter(Boolean)
+    .map((t) => `<p>${esc(t)}</p>`).join("");
+
+/**
+ * Five filled stars down to `n`, the rest hollow — one reviewer's own
+ * opinion, written down on their own review. Not an aggregate, so it is
+ * never gated by `RATING_THRESHOLD`.
+ */
+const stars = (n: number): string => "★".repeat(n) + "☆".repeat(5 - n);
+
+/**
+ * Home › Workers › Role › Pack.
+ *
+ * The role segment is a link into the shelf filtered by that role, which is
+ * the page it claims to be a step down from. A pack with no role loses the
+ * segment rather than showing an empty one.
+ */
+function breadcrumb(p: PackRow): string {
+  const role = ROLES.find((r) => r.id === p.role);
+  const sep = ` <span aria-hidden="true">›</span> `;
+  return `<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a>${sep}<span>Workers</span>${
+    role ? `${sep}<a href="/?q=${encodeURIComponent(role.id)}">${esc(role.name)}</a>` : ""
+  }${sep}<span aria-current="page">${esc(p.name)}</span></nav>`;
+}
+
+/**
+ * What a buyer is buying.
+ *
+ * It used to be a name, a tagline and a price. Every block below is
+ * conditional on having something to say, because almost every pack on the
+ * shelf has no listing content yet and a heading over an empty box is worse
+ * than no heading at all — that is the single rule this function is built
+ * around, not a detail of it.
+ */
 export function packPage(
   p: PackRow, v: PackVersionRow | undefined, owned: boolean, models: string[], balance: number,
-  err?: string, viewer: Viewer = null,
-  trial: { turns: number; budgetCents: number; used: boolean } | null = null,
-  isAuthor = false,
+  err: string | undefined, viewer: Viewer,
+  trial: { turns: number; budgetCents: number; used: boolean } | null,
+  isAuthor: boolean,
+  extras: PackPageExtras,
 ): string {
   const pinned: string[] = JSON.parse(p.pinned_models);
   const choices = (pinned.length ? pinned : models);
+  const {
+    listing, stats, permissions, files, updatedAt, builtOn, refundDays, creator,
+    rating, reviews, mayReview, myReview, votes, saved, changelog,
+  } = extras;
+  const free = p.price_points === 0;
   return layout(p.name, `
 ${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+${breadcrumb(p)}
 <h1>${esc(p.name)}</h1>
 <p class="lede">${esc(p.tagline)}</p>
-<div class="row" style="margin-bottom:18px">
-  <span class="tag">by ${esc(p.author)}</span>
-  <span class="tag">${p.price_points === 0 ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
+<div class="row" style="margin-bottom:var(--s2)">
+  <span class="tag">by ${creator ? `<a href="/creators/${esc(creator.handle)}">${esc(p.author)}</a>` : esc(p.author)}</span>
+  <span class="tag">${free ? "free" : esc(pts(p.price_points * 1000))} one-off</span>
   ${p.upgrade_points > 0 ? `<span class="tag">updates ${p.upgrade_points} pts</span>` : ""}
   <span class="tag">default ${esc(p.model)}</span>
   ${v ? `<span class="tag">v${v.version}</span>` : `<span class="tag">unpublished</span>`}
 </div>
-<div class="note">You see everything it does, never how it was told to do it.${isAuthor ? " Except you — you wrote it." : ""}</div>
+<div class="row" style="margin-bottom:var(--s4)">
+  <form method="post" action="/packs/${esc(p.slug)}/save" class="inline">
+    <button class="btn ghost" type="submit">${saved ? "Saved" : "Save"}</button>
+  </form>
+  <form method="post" action="/packs/${esc(p.slug)}/vote" class="inline">
+    <input type="hidden" name="value" value="1">
+    <button class="btn ghost" type="submit">${votes.voted ? "Marked useful" : "Looks good"}</button>
+  </form>
+  ${rating.average !== null ? `<span class="tag">${stars(Math.round(rating.average))} ${rating.average.toFixed(1)} (${rating.count})</span>` : ""}
+</div>
+${builtOn ? `<p class="lede" style="font-size:var(--t1);margin-bottom:var(--s4)">Built on ${esc(builtOn)}.</p>` : ""}
+<div class="note">You see everything it does, and how it was told to do it — the method leaves with you.${isAuthor ? " You wrote this one; this is the page a buyer reads." : ""}</div>
 ${v ? `
 <h2>${owned ? "Start a run" : "Acquire and run"}</h2>
+<p class="lede" style="font-size:var(--t2)">${owned
+  ? `Yours already. The runs cost points, and every run shows what it cost, to the token.`
+  : free
+    ? `Free. Nothing to buy — you spend points on the run, and the run shows what it cost, to the token.`
+    : `${esc(pts(p.price_points * 1000))} once and it is yours; the runs cost points on top, and every run shows what it cost, to the token. Refundable for ${refundDays} days.`}</p>
+${!owned && trial ? (trial.used
+  ? `<p class="lede" style="font-size:var(--t2)">You have already used your trial of this pack.</p>`
+  : `<div class="note" style="border-color:var(--accent);background:color-mix(in oklab,var(--accent) 9%,transparent)">
+  <strong>Try it on your own brief first.</strong> ${trial.turns} turns, ${esc(fmt(trial.budgetCents))}, and you keep the output.
+  <form method="post" action="/packs/${esc(p.slug)}/trial" class="inline">
+    <button class="btn ghost" type="submit" style="margin-left:var(--s3)">Try it — ${trial.turns} turns</button></form>
+</div>`) : ""}
 <form method="post" action="${owned ? "/runs" : `/packs/${esc(p.slug)}/acquire`}">
   <input type="hidden" name="packVersionId" value="${esc(v.id)}">
   <div class="row">
     <label>Model <select name="model">${choices.map((m) => `<option value="${esc(m)}"${m === p.model ? " selected" : ""}>${esc(m)}</option>`).join("")}</select></label>
-    <button class="btn" type="submit">${owned ? "Start a run" : p.price_points === 0 ? "Get it free and run" : `Buy for ${pts(p.price_points * 1000)} and run`}</button>
+    <button class="btn" type="submit">${owned ? "Start a run" : free ? "Get it free and run" : `Buy for ${pts(p.price_points * 1000)} and run`}</button>
   </div>
   <details class="repo">
     <summary>Give it a repository to read</summary>
@@ -643,18 +808,127 @@ ${v ? `
     records the URL, not the credential. Revoke it at GitHub when you are done; that is
     the only guarantee worth having. Leave blank for a public repo.</p>
   </details>
-  ${pinned.length ? `<p class="lede" style="margin-top:10px;font-size:14px">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
+  ${pinned.length ? `<p class="lede" style="margin-top:var(--s3);font-size:var(--t2)">The author restricted this pack to ${esc(pinned.join(", "))} — every extraction refusal measured came from Opus, and a weaker model may just comply.</p>` : ""}
+</form>` : `<form method="post" action="/packs/${esc(p.slug)}/publish" class="row">
+  <label>What changed in this version?
+    <input type="text" name="note" placeholder="optional" size="30"></label>
+  <button class="btn" type="submit">Publish to the runtime</button>
 </form>
-${!owned && trial ? (trial.used
-  ? `<p class="lede" style="margin-top:14px;font-size:14px">You have already used your trial of this pack.</p>`
-  : `<h2>Or try it first</h2>
-<p class="lede" style="font-size:14px">${trial.turns} turns, ${esc(pts(trial.budgetCents))}, your own brief. You keep the output.</p>
-<form method="post" action="/packs/${esc(p.slug)}/trial">
-  <button class="btn ghost" type="submit">Try it — ${trial.turns} turns</button>
-</form>`) : ""}` : `<form method="post" action="/packs/${esc(p.slug)}/publish"><button class="btn" type="submit">Publish to the runtime</button></form>`}
-${owned ? `<h2>Take it with you</h2>
-<p class="lede" style="font-size:14px">An agent definition <code>ant apply</code> takes directly. The author's instructions are inside it.</p>
-<p><a class="btn ghost" href="/packs/${esc(p.slug)}/export" title="Download ${esc(p.slug)}.md">${icon("download", `Download ${p.slug}.md`)}</a></p>` : ""}
+<p class="lede" style="font-size:var(--t2)">A note is kept against the version it describes and never edited
+afterwards, because a version is immutable. Leave it blank if there is nothing to say.</p>`}
+${stats.runs > 0 || stats.buyers > 0 ? `<div class="meters" style="margin-top:var(--s5)">
+  ${stats.runs > 0 ? `<div class="meter"><div class="k">${icon("runs", "Runs")}</div>
+    <div class="v">${stats.runs.toLocaleString("en-US")}</div></div>` : ""}
+  ${stats.buyers > 0 ? `<div class="meter"><div class="k">Owning organisations</div>
+    <div class="v">${stats.buyers.toLocaleString("en-US")}</div></div>` : ""}
+</div>` : ""}
+<h2>Works with</h2>
+<p class="lede" style="font-size:var(--t2)">It runs here, on a model you pick — nothing to install, and no vendor's
+release to keep in step with. It leaves as one <code>.md</code> file that <code>ant apply</code> takes directly, so
+the method is portable even though the runtime is ours. We make no claim about other people's agents, because
+we do not test against them.</p>
+${owned ? `<p class="row">
+  <a class="btn ghost" href="/packs/${esc(p.slug)}/export?format=md" title="Download ${esc(p.slug)}.md">${icon("download", `The definition — ${p.slug}.md`)}</a>
+  ${files.files > 1 ? `<a class="btn ghost" href="/packs/${esc(p.slug)}/export" title="Download ${esc(p.slug)}.tar.gz">${icon("download", `The whole folder — ${p.slug}.tar.gz`)}</a>` : ""}
+</p>${files.files > 1 ? `<p class="lede" style="font-size:var(--t1)">The definition is the one file <code>ant apply</code> takes. The folder is everything in
+the manifest — the skills, the docs, the hooks — as a <code>tar.gz</code>.</p>` : ""}` : ""}
+${listing && listing.description.trim() ? `<h2>What it does</h2>
+${paragraphs(listing.description)}` : ""}
+${listing && listing.useCases.length ? `<h2>What you'd hire it for</h2>
+${bullets(listing.useCases)}` : ""}
+${listing && listing.scenarios.length ? `<h2>What a session looks like</h2>
+<p class="lede" style="font-size:var(--t2)">Written examples, not recorded runs. Nobody's real brief, repository or
+output appears here.</p>
+${listing.scenarios.map((s) => `<div class="card" style="margin-bottom:var(--s4)">
+  <h3>${esc(s.brief)}</h3>
+  ${s.reached.length ? `<div class="chips">${s.reached.map((r) => `<span class="tag">${esc(r)}</span>`).join("")}</div>` : ""}
+  ${s.output ? `<pre style="white-space:pre-wrap;word-break:break-word;font-size:var(--t2);line-height:1.5;margin:var(--s3) 0 0">${esc(s.output)}</pre>` : ""}
+</div>`).join("")}` : ""}
+${files.files > 0 ? `<h2>What's inside</h2>
+<p class="lede" style="font-size:var(--t2)">${files.files} ${files.files === 1 ? "file" : "files"}${
+  files.skills > 0 ? `, ${files.skills} ${files.skills === 1 ? "skill" : "skills"}` : ""
+} in the version you would get.</p>
+<div class="chips paths">${files.tree.slice(0, 40).map((path) => `<span class="tag">${esc(path)}</span>`).join("")}${
+  files.tree.length > 40 ? `<span class="tag">+${files.tree.length - 40} more</span>` : ""
+}</div>` : ""}
+${listing && listing.limitations.length ? `<h2>Known limitations</h2>
+${bullets(listing.limitations)}` : ""}
+${listing && listing.faq.length ? `<h2>Questions people ask</h2>
+${listing.faq.map((f) => `<details class="repo"><summary>${esc(f.q)}</summary>
+  <p class="fine">${esc(f.a)}</p></details>`).join("")}` : ""}
+${creator && !isAuthor ? `<h2>Ask the creator</h2>
+<p class="lede" style="font-size:var(--t2)">A good exchange here is how the FAQ above gets built — from questions a
+buyer actually had, not ones a generator imagined.</p>
+<form method="post" action="/threads" class="card">
+  <input type="hidden" name="creatorId" value="${esc(creator.id)}">
+  <input type="hidden" name="packId" value="${esc(p.id)}">
+  <input type="hidden" name="back" value="/packs/${esc(p.slug)}">
+  <p><label>Subject<br><input type="text" name="subject" style="width:100%" required></label></p>
+  <p><textarea name="body" placeholder="What do you want to know before you run it?" required></textarea></p>
+  <button class="btn" type="submit">Send</button>
+</form>` : ""}
+${reviews.length > 0 || votes.count > 0 ? `<h2>Reviews</h2>
+${rating.average !== null ? `<div class="row" style="align-items:flex-start;gap:var(--s6);margin-bottom:var(--s4)">
+  <div>
+    <p style="margin:0;font-family:var(--display);font-size:var(--t5)">${rating.average.toFixed(1)} / 5</p>
+    <p class="lede" style="margin:0">${rating.count} ${rating.count === 1 ? "rating" : "ratings"}</p>
+  </div>
+  <div style="flex:1;min-width:12rem">
+    ${[5, 4, 3, 2, 1].map((star) => {
+      const n = rating.distribution[star - 1] ?? 0;
+      const pct = rating.count ? n / rating.count : 0;
+      return `<div class="row" style="gap:var(--s2);margin-bottom:var(--s1);flex-wrap:nowrap">
+      <span class="tag" style="flex:none">${star}★</span>
+      <div class="bar" style="flex:1"><i style="transform:scaleX(${pct.toFixed(4)})"></i></div>
+      <span class="tag" style="flex:none">${n}</span>
+    </div>`;
+    }).join("")}
+  </div>
+</div>` : ""}
+${votes.count > 0 ? `<p class="lede">${votes.count} ${votes.count === 1 ? "organisation" : "organisations"} marked this useful.</p>` : ""}
+${reviews.map((r) => `<div class="card" style="margin-bottom:var(--s3)">
+  <p class="row" style="justify-content:space-between;margin:0 0 var(--s2)">
+    <strong>${esc(r.byline ?? "Anonymous")}</strong>
+    ${r.rating != null ? `<span class="tag">${stars(r.rating)}</span>` : ""}
+  </p>
+  ${r.body.trim() ? `<p style="margin:0">${esc(r.body)}</p>` : ""}
+</div>`).join("")}` : ""}
+<h2>Rate it</h2>
+${mayReview ? `<form method="post" action="/packs/${esc(p.slug)}/review" class="card">
+  <div class="row">
+    <label>Rating <select name="rating">
+      ${[5, 4, 3, 2, 1].map((n) => `<option value="${n}"${(myReview?.rating ?? 5) === n ? " selected" : ""}>${n}</option>`).join("")}
+    </select></label>
+    <label><input type="checkbox" name="anonymous"${myReview?.anonymous ? " checked" : ""}> Post anonymously</label>
+  </div>
+  <p><label>Byline<br><input type="text" name="byline" value="${esc(myReview?.byline || viewer?.orgName || "")}" style="width:100%"></label></p>
+  <p><textarea name="body" placeholder="What happened when you ran it?">${esc(myReview?.body ?? "")}</textarea></p>
+  <button class="btn" type="submit">${myReview ? "Update your review" : "Submit your review"}</button>
+</form>` : `<p class="lede">You can rate this once you have run it.</p>`}
+${changelog.length > 0 ? `<h2>Changelog</h2>
+<p class="lede" style="font-size:var(--t2)">What changed in each version, written by the author at publish and never edited afterwards.
+Versions published before this existed carry no note.</p>
+${changelog.map((c) => `<div class="card" style="margin-bottom:var(--s3)">
+  <p class="row" style="justify-content:space-between;margin:0 0 var(--s2)">
+    <strong>Version ${c.version}</strong><span class="tag">${esc(day(c.createdAt))}</span>
+  </p>
+  <p style="margin:0">${esc(c.note)}</p>
+</div>`).join("")}` : ""}
+<h2>Before you run it</h2>
+<div class="ctx">
+  <h4>Curation</h4>
+  <p class="fine">${p.status === "listed"
+    ? `Curated by the platform${p.listed_at ? `, reviewed and listed on ${esc(day(p.listed_at))}` : ""}. We do not run a security scan and do not claim one.`
+    : `Not on the shelf — this pack is ${esc(p.status)}.`}</p>
+  <h4>Price</h4>
+  <p class="fine">${free ? "Free to acquire; you pay for the runs." : `${esc(pts(p.price_points * 1000))} one-off${p.upgrade_points > 0 ? `, ${p.upgrade_points} points for later versions` : ""}.`}</p>
+  ${listing && listing.requirements.length ? `<h4>Requires</h4>
+  ${bullets(listing.requirements, "fine")}` : ""}
+  <h4>What it may do when it runs</h4>
+  ${bullets(permissions, "fine")}
+  <h4>Version</h4>
+  <p class="fine">${v ? `Version ${v.version}` : "Not published"}${updatedAt ? `, published ${esc(day(updatedAt))}` : ""}.</p>
+</div>
 `, { balance, viewer });
 }
 
@@ -1323,6 +1597,7 @@ document.getElementById('folder').addEventListener('change', (e) => send(e.targe
 ${p ? `<h2>Lifecycle</h2>
 <div class="row">
   <form method="post" action="/packs/${esc(p.slug)}/publish" class="inline">
+    <input type="text" name="note" placeholder="What changed in this version? (optional)" style="width:16rem">
     <button class="btn ghost">${p.version ? `Publish version ${p.version + 1}` : "Publish to the runtime"}</button></form>
   ${p.status === "draft" || p.status === "unlisted" ? `<form method="post" action="/packs/${esc(p.slug)}/submit" class="inline">
     <button class="btn">Submit for the catalog</button></form>` : ""}
@@ -1331,6 +1606,7 @@ ${p ? `<h2>Lifecycle</h2>
     <button class="btn ghost">${p.status === "listed" ? "Withdraw from the catalog" : "List it"}</button></form>` : ""}
   <form method="post" action="/packs/${esc(p.slug)}/delete" class="inline">
     <button class="btn ghost">Delete</button></form>
+  <a class="btn ghost" href="/packs/${esc(p.slug)}/listing">The listing${p.listing_stale_at ? " — out of date" : ""}</a>
   <a class="btn ghost" href="/packs/${esc(p.slug)}">View as a buyer</a>
 </div>
 <p class="lede" style="margin-top:12px;font-size:14px">Saving changes the <em>next</em> version. Anyone who already
@@ -1339,15 +1615,385 @@ what lets you fix a mistake without quietly rewriting work somebody paid for.</p
   { balance: args.balance, viewer: args.viewer });
 }
 
+/** Muted supporting text, in the tokens — `.fine` is only styled inside `.repo`/`.ctx`. */
+const SECONDARY = "color:var(--muted);font-size:var(--t2);line-height:1.5";
+
+/**
+ * One listing, laid out as prose with its empty fields left out.
+ *
+ * Used twice on the approval screen — once for what buyers read now, once
+ * for what is proposed — so the two columns are the same shape and the
+ * difference between them is the content, not the layout.
+ */
+function listingSections(l: Listing): string {
+  const block = (heading: string, body: string): string => (body ? `<h4>${heading}</h4>${body}` : "");
+  return [
+    block("What it does", l.description.trim() ? paragraphs(l.description) : ""),
+    block("What you'd hire it for", l.useCases.length ? bullets(l.useCases) : ""),
+    block("What a session looks like", l.scenarios.length
+      ? `<p style="${SECONDARY}">Written examples, not recorded runs. Nobody's real brief, repository or output
+  appears here — the same line a buyer reads above these on the pack page.</p>`
+        + l.scenarios.map((s) => `<p style="margin:0 0 var(--s3)"><strong>${esc(s.brief)}</strong>
+  ${s.reached.length ? `<br><span style="${SECONDARY}">${esc(s.reached.join(" · "))}</span>` : ""}
+  ${s.output ? `<br><span style="${SECONDARY}">${esc(s.output)}</span>` : ""}</p>`).join("")
+      : ""),
+    block("Known limitations", l.limitations.length ? bullets(l.limitations) : ""),
+    block("Questions people ask", l.faq.length
+      ? l.faq.map((f) => `<p style="margin:0 0 var(--s3)"><strong>${esc(f.q)}</strong><br>
+  <span style="${SECONDARY}">${esc(f.a)}</span></p>`).join("")
+      : ""),
+    block("Requires", l.requirements.length ? bullets(l.requirements) : ""),
+  ].join("") || `<p class="lede">Nothing here yet.</p>`;
+}
+
+/**
+ * The proposed listing, as fields a person can change.
+ *
+ * The screen used to be a single Approve button over read-only prose, which
+ * made approval approve-verbatim or nothing: an author who disagreed with one
+ * sentence could publish it anyway, publish nothing, or pay for another model
+ * call. The spec says twice that the author "edits freely, and approves", and
+ * chose per-pack approval *because* the author edits — so this is where the
+ * editing happens, and the Approve button below publishes whatever was saved.
+ *
+ * The two list-of-objects fields are typed as labelled blocks separated by a
+ * `---` line; `listingFromForm` in `src/packs/listing-shape.ts` is the other
+ * half of that codec, and `listingToForm` here is the half that fills the
+ * boxes, so a save with nothing changed round-trips unchanged.
+ */
+function listingEditor(slug: string, draft: Listing): string {
+  const f = listingToForm(draft);
+  const field = (name: string, label: string, help: string, value: string, rows: number): string =>
+    `<p><label><strong>${label}</strong><br>
+  <span style="${SECONDARY}">${help}</span><br>
+  <textarea name="${name}" rows="${rows}" style="width:100%">${esc(value)}</textarea></label></p>`;
+  return `<form method="post" action="/packs/${esc(slug)}/listing">
+${field("description", "What it does", "Two or three paragraphs, separated by a blank line.", f.description, 7)}
+${field("useCases", "What you'd hire it for", "One per line.", f.useCases, 5)}
+${field("scenarios", "What a session looks like",
+    "Written examples, not recorded runs — never a real buyer's brief. One per block, blocks separated by a line "
+    + "of ---, lines labelled Brief:, Reached: (comma-separated) and Output:.", f.scenarios, 9)}
+${field("limitations", "Known limitations", "One per line. The ones you would want to be told.", f.limitations, 4)}
+${field("faq", "Questions people ask",
+    "One per block, blocks separated by a line of ---, lines labelled Q: and A:. An answer may run over "
+    + "several lines.", f.faq, 7)}
+${field("requirements", "Requires", "One per line.", f.requirements, 3)}
+  <button class="btn ghost" type="submit">Save the draft</button>
+  <span style="${SECONDARY};margin-left:var(--s3)">Saving changes the draft only. Nothing here reaches a buyer
+  until it is approved below.</span>
+</form>`;
+}
+
+/**
+ * The one step between generated copy and a buyer.
+ *
+ * A generator writes drafts and nothing else; this screen is the only way a
+ * draft becomes the listing. So it has three jobs: show what would be
+ * published next to what is published now, let the author change it, and be
+ * honest that until the button is pressed, nobody outside this page has seen
+ * a word of it.
+ */
+export function listingApprovalPage(args: {
+  pack: PackRow;
+  /** What buyers read now, or null for a pack with no approved listing. */
+  live: Listing | null;
+  /** What a generator proposed, or null when there is nothing waiting. */
+  draft: Listing | null;
+  generatedAt: string | null;
+  /** The published version the draft was generated from. */
+  sourceVersion: number | null;
+  /** The version the pack is on now — a draft older than this describes a pack that has moved. */
+  currentVersion: number | null;
+  /** Mirrors the route's own owner check: a member sees the facts, not a dead button or a dead form. */
+  canApprove: boolean;
+  /** Set after a save, so an author who changed one word is told it landed. */
+  saved?: boolean;
+  balance: number;
+  viewer: Viewer;
+  err?: string;
+}): string {
+  const { pack: p, live, draft } = args;
+  const behind = draft !== null && args.sourceVersion !== null && args.currentVersion !== null
+    && args.sourceVersion !== args.currentVersion;
+  return layout(`Listing for ${p.name}`, `
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
+${args.saved ? `<div class="note">Draft saved. It is still a draft — approve it below to put it in front of buyers.</div>` : ""}
+<h1>The listing for ${esc(p.name)}</h1>
+<p class="lede">What a buyer reads before they buy. It is drafted by a generator, edited and published by a person —
+those are two different steps, and this is the second one.</p>
+${p.listing_stale_at ? `<div class="note"><strong>The method changed on ${esc(day(p.listing_stale_at))}.</strong>
+The live listing${p.listing_approved_at ? `, approved on ${esc(day(p.listing_approved_at))},` : ""} is out of date:
+it may no longer describe what ships. Generate it again and approve what comes back.</div>` : ""}
+${draft ? `<div class="note"><strong>Nothing below the heading "Proposed" is live.</strong> No buyer has seen it, and
+none will until it is approved here.</div>
+<div class="row" style="margin-bottom:var(--s4)">
+  ${args.generatedAt ? `<span class="tag">generated ${esc(day(args.generatedAt))}</span>` : ""}
+  ${args.sourceVersion !== null ? `<span class="tag">from version ${args.sourceVersion}</span>` : ""}
+  ${behind ? `<span class="tag">the pack is now at version ${args.currentVersion}</span>` : ""}
+</div>
+${behind ? `<div class="note">This draft describes version ${args.sourceVersion}; the pack has moved on to version ${
+  args.currentVersion}. Generating it again costs one model call.</div>` : ""}
+<div class="grid">
+  <div class="card">
+    <h3>What a buyer reads now</h3>
+    ${live ? listingSections(live) : `<p class="lede">Nothing. The page shows the tagline and the price, and no more.</p>`}
+  </div>
+  <div class="card">
+    <h3>Proposed</h3>
+    ${args.canApprove ? listingEditor(p.slug, draft) : listingSections(draft)}
+  </div>
+</div>
+${args.canApprove ? `<form method="post" action="/packs/${esc(p.slug)}/listing/approve" style="margin-top:var(--s4)">
+  <button class="btn" type="submit">Approve and publish this listing</button>
+</form>
+<p class="lede" style="font-size:var(--t2)">Approving publishes the draft as it is saved above — edit it first if a
+sentence promises more than the pack delivers. Answers you published to the FAQ out of a buyer's question are kept,
+whatever the draft says.</p>`
+  : `<p class="lede" style="margin-top:var(--s4)">Only an owner of this organisation can edit or publish a listing.
+This is what would be published.</p>`}`
+  : `<p class="lede">There is no draft waiting. Generate one with
+<code>node scripts/generate-listings.mjs --slug ${esc(p.slug)}</code>, then come back here to read it, change what is
+wrong with it, and approve it before anybody else sees it.</p>
+<div class="card">
+  <h3>What a buyer reads now</h3>
+  ${live ? listingSections(live) : `<p class="lede">Nothing. The page shows the tagline and the price, and no more.</p>`}
+</div>`}
+<p class="row" style="margin-top:var(--s5)">
+  <a class="btn ghost" href="/packs/${esc(p.slug)}">View as a buyer</a>
+  <a class="btn ghost" href="/packs/${esc(p.slug)}/edit">Back to the pack</a>
+</p>`, { balance: args.balance, viewer: args.viewer });
+}
+
+/** A stored `href` a creator typed into a free-text field, or nothing. */
+const safeHref = (url: string): string => /^https?:\/\//i.test(url.trim()) ? url.trim() : "";
+
+/** `links` as stored JSON, or an empty list for anything malformed. */
+function parseLinks(json: string): Array<{ label: string; url: string }> {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+/**
+ * The form behind `GET`/`POST /creators/me` — shaped like `invitePage`: one
+ * route's own page, built and tested here rather than assembled ad hoc
+ * inside the route handler.
+ *
+ * `canEdit` mirrors the route's own `ctx.role === "owner"` check. Editing the
+ * organisation's public identity is an owner's call, the same as editing a
+ * pack — but *looking* at what is there is not, so a member who cannot save
+ * still gets the facts and a reason, never a form that would just 403 on
+ * submit.
+ */
+export function creatorEditorPage(args: {
+  creator: Pick<CreatorRow, "handle" | "display_name" | "bio" | "avatar" | "links"> | null;
+  canEdit: boolean;
+  balance: number;
+  viewer: Viewer;
+  err?: string;
+}): string {
+  const { creator: c, canEdit, err, balance, viewer } = args;
+
+  if (!canEdit) {
+    return layout(c ? c.display_name : "Creator profile", `
+<h1>${c ? esc(c.display_name) : "No creator profile yet"}</h1>
+<p class="lede">${c
+    ? "Only an owner can change this organisation's creator profile."
+    : "This organisation has not set up a creator profile yet — only an owner can do that."}</p>
+${c ? `<p><a href="/creators/${esc(c.handle)}">View the public page</a></p>` : ""}`,
+    { balance, viewer });
+  }
+
+  const linksText = c
+    ? parseLinks(c.links).map((l) => `${l.label ?? ""} | ${l.url ?? ""}`).join("\n")
+    : "";
+
+  return layout(c ? `Edit ${c.display_name}` : "Set up your creator profile", `
+<h1>${c ? "Edit your creator profile" : "Set up your creator profile"}</h1>
+<p class="lede">This is the page your packs' byline links to.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+<form method="post" action="/creators/me" class="card">
+  <p><label>Handle<br><input type="text" name="handle" value="${esc(c?.handle ?? "")}" style="width:100%" required></label>
+    <span class="tag">/creators/${esc(c?.handle || "your-handle")}</span></p>
+  <p><label>Display name<br><input type="text" name="displayName" value="${esc(c?.display_name ?? "")}" style="width:100%" required></label></p>
+  <p><label>Avatar URL<br><input type="url" name="avatar" value="${esc(c?.avatar ?? "")}" style="width:100%" placeholder="https://…"></label></p>
+  <p><label>Bio<br><textarea name="bio" style="min-height:160px">${esc(c?.bio ?? "")}</textarea></label></p>
+  <p><label>Links <span style="color:var(--muted);font-size:13px">(one per line: label | https://url)</span><br>
+    <textarea name="links" style="min-height:100px">${esc(linksText)}</textarea></label></p>
+  <button class="btn" type="submit">Save</button>
+</form>
+${c ? `<p class="lede" style="margin-top:var(--s4)"><a href="/creators/${esc(c.handle)}">View your public page</a></p>` : ""}`,
+  { balance, viewer });
+}
+
+/**
+ * A creator's own page: the record every byline on the site can now point
+ * at, instead of a name nobody could click through on.
+ *
+ * `packPage` taught the rule this is built on — a heading over nothing to
+ * say is worse than no heading — and it applies here just as much: a creator
+ * who has written no bio, added no links and been attributed no packs yet
+ * gets a page with no empty sections on it, not three headings over blanks.
+ *
+ * No rating renders here. That is Task 9's column, in a module that does not
+ * exist yet; what this page can say honestly today is how many runs its
+ * packs have had, so that is what stands in where a star rating will later
+ * go — proof instead of a promise.
+ */
+export function creatorPage(
+  creator: Pick<CreatorRow, "id" | "handle" | "display_name" | "bio" | "avatar" | "links" | "verified">,
+  packs: Array<PackRow & { pricePoints: number; stats: { runs: number; buyers: number; version: number } }>,
+  stats: { packs: number; runs: number; orgs: number },
+  rating: { average: number | null; count: number },
+  viewer: Viewer,
+  balance: number,
+  /** False for the creator's own organisation looking at its own page — there is no one there to ask. */
+  canAsk = false,
+  /**
+   * What went wrong with the last thing posted from this page. `POST /threads`
+   * redirects back here with `?err=…` when a question is refused — over the
+   * daily rate limit, or with an empty body — and without this the refusal
+   * was silent: the form cleared, nothing was sent, and the page said nothing
+   * about either fact.
+   */
+  err?: string,
+): string {
+  const bio = creator.bio.trim();
+  const links = parseLinks(creator.links);
+  const image = creator.avatar ? heroSrc(creator.avatar) : "";
+
+  return layout(creator.display_name, `
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+<nav class="crumbs" aria-label="Breadcrumb"><a href="/">Home</a> <span aria-hidden="true">›</span>
+  <span aria-current="page">${esc(creator.display_name)}</span></nav>
+<div class="row" style="align-items:center;margin-top:var(--s4)">
+  ${image ? `<img src="${esc(image)}" alt="" width="56" height="56" loading="lazy" decoding="async"
+    style="width:3.5rem;height:3.5rem;border-radius:999px;object-fit:cover;flex:none">` : avatar(creator.display_name)}
+  <h1 style="margin:0">${esc(creator.display_name)}${creator.verified ? ` ${icon("check", "Verified", true)}` : ""}</h1>
+</div>
+<p class="lede" style="margin:var(--s1) 0 var(--s4)">@${esc(creator.handle)}</p>
+<p class="row">
+  ${stats.runs > 0
+    ? `<span class="proof" title="${stats.runs} runs">${icon("runs", `${stats.runs.toLocaleString("en-US")} runs`)}</span>`
+    : `<span class="proof new">new</span>`}
+  ${rating.average !== null ? `<span class="tag">${stars(Math.round(rating.average))} ${rating.average.toFixed(1)} (${rating.count})</span>` : ""}
+  ${stats.orgs > 0 ? `<span class="tag">${stats.orgs.toLocaleString("en-US")} owning ${stats.orgs === 1 ? "organisation" : "organisations"}</span>` : ""}
+</p>
+${bio ? paragraphs(bio) : ""}
+${links.length ? `<h2>Links</h2>
+<ul>${links.map((l) => {
+    const href = safeHref(l.url ?? "");
+    const label = esc(l.label || l.url || "");
+    return `<li>${href ? `<a href="${esc(href)}">${label}</a>` : label}</li>`;
+  }).join("")}</ul>` : ""}
+${packs.length ? `<h2>Packs</h2>
+<table><tr><th>Pack</th><th class="num">Runs</th><th class="num">Owning orgs</th><th class="num">Price</th></tr>
+${packs.map((p) => `<tr>
+  <td><a href="/packs/${esc(p.slug)}">${esc(p.name)}</a>${p.tagline ? `<div style="color:var(--muted);font-size:var(--t1)">${esc(p.tagline)}</div>` : ""}</td>
+  <td class="num">${p.stats.runs.toLocaleString("en-US")}</td>
+  <td class="num">${p.stats.buyers.toLocaleString("en-US")}</td>
+  <td class="num">${p.pricePoints === 0 ? "free" : `${p.pricePoints.toLocaleString("en-US")} pts`}</td>
+</tr>`).join("")}
+</table>` : ""}
+${canAsk ? `<h2>Ask ${esc(creator.display_name)} a question</h2>
+<form method="post" action="/threads" class="card">
+  <input type="hidden" name="creatorId" value="${esc(creator.id)}">
+  <input type="hidden" name="back" value="/creators/${esc(creator.handle)}">
+  <p><label>Subject<br><input type="text" name="subject" style="width:100%" required></label></p>
+  <p><textarea name="body" placeholder="Ask about their packs, or anything else" required></textarea></p>
+  <button class="btn" type="submit">Send</button>
+</form>` : ""}`,
+  { balance, viewer });
+}
+
+/** A relative time, coarse on purpose — "when" matters here, not "exactly when". */
+function since(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.max(0, Math.round(ms / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** One thread, rendered the same way on both sides of `inboxPage` apart from who gets called "You". */
+function threadCard(
+  t: { id: string; subject: string; pack: { slug: string; name: string } | null;
+    messages: Array<{ id: string; org_id: string; body: string; published_at: string | null; created_at: string }> },
+  selfOrgId: string, otherLabel: string, publishable: boolean,
+): string {
+  const asker = t.messages.find((m) => m.org_id !== selfOrgId) ?? t.messages[0];
+  const answers = publishable ? t.messages.filter((m) => m.org_id === selfOrgId) : [];
+  return `<div class="card" style="margin-bottom:var(--s4)">
+  <p class="row" style="justify-content:space-between;margin:0 0 var(--s2)">
+    <strong>${esc(t.subject)}</strong>
+    ${t.pack ? `<a class="tag" href="/packs/${esc(t.pack.slug)}">${esc(t.pack.name)}</a>` : `<span class="tag">general</span>`}
+  </p>
+  ${t.messages.map((m) => `<p style="margin:0 0 var(--s2)">
+    <strong>${m.org_id === selfOrgId ? "You" : esc(otherLabel)}</strong>
+    <span class="tag" style="margin-left:.5em">${esc(since(m.created_at))}</span>
+    ${m.published_at ? `<span class="tag">published</span>` : ""}<br>${esc(m.body)}</p>`).join("")}
+  <form method="post" action="/threads/${esc(t.id)}/reply" class="row">
+    <textarea name="body" placeholder="Reply" required style="flex:1;min-height:3rem"></textarea>
+    <button class="btn ghost" type="submit">Reply</button>
+  </form>
+  ${publishable && t.pack && asker && answers.length
+    ? `<form method="post" action="/threads/${esc(t.id)}/publish" class="row" style="margin-top:var(--s2)">
+    <label>Question
+      <select name="questionId">${t.messages.filter((m) => m.org_id !== selfOrgId).map((m) =>
+        `<option value="${esc(m.id)}"${m.id === asker.id ? " selected" : ""}>${esc(m.body.slice(0, 60))}</option>`).join("")}
+      </select></label>
+    <label>Answer
+      <select name="answerId">${answers.map((m) =>
+        `<option value="${esc(m.id)}"${m.id === answers[answers.length - 1]!.id ? " selected" : ""}>${esc(m.body.slice(0, 60))}</option>`).join("")}
+      </select></label>
+    <button class="btn" type="submit">Publish to FAQ</button>
+  </form>` : ""}
+</div>`;
+}
+
+/**
+ * Every thread this organisation can see — the ones asked of its own
+ * creator profile, if it has one, and the ones it has itself opened with
+ * someone else's. Neither list is ever another organisation's: `threadsFor`
+ * and `threadsForOrg` scope by exact ID, so there is nothing to filter here.
+ *
+ * Follows `packPage`'s own rule: a section with nothing in it gets no
+ * heading. With both lists empty, that leaves only the page title — so one
+ * line says so instead of two headings over blanks.
+ */
+export function inboxPage(args: {
+  asked: InboxThread[];
+  mine: MyThread[];
+  selfOrgId: string;
+  viewer: Viewer;
+  balance: number;
+  err?: string;
+}): string {
+  const { asked, mine, selfOrgId, viewer, balance, err } = args;
+  return layout("Inbox", `
+<h1>Inbox</h1>
+<p class="lede">Questions asked of you, and questions you have asked.</p>
+${err ? `<div class="note bad">${esc(err)}</div>` : ""}
+${asked.length === 0 && mine.length === 0 ? `<p class="lede">No conversations yet.</p>` : ""}
+${asked.length ? `<h2>Asked of you</h2>
+${asked.map((t) => threadCard(t, selfOrgId, t.askerOrgName, true)).join("")}` : ""}
+${mine.length ? `<h2>Your questions</h2>
+${mine.map((t) => threadCard(t, selfOrgId, t.creatorName, false)).join("")}` : ""}`,
+  { balance, viewer });
+}
+
 export function curatePage(args: {
   queue: Array<{ slug: string; name: string; author: string; tagline: string; price_points: number }>;
-  listed: Array<{ slug: string; name: string; author: string }>;
-  balance: number; viewer: Viewer;
+  listed: Array<{ slug: string; name: string; author: string; featured_rank: number | null }>;
+  balance: number; viewer: Viewer; err?: string;
 }): string {
   return layout("Curate", `
 <h1>Curating the catalog</h1>
 <p class="lede">A thin curated shelf beats a full unreliable one — marketplaces die of bad inventory faster than of
 empty inventory. You are the taste.</p>
+${args.err ? `<div class="note bad">${esc(args.err)}</div>` : ""}
 <h2>Waiting for a decision</h2>
 ${args.queue.length === 0 ? `<p class="lede">Nothing submitted.</p>` : `<table><tr><th>Pack</th><th>Author</th><th class="num">Price</th><th></th></tr>
 ${args.queue.map((q) => `<tr>
@@ -1358,11 +2004,16 @@ ${args.queue.map((q) => `<tr>
     <button class="btn ghost" name="status" value="draft">Send back</button></form></td>
 </tr>`).join("")}</table>`}
 <h2>On the shelf</h2>
-<table><tr><th>Pack</th><th>Author</th><th></th></tr>
+<p class="lede">Rank sets this pack's position on the shelf, lowest first. Leave it blank to let runs, rating and
+votes decide — almost every pack, for now.</p>
+<table><tr><th>Pack</th><th>Author</th><th>Rank</th><th></th></tr>
 ${args.listed.map((l) => `<tr><td><a href="/packs/${esc(l.slug)}">${esc(l.name)}</a></td><td>${esc(l.author)}</td>
+<td><form method="post" action="/packs/${esc(l.slug)}/featured-rank" class="inline">
+  <input type="number" name="featuredRank" value="${l.featured_rank ?? ""}" style="width:4em">
+  <button class="btn ghost" style="padding:5px 10px">Save</button></form></td>
 <td><form method="post" action="/packs/${esc(l.slug)}/status" class="inline">
   <input type="hidden" name="status" value="unlisted">
   <button class="btn ghost" style="padding:5px 10px">Withdraw</button></form></td></tr>`).join("")
-  || `<tr><td colspan="3">Nothing listed.</td></tr>`}
+  || `<tr><td colspan="4">Nothing listed.</td></tr>`}
 </table>`, { balance: args.balance, viewer: args.viewer });
 }

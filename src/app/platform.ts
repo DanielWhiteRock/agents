@@ -6,6 +6,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { id, initDb, now, platformOrgId, putSetting, setting, settingInt } from "./db.js";
+import { ROLES } from "./roles.js";
 import { sql } from "./sql.js";
 import { balanceMillipoints, credit, creditAuthor, debit, pointsForUsage } from "../billing/points.js";
 import { ManagedAgentsRuntime } from "../runtime/managed-agents.js";
@@ -19,6 +20,7 @@ import { SEED_PACKS } from "../packs/seed-packs.js";
 import { composeSystemPrompt } from "../packs/wrapper.js";
 import { PLATFORM_SKILLS } from "../packs/platform-skills.js";
 import { redactStoredPayload } from "../transcripts/redact.js";
+import { RATING_THRESHOLD } from "./social.js";
 import { exportPackMarkdown } from "../packs/export.js";
 import {
   type PackTree, assertWithinLimits, checkSkills, findCommands, findDocs, findHooks, findWorkflows,
@@ -33,7 +35,65 @@ export type PackRow = {
   price_points: number; tags: string; image: string | null; role: string; upgrade_points: number; model: string; effort: string;
   pinned_models: string; instructions: string; status: string;
   author_payout_email: string | null; extras: string; created_at: string;
+  description: string; use_cases: string; limitations: string; faq: string; scenarios: string; requirements: string;
+  listing_approved_at: string | null; listing_stale_at: string | null; listed_at: string | null; built_on: string | null;
+  /** Set by Task 7's re-attribution; null for a pack nobody has claimed yet. */
+  creator_id: string | null;
+  /** Curator-set shelf position, lower first; null for every pack nobody has placed. */
+  featured_rank: number | null;
 };
+
+/** The ranking inputs `rankPacks` reads beyond what's already on `PackRow`. */
+export type RankingInputs = {
+  /** Completed, non-trial runs — the same count `packStats` shows. */
+  runs: number;
+  /**
+   * The pack's average rating, or `null` whenever it would not be shown —
+   * below `RATING_THRESHOLD`, or with no ratings at all. Callers must resolve
+   * this the same way `ratingOf` does: a rating nobody can see on the page
+   * must not be able to move it on the shelf either.
+   */
+  rating: number | null;
+  /** The sum of this pack's *positive* votes only; a downvote is not usefulness. */
+  votes: number;
+};
+
+/**
+ * The shelf's order, as a pure comparator over whatever rows are handed to
+ * it — no I/O, so it is trivial to test with made-up rows and impossible to
+ * make it do a second query per pack by accident.
+ *
+ * Order: `featured_rank` ascending where a curator set one (unset packs sort
+ * after every set one); then runs, rating and votes, each descending, each a
+ * weak signal on a catalog this new; then `created_at` descending, which is
+ * also the whole ordering when a pack carries none of the above — the
+ * regression this exists to fix was "most expensive first", so with no
+ * signal at all the newest pack must win, not the priciest one; then `id`,
+ * so two packs that tie on everything above (`now()` is millisecond
+ * resolution, and a seed loop can easily hand two packs the same timestamp)
+ * still compare unequal. Without that last key the result depends on
+ * whatever order the database happened to return rows in — unspecified by
+ * SQL without an `ORDER BY`, and not something `Array.prototype.sort`'s
+ * stability can rescue when there is no query-side order to be stable
+ * *about*.
+ */
+export function rankPacks<T extends PackRow & RankingInputs>(rows: readonly T[]): T[] {
+  return [...rows].sort((a, b) => {
+    if (a.featured_rank != null || b.featured_rank != null) {
+      if (a.featured_rank == null) return 1;
+      if (b.featured_rank == null) return -1;
+      if (a.featured_rank !== b.featured_rank) return a.featured_rank - b.featured_rank;
+    }
+    if (a.runs !== b.runs) return b.runs - a.runs;
+    const ratingA = a.rating ?? -1;
+    const ratingB = b.rating ?? -1;
+    if (ratingA !== ratingB) return ratingB - ratingA;
+    if (a.votes !== b.votes) return b.votes - a.votes;
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+    if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+    return 0;
+  });
+}
 export type PackVersionRow = {
   id: string; pack_id: string; version: number; runtime_pack_id: string;
   runtime_version: string; instructions: string; created_at: string;
@@ -126,18 +186,143 @@ export async function ensureDemoOrg(): Promise<{ orgId: string; userId: string }
  * is the whole of search, and anything cleverer would be guessing at a scale
  * we do not have yet.
  */
+type RankedPackRow = PackRow & { runs: number | string; rating: number | string | null; votes: number | string };
+
+// One query, joined across every candidate pack, rather than a round trip
+// per pack: `runs` from completed non-trial runs (the same count `packStats`
+// shows), `rating` from `pack_reviews` but only once `RATING_THRESHOLD`
+// ratings exist — the same gate `ratingOf` applies, so a rating the page
+// would hide cannot move a pack on the shelf either — and `votes` summing
+// only positive values, because a downvote is not usefulness.
+const RANKING_COLUMNS = `p.*,
+    COALESCE(rc.runs, 0) AS runs,
+    CASE WHEN COALESCE(rt.cnt, 0) >= $1 THEN rt.avg_rating ELSE NULL END AS rating,
+    COALESCE(vt.votes, 0) AS votes`;
+
+const RANKING_JOINS = `
+  FROM packs p
+  LEFT JOIN (
+    SELECT v.pack_id, COUNT(*) AS runs
+    FROM runs r JOIN pack_versions v ON v.id = r.pack_version_id
+    WHERE r.is_trial = 0
+    GROUP BY v.pack_id
+  ) rc ON rc.pack_id = p.id
+  LEFT JOIN (
+    SELECT pack_id, COUNT(*) AS cnt, AVG(rating) AS avg_rating
+    FROM pack_reviews WHERE rating IS NOT NULL
+    GROUP BY pack_id
+  ) rt ON rt.pack_id = p.id
+  LEFT JOIN (
+    SELECT pack_id, SUM(CASE WHEN value > 0 THEN value ELSE 0 END) AS votes
+    FROM pack_votes
+    GROUP BY pack_id
+  ) vt ON vt.pack_id = p.id`;
+
+const RANKING_SELECT = `
+  SELECT ${RANKING_COLUMNS}
+  ${RANKING_JOINS}
+  WHERE p.status = 'listed'`;
+
+/**
+ * The shelf as the landing page needs it, in one query.
+ *
+ * `listPacks` ranks rows and stops there, which left the route doing four
+ * sequential round trips per pack — `latestVersion`, `entitled`, `packStats`
+ * (itself three subqueries) and the creator's handle — about 280 queries for
+ * seventy packs, through a pool capped at eight connections, on the first
+ * page a signed-in buyer sees. After re-attribution every listed pack shares
+ * one creator, so 68 of those were fetching the same string.
+ *
+ * So the four extra facts join here: the latest version (and therefore
+ * whether the pack is published at all), whether *this* organisation is
+ * entitled to that exact version — the same question `entitled` asks, so an
+ * org holding only an older version is not shown as owning the current one —
+ * the owning-organisation count, and the creator's handle.
+ */
+const CATALOG_SELECT = `
+  SELECT ${RANKING_COLUMNS},
+    COALESCE(ent.buyers, 0) AS buyers,
+    COALESCE(lv.version, 0) AS version,
+    lv.id AS latest_version_id,
+    CASE WHEN mine.org_id IS NULL THEN 0 ELSE 1 END AS owned,
+    c.handle AS creator_handle
+  ${RANKING_JOINS}
+  LEFT JOIN (
+    SELECT v.pack_id, COUNT(DISTINCT e.org_id) AS buyers
+    FROM entitlements e JOIN pack_versions v ON v.id = e.pack_version_id
+    GROUP BY v.pack_id
+  ) ent ON ent.pack_id = p.id
+  LEFT JOIN (
+    SELECT pack_id, MAX(version) AS version FROM pack_versions GROUP BY pack_id
+  ) mv ON mv.pack_id = p.id
+  LEFT JOIN pack_versions lv ON lv.pack_id = p.id AND lv.version = mv.version
+  LEFT JOIN entitlements mine ON mine.pack_version_id = lv.id AND mine.org_id = $2
+  LEFT JOIN creators c ON c.id = p.creator_id
+  WHERE p.status = 'listed'`;
+
+/** The text filter, shared by both queries so the shelf and a search agree. */
+const matchClause = (packParam: number, roleParam: number): string =>
+  ` AND (LOWER(p.name) LIKE $${packParam} OR LOWER(p.tagline) LIKE $${packParam}`
+  + ` OR LOWER(p.author) LIKE $${packParam} OR LOWER(p.tags) LIKE $${packParam}`
+  + ` OR LOWER(p.role) = $${roleParam})`;
+
+/** A listed pack with everything the shelf's card says about it. */
+export type CatalogPack = PackRow & RankingInputs & {
+  /** Organisations that own some version of this pack — `packStats().buyers`. */
+  buyers: number;
+  /** The latest published version number, or 0 for a pack with none. */
+  version: number;
+  /** The latest version's id, or null for a pack that has never been published. */
+  latestVersionId: string | null;
+  /** Whether the viewing organisation is entitled to that latest version. */
+  owned: boolean;
+  /** The handle behind `creator_id`, or null for a pack nobody has claimed. */
+  creatorHandle: string | null;
+};
+
+type CatalogSqlRow = RankedPackRow & {
+  buyers: number | string; version: number | string;
+  latest_version_id: string | null; owned: number | string; creator_handle: string | null;
+};
+
+export async function catalogFor(orgId: string, query = ""): Promise<CatalogPack[]> {
+  const s = await sql();
+  const q = query.trim();
+  const rows = q
+    ? await s.query<CatalogSqlRow>(
+      `${CATALOG_SELECT}${matchClause(3, 4)}`,
+      [RATING_THRESHOLD, orgId, `%${q.toLowerCase()}%`, q.toLowerCase()])
+    : await s.query<CatalogSqlRow>(CATALOG_SELECT, [RATING_THRESHOLD, orgId]);
+  return rankPacks(rows.map((r) => ({
+    ...r,
+    runs: Number(r.runs),
+    rating: r.rating == null ? null : Number(r.rating),
+    votes: Number(r.votes),
+    buyers: Number(r.buyers),
+    version: Number(r.version),
+    latestVersionId: r.latest_version_id,
+    owned: Boolean(Number(r.owned)),
+    creatorHandle: r.creator_handle,
+  })));
+}
+
 export async function listPacks(query = ""): Promise<PackRow[]> {
   const s = await sql();
   const q = query.trim();
+  let rows: RankedPackRow[];
   if (!q) {
-    return s.query<PackRow>("SELECT * FROM packs WHERE status = 'listed' ORDER BY price_points DESC");
+    rows = await s.query<RankedPackRow>(RANKING_SELECT, [RATING_THRESHOLD]);
+  } else {
+    rows = await s.query<RankedPackRow>(
+      `${RANKING_SELECT}${matchClause(2, 3)}`,
+      [RATING_THRESHOLD, `%${q.toLowerCase()}%`, q.toLowerCase()]);
   }
-  const like = `%${q.toLowerCase()}%`;
-  return s.query<PackRow>(
-    `SELECT * FROM packs WHERE status = 'listed'
-       AND (LOWER(name) LIKE $1 OR LOWER(tagline) LIKE $1 OR LOWER(author) LIKE $1
-            OR LOWER(tags) LIKE $1 OR LOWER(role) = $2)
-     ORDER BY price_points DESC`, [like, q.toLowerCase()]);
+  return rankPacks(rows.map((r) => ({
+    ...r,
+    runs: Number(r.runs),
+    rating: r.rating == null ? null : Number(r.rating),
+    votes: Number(r.votes),
+  })));
 }
 /**
  * What the shelf can honestly say about a pack.
@@ -176,30 +361,15 @@ export async function packStats(packId: string): Promise<{ runs: number; buyers:
 /**
  * The jobs we list, and how many workers do each.
  *
- * A marketplace of skills has to organise by topic, because a skill is not a
- * thing anybody hires — it is a part you would have to assemble. A worker is
- * already the assembly, so the shelf is organised the way hiring is: pick the
- * job, then pick which one. A role with nothing in it is not shown, because
- * listing a job we cannot fill is worse than not listing it.
+ * The list itself is in `./roles.ts`, which imports nothing: `views.ts` needs
+ * it to render a breadcrumb and the shelf's role strip, and reading it off
+ * this module dragged the Anthropic SDK and the runtime into the pure render
+ * module's import graph. Re-exported here so `P.ROLES` keeps working.
+ *
+ * A role with nothing in it is not shown, because listing a job we cannot
+ * fill is worse than not listing it.
  */
-export const ROLES: Array<{ id: string; name: string; blurb: string; icon: string }> = [
-  { id: "designer", name: "Designer", icon: "file",
-    blurb: "Restyles an interface by a named system, to that system's own numbers." },
-  { id: "engineer", name: "Engineer", icon: "tokens",
-    blurb: "Reads the code before changing it, and reviews like someone who maintains it." },
-  { id: "qa", name: "QA", icon: "check",
-    blurb: "Finds what breaks before a customer does, and writes the test that keeps it found." },
-  { id: "security", name: "Security", icon: "warn",
-    blurb: "Looks for the way in, names the risk plainly, and says what to do first." },
-  { id: "devops", name: "DevOps", icon: "catalog",
-    blurb: "Ships it, watches it, and makes the next deploy boring." },
-  { id: "marketer", name: "Marketer", icon: "runs",
-    blurb: "Turns a vague brief into a campaign with one outcome and one audience." },
-  { id: "support", name: "Support", icon: "info",
-    blurb: "Reads the inbox and tells you which tickets become problems." },
-  { id: "producer", name: "Producer", icon: "clock",
-    blurb: "Takes an idea and returns a brief a crew could turn up to." },
-];
+export { ROLES, type Role } from "./roles.js";
 
 export async function roles(): Promise<Array<{ id: string; name: string; blurb: string; icon: string; count: number }>> {
   const s = await sql();
@@ -249,6 +419,21 @@ export async function latestVersion(packId: string): Promise<PackVersionRow | un
   const s = await sql();
   return s.one<PackVersionRow>("SELECT * FROM pack_versions WHERE pack_id = $1 ORDER BY version DESC LIMIT 1", [packId]);
 }
+export type ChangelogEntry = { version: number; note: string; createdAt: string };
+
+/**
+ * Notes an author actually wrote, newest version first. Most packs have
+ * none — the 68 already on the shelf before this table existed have no
+ * honest way to say what their old versions changed, so nothing is
+ * backfilled and none of them will ever have a row here.
+ */
+export async function changelogOf(packId: string): Promise<ChangelogEntry[]> {
+  const s = await sql();
+  const rows = await s.query<{ version: number; note: string; created_at: string }>(
+    "SELECT version, note, created_at FROM pack_changelog WHERE pack_id = $1 ORDER BY version DESC", [packId]);
+  return rows.map((r) => ({ version: r.version, note: r.note, createdAt: r.created_at }));
+}
+
 export async function getVersion(versionId: string): Promise<PackVersionRow | undefined> {
   const s = await sql();
   return s.one<PackVersionRow>("SELECT * FROM pack_versions WHERE id = $1", [versionId]);
@@ -275,6 +460,33 @@ export type DestructivePolicy = "always_ask" | "always_allow" | "auto";
 export async function destructivePolicy(): Promise<DestructivePolicy> {
   const raw = await setting("destructive_tool_policy");
   return raw === "always_ask" || raw === "auto" ? raw : "always_allow";
+}
+
+/**
+ * The policy a run is configured with, which is not the one a pack declared.
+ *
+ * `publishPack` builds every agent config from the platform-wide setting and
+ * forces `always_ask` where the pack ships PreToolUse hooks, because a hook
+ * can only bind if the call pauses. So `pack_tools.policy` — the author's own
+ * `agent.md` text — never reaches the runtime, and the permissions rail must
+ * not render it: a pack declaring `always_allow` next to a hook runs with
+ * `always_ask`. Both the publish path and the rail go through this, so the
+ * page and the run cannot drift apart.
+ */
+export function policyWithHooks(global: DestructivePolicy, hooks: Hook[]): DestructivePolicy {
+  return needsInterception(hooks) ? "always_ask" : global;
+}
+
+/**
+ * The same thing for a published version, read from that version's own
+ * snapshot of the folder — so the rail describes what a buyer would actually
+ * run, not what the author's working copy says today. An unpublished pack has
+ * no baked configuration yet, so it gets the platform policy.
+ */
+export async function effectivePolicy(packVersionId: string | null | undefined): Promise<DestructivePolicy> {
+  const global = await destructivePolicy();
+  if (!packVersionId) return global;
+  return policyWithHooks(global, await runHooks(packVersionId));
 }
 
 export async function effortFor(model: string, effort: string | null | undefined): Promise<PackDefinition["effort"] | undefined> {
@@ -321,8 +533,16 @@ export async function ensurePlatformSkills(): Promise<string[]> {
   return ids;
 }
 
-/** Publishes to the runtime, creating a local version pinned to the agent version. */
-export async function publishPack(slug: string): Promise<PackVersionRow> {
+/**
+ * Publishes to the runtime, creating a local version pinned to the agent
+ * version.
+ *
+ * `note` is optional and, when given, is captured once against the new
+ * version — the one exception to listing metadata attaching to the pack
+ * rather than the version. Most publishes have nothing to say, so leaving it
+ * out must succeed exactly as it always has for every existing caller.
+ */
+export async function publishPack(slug: string, note?: string): Promise<PackVersionRow> {
   const pack = await getPack(slug);
   if (!pack) throw new Error(`no such pack: ${slug}`);
   const def: PackDefinition = {
@@ -341,9 +561,11 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
   const parsed = tree.length > 0 ? validateTree(tree) : null;
   // A hook can only bind if the call pauses, so a pack declaring PreToolUse
   // hooks is published with always_ask whatever the platform default is. The
-  // server answers those pauses itself, so nobody is blocked by it.
+  // server answers those pauses itself, so nobody is blocked by it. Through
+  // `policyWithHooks` rather than inline, because the permissions rail has to
+  // reach the identical answer for a published version.
   const hooks = tree.length > 0 ? parseHooks(tree) : [];
-  if (needsInterception(hooks)) def.destructivePolicy = "always_ask";
+  def.destructivePolicy = policyWithHooks(def.destructivePolicy ?? await destructivePolicy(), hooks);
   const skills = parsed?.skills ?? [];
   const subagents = (parsed?.subagents ?? []).map((sa) => {
     const meta = readFrontMatterMeta(sa.file.content);
@@ -374,12 +596,32 @@ export async function publishPack(slug: string): Promise<PackVersionRow> {
 
   const prev = await latestVersion(pack.id);
   const vid = id("pv");
+  const version = (prev?.version ?? 0) + 1;
   const s = await sql();
   await s.query(
     `INSERT INTO pack_versions (id, pack_id, version, runtime_pack_id, runtime_version, instructions, system_tokens, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [vid, pack.id, (prev?.version ?? 0) + 1, published.runtimePackId, published.version, pack.instructions,
+    [vid, pack.id, version, published.runtimePackId, published.version, pack.instructions,
       systemTokens, now()]);
+  // Optional, and captured once, here, because the version it describes is
+  // immutable and this is the only moment that version exists to describe.
+  // Most publishes have nothing to say, so a blank or missing note writes
+  // nothing rather than a row with an empty string in it.
+  const trimmedNote = note?.trim();
+  if (trimmedNote) {
+    // `ON CONFLICT DO NOTHING` on the primary key, as defence in depth: two
+    // publishes racing both compute the same `version`, because the read of
+    // the previous one is not serialised with these inserts. Today the loser
+    // is stopped earlier, by `pack_versions`' own UNIQUE (pack_id, version),
+    // so it never reaches this statement — but that is the only thing
+    // standing between a duplicate key here and a publish that has already
+    // written its version row and then throws. A note describes an immutable
+    // version, so the one already recorded for it is the one that stands.
+    await s.query(
+      `INSERT INTO pack_changelog (pack_id, version, note, created_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (pack_id, version) DO NOTHING`,
+      [pack.id, version, trimmedNote, now()]);
+  }
   // Snapshot the folder and the uploaded skills, so a buyer exports what they
   // bought however the author edits it afterwards.
   for (const f of tree) {
@@ -426,6 +668,52 @@ export async function versionTree(packVersionId: string): Promise<PackTree> {
   const s = await sql();
   return s.query<{ path: string; content: string }>(
     "SELECT path, content FROM pack_version_files WHERE pack_version_id = $1 ORDER BY path", [packVersionId]);
+}
+
+/**
+ * What is in the folder, without reading the folder.
+ *
+ * The pack page says how many files and how many skills a buyer is getting,
+ * so it needs the manifest and not the contents — a pack's files are its
+ * product, and loading every one of them to count them would mean holding the
+ * whole thing in memory to render a number. Paths only, from the version a
+ * buyer would actually get.
+ *
+ * A skill is a directory under `skills/`, the same identity `findSkillDirs`
+ * gives it, so two files in one skill count as one skill.
+ */
+export async function packFileSummary(packId: string): Promise<{ files: number; skills: number; tree: string[] }> {
+  const version = await latestVersion(packId);
+  if (!version) return { files: 0, skills: 0, tree: [] };
+  const s = await sql();
+  const rows = await s.query<{ path: string }>(
+    "SELECT path FROM pack_version_files WHERE pack_version_id = $1 ORDER BY path", [version.id]);
+  const skills = new Set<string>();
+  for (const row of rows) {
+    const m = /^skills\/([^/]+)\//.exec(row.path);
+    if (m) skills.add(m[1]!);
+  }
+  return { files: rows.length, skills: skills.size, tree: rows.map((r) => r.path) };
+}
+
+/**
+ * The `tools:` block a pack's agent.md declared.
+ *
+ * Alphabetical, because `pack_tools` keys on `(pack_id, name)` and keeps no
+ * ordinal — declaration order is not recoverable, and a stable order beats an
+ * arbitrary one for a line of prose a buyer reads twice.
+ */
+export async function packTools(packId: string): Promise<Array<{ name: string; policy: string }>> {
+  const s = await sql();
+  return s.query<{ name: string; policy: string }>(
+    "SELECT name, policy FROM pack_tools WHERE pack_id = $1 ORDER BY name", [packId]);
+}
+
+/** The MCP servers a pack wires up, so the rail can name what it connects to. */
+export async function packMcpServers(packId: string): Promise<Array<{ name: string; url: string }>> {
+  const s = await sql();
+  return s.query<{ name: string; url: string }>(
+    "SELECT name, url FROM pack_mcp_servers WHERE pack_id = $1 ORDER BY name", [packId]);
 }
 
 /** Replace a pack's folder wholesale, after checking it is publishable. */

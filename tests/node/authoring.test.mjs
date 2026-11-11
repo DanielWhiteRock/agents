@@ -67,6 +67,66 @@ test("a new pack starts as a draft, not in the catalog", async () => {
   assert.equal((await Auth.myPacks(orgId)).some((p) => p.id === pack.id), true, "but the author sees it");
 });
 
+test("creating a pack persists the role it was given", async () => {
+  const { orgId } = await org();
+  const pack = await Auth.createPack(orgId, { ...INPUT, slug: `role-${++n}`, role: "qa" });
+  assert.equal(pack.role, "qa", "the VALUES clause must reference every column it lists");
+});
+
+test("creating a pack persists its tools and MCP servers as their own rows", async () => {
+  const { orgId } = await org();
+  const slug = `tools-${++n}`;
+  const pack = await Auth.createPack(orgId, {
+    ...INPUT, slug,
+    tools: [{ name: "bash", policy: "always_allow" }, { name: "write", policy: "always_ask" }],
+    mcpServers: [{ name: "notion", url: "https://mcp.notion.com" }],
+  });
+  const db2 = await sql();
+  const tools = await db2.query("SELECT name, policy FROM pack_tools WHERE pack_id = $1 ORDER BY name", [pack.id]);
+  assert.deepEqual(tools.map((t) => ({ name: t.name, policy: t.policy })), [
+    { name: "bash", policy: "always_allow" },
+    { name: "write", policy: "always_ask" },
+  ]);
+  const servers = await db2.query("SELECT name, url FROM pack_mcp_servers WHERE pack_id = $1 ORDER BY name", [pack.id]);
+  assert.deepEqual(servers.map((m) => ({ name: m.name, url: m.url })), [{ name: "notion", url: "https://mcp.notion.com" }]);
+});
+
+test("updating a pack replaces its tools and MCP servers wholesale", async () => {
+  const { orgId } = await org();
+  const slug = `tools-update-${++n}`;
+  const pack = await Auth.createPack(orgId, {
+    ...INPUT, slug,
+    tools: [{ name: "bash", policy: "always_allow" }],
+    mcpServers: [{ name: "notion", url: "https://mcp.notion.com" }],
+  });
+  await Auth.updatePack(orgId, slug, {
+    ...INPUT, slug,
+    tools: [{ name: "edit", policy: "always_ask" }],
+    mcpServers: [],
+  });
+  const db2 = await sql();
+  const tools = await db2.query("SELECT name, policy FROM pack_tools WHERE pack_id = $1 ORDER BY name", [pack.id]);
+  assert.deepEqual(tools.map((t) => ({ name: t.name, policy: t.policy })), [{ name: "edit", policy: "always_ask" }],
+    "the old tool row must be gone, not just added to");
+  const servers = await db2.query("SELECT name FROM pack_mcp_servers WHERE pack_id = $1", [pack.id]);
+  assert.deepEqual(servers.map((m) => ({ name: m.name })), [], "an explicit empty list wipes the stored servers");
+});
+
+test("updating a pack without mentioning tools leaves the stored set alone", async () => {
+  const { orgId } = await org();
+  const slug = `tools-untouched-${++n}`;
+  const pack = await Auth.createPack(orgId, {
+    ...INPUT, slug,
+    tools: [{ name: "bash", policy: "always_allow" }],
+  });
+  const { tools, mcpServers, ...rest } = INPUT;
+  await Auth.updatePack(orgId, slug, { ...rest, slug, tagline: "A different tagline" });
+  const db2 = await sql();
+  const tools2 = await db2.query("SELECT name, policy FROM pack_tools WHERE pack_id = $1", [pack.id]);
+  assert.deepEqual(tools2.map((t) => ({ name: t.name, policy: t.policy })), [{ name: "bash", policy: "always_allow" }],
+    "a caller that never mentions tools must not wipe what was there");
+});
+
 test("a pack needs a name, instructions, a model and a sane price", async () => {
   const { orgId } = await org();
   const base = { ...INPUT, slug: `bad-${++n}` };
@@ -133,6 +193,47 @@ test("submitting requires a published version, and listing requires the curator"
   await Auth.setStatus(platform, slug, "listed");
   assert.equal((await P.getPack(slug)).status, "listed");
   assert.ok((await Auth.submittedPacks()).every((p) => p.slug !== slug), "it has left the queue");
+});
+
+test("reaching the shelf stamps listed_at once, and withdrawing does not unstamp it", async () => {
+  await org("Curator");                             // first org in this database curates
+  const author = await org("Author Listed");
+  const slug = `listed-at-${++n}`;
+  await Auth.createPack(author.orgId, { ...INPUT, slug });
+  await P.publishPack(slug);
+  assert.equal((await P.getPack(slug)).listed_at, null, "a draft has never been on the shelf");
+
+  const platform = await db.platformOrgId();
+  await Auth.setStatus(platform, slug, "listed");
+  const firstListing = (await P.getPack(slug)).listed_at;
+  assert.ok(firstListing, "reaching the shelf is dated");
+
+  await Auth.setStatus(platform, slug, "unlisted");
+  assert.equal((await P.getPack(slug)).listed_at, firstListing, "withdrawing keeps the debut date");
+  await Auth.setStatus(platform, slug, "listed");
+  assert.equal((await P.getPack(slug)).listed_at, firstListing, "and relisting does not move it");
+});
+
+test("packFileSummary counts the latest version's folder, skills and all", async () => {
+  const author = await org("Author Files");
+  const slug = `files-${++n}`;
+  const pack = await Auth.createPack(author.orgId, { ...INPUT, slug });
+  assert.deepEqual(await P.packFileSummary(pack.id), { files: 0, skills: 0, tree: [] },
+    "a pack with no version has no folder to describe");
+
+  await P.savePackTree(pack.id, [
+    { path: "agent.md", content: "---\nname: X\n---\nbody" },
+    { path: "README.md", content: "read me" },
+    { path: "skills/review/SKILL.md", content: "---\nname: review\ndescription: d\n---\nhow" },
+    { path: "skills/review/notes.md", content: "notes" },
+    { path: "skills/triage/SKILL.md", content: "---\nname: triage\ndescription: d\n---\nhow" },
+  ]);
+  await P.publishPack(slug);
+  const summary = await P.packFileSummary(pack.id);
+  assert.equal(summary.files, 5);
+  assert.equal(summary.skills, 2, "a skill is a directory, not a file");
+  assert.ok(summary.tree.includes("skills/review/SKILL.md"));
+  assert.deepEqual(summary.tree, [...summary.tree].sort(), "the tree reads in path order");
 });
 
 test("withdrawing takes a pack off the shelf and leaves its buyers alone", async () => {
@@ -356,5 +457,88 @@ test("a malformed upload is refused rather than crashed on", async () => {
     const survives = typeof junk === "object" && junk !== null
       && typeof junk.path === "string" && typeof junk.text === "string";
     assert.equal(survives, false, `${JSON.stringify(junk)} must not reach importPack`);
+  }
+});
+
+test("a re-import carrying its own faq: block keeps the answers a creator published", async () => {
+  // The FAQ is the one listing field with a second writer: `publishToFaq`
+  // quotes a buyer's question and the creator's answer onto `packs.faq` out
+  // of the inbox. A folder stating `faq:` knows nothing about those, so
+  // replacing the column wholesale deleted every answer that came out of a
+  // real exchange, with no way back but the thread it came from.
+  const { orgId } = await org();
+  const slug = `faqmerge-${++n}`;
+  const agent = (faq) => `---\nname: FAQ Pack\nslug: ${slug}\nmodel: claude-opus-5\n${faq}---\nThe method.`;
+
+  await Auth.importPack({ orgId, files: [{ path: "agent.md",
+    text: agent("faq:\n  - q: Does it write?\n    a: No.\n") }] });
+
+  // Stands in for the inbox: an answer on the pack that no folder carries.
+  const s = await sql();
+  const pack = await P.getPack(slug);
+  const fromBuyer = [
+    ...JSON.parse(pack.faq),
+    { q: "Can it read a private repo?", a: "With a token, yes — we never store it." },
+  ];
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify(fromBuyer), pack.id]);
+
+  // The same folder again, its faq: block unchanged and one entry longer.
+  const again = await Auth.importPack({ orgId, files: [{ path: "agent.md",
+    text: agent("faq:\n  - q: Does it write?\n    a: No.\n  - q: Which models?\n    a: Opus, by default.\n") }] });
+
+  const faq = JSON.parse(again.pack.faq);
+  assert.deepEqual(faq.map((f) => f.q), [
+    "Does it write?", "Can it read a private repo?", "Which models?",
+  ], "the published answer survives, and the folder's new question is added");
+  assert.match(faq[1].a, /we never store it/, "the creator's own wording is kept verbatim");
+});
+
+test("a listing column holding junk does not make an import throw", async () => {
+  // `listing.ts` makes "tolerate a malformed column" an explicit invariant;
+  // importPack used to JSON.parse these columns bare, so one hand-fixed row
+  // turned a re-import into a 500.
+  const { orgId } = await org();
+  const slug = `junkcol-${++n}`;
+  const agent = `---\nname: Junk Columns\nslug: ${slug}\nmodel: claude-opus-5\n---\nThe method.`;
+  await Auth.importPack({ orgId, files: [{ path: "agent.md", text: agent }] });
+
+  const s = await sql();
+  const pack = await P.getPack(slug);
+  await s.query(
+    "UPDATE packs SET use_cases = $1, faq = $1, scenarios = $1, limitations = $1, requirements = $1 WHERE id = $2",
+    ["not json at all", pack.id]);
+
+  const again = await Auth.importPack({ orgId, files: [{ path: "agent.md", text: agent }] });
+  assert.deepEqual(JSON.parse(again.pack.use_cases), []);
+  assert.deepEqual(JSON.parse(again.pack.faq), []);
+});
+
+test("a tool declaring a permission policy the runtime has never heard of is refused", async () => {
+  // `policy` is author-supplied text out of their own agent.md, and the one
+  // field of the tools: block with a closed set of values. Unchecked, a typo
+  // became a stored fact about what a worker may do.
+  const { orgId } = await org();
+  const slug = `badpolicy-${++n}`;
+  const agent = (policy) => `---\nname: Bad Policy\nslug: ${slug}\nmodel: claude-opus-5\ntools:\n`
+    + `  - type: agent_toolset_20260401\n    configs:\n      - name: bash\n`
+    + `        permission_policy:\n          type: ${policy}\n---\nThe method.`;
+
+  await assert.rejects(
+    Auth.importPack({ orgId, files: [{ path: "agent.md", text: agent("always_alow") }] }),
+    (e) => {
+      assert.equal(e.name, "PackConflictError");
+      assert.match(e.message, /always_alow/, "the author's own spelling is in the message");
+      assert.match(e.message, /always_allow, always_ask, auto/);
+      return true;
+    });
+  assert.equal(await P.getPack(slug), undefined, "and nothing was created");
+
+  // The three real ones still land.
+  for (const policy of ["always_allow", "always_ask", "auto"]) {
+    const ok = `goodpolicy-${++n}`;
+    const out = await Auth.importPack({ orgId, files: [{ path: "agent.md",
+      text: agent(policy).replace(`slug: ${slug}`, `slug: ${ok}`) }] });
+    const stored = (await P.packTools(out.pack.id)).map((t) => ({ name: t.name, policy: t.policy }));
+    assert.deepEqual(stored, [{ name: "bash", policy }]);
   }
 });
