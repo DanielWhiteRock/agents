@@ -243,6 +243,86 @@ test("the guard still refuses a model-written FAQ entry that quotes the method",
   assert.equal(await L.draftFor(pack.id), null);
 });
 
+/**
+ * Who wrote the draft decides what approval does with the FAQ.
+ *
+ * The merge above exists to stop a *generator* deleting an answer a creator
+ * published out of a real buyer exchange. It was never meant to stop a person
+ * editing their own listing — and because it did, nothing in the application
+ * could change or delete a live answer, while the approval screen said the
+ * draft would be published as saved. `saveDraft` is the human path and marks
+ * the draft as such; `saveGeneratedDraft` marks it as the machine's.
+ */
+test("an answer the author rewrote by hand reaches the page", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveDraft(pack.id, {
+    ...DRAFT,
+    faq: [{ q: PUBLISHED_ANSWER.q, a: "No — read-only, and it never pushes a branch." }],
+  }, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.faq, [{ q: PUBLISHED_ANSWER.q, a: "No — read-only, and it never pushes a branch." }],
+    "the author's correction is what a buyer reads, not the answer it replaced");
+});
+
+test("an answer the author deleted by hand leaves the page", async () => {
+  const { orgId, pack } = await makePack();
+  const keep = { q: "Which currencies?", a: "USD only." };
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([PUBLISHED_ANSWER, keep]), pack.id]);
+
+  // The author emptied one block out of the FAQ box and saved what was left.
+  await L.saveDraft(pack.id, { ...DRAFT, faq: [keep] }, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  assert.deepEqual(L.listingOf(await P.getPack(pack.slug)).faq, [keep],
+    "an answer removed from the box is removed from the page");
+});
+
+test("a human editing a generated draft takes it over, and can then delete a live answer", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
+  const seeded = await L.draftWithMeta(pack.id);
+  assert.equal(seeded.authoredBy, "generator", "the generator wrote it");
+  assert.equal(seeded.listing.faq.length, 2, "and it was seeded from what is live");
+
+  // The author reads that box, removes the published answer and saves: the
+  // contents are now theirs, whoever typed them first.
+  await L.saveDraft(pack.id, {
+    ...DRAFT,
+    faq: seeded.listing.faq.filter((f) => f.q !== PUBLISHED_ANSWER.q),
+  }, 1);
+  assert.equal((await L.draftWithMeta(pack.id)).authoredBy, "human", "saving flipped the provenance");
+
+  await L.approveDraft(orgId, pack.slug);
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.deepEqual(live.faq.map((f) => f.q), ["Which currencies?"],
+    "the answer the author removed is gone, because they took responsibility for the box");
+});
+
+test("a draft left unmarked is read as the generator's, which is the side that loses nothing", async () => {
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+  await L.saveDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
+  // A row written before the column existed, or by a writer that does not set
+  // it: the default covers the first, this covers anything else.
+  await s.query("UPDATE pack_listing_drafts SET authored_by = $1 WHERE pack_id = $2", ["", pack.id]);
+  assert.equal((await L.draftWithMeta(pack.id)).authoredBy, "generator");
+
+  await L.approveDraft(orgId, pack.slug);
+  assert.ok(L.listingOf(await P.getPack(pack.slug)).faq.some((f) => f.q === PUBLISHED_ANSWER.q),
+    "an unmarked draft is merged, so the published answer survives");
+});
+
 test("approving never drops an answer published after the draft was generated", async () => {
   const { orgId, pack } = await makePack();
   await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
@@ -452,7 +532,10 @@ test("publishing an answer and approving a listing at the same time loses neithe
   // One entry already live, so the merge has something to carry as well.
   await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
     [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
-  await L.saveDraft(pack.id, { ...DRAFT, faq: [{ q: "From the generator?", a: "Yes." }] }, 1);
+  // The generator's draft, deliberately: a draft the author saved is
+  // authoritative for the FAQ, so the merge this race is about is the one on
+  // the generated path.
+  await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "From the generator?", a: "Yes." }] }, 1);
 
   // Both read-modify-write cycles in flight at once: each `await` inside them
   // is a point where the other one runs, which is exactly the interleaving.

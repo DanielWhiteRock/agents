@@ -1,7 +1,7 @@
 import { fmt, fmtMilli, pts } from "../billing/points.js";
 import { ROLES } from "./roles.js";
 import type { PackRow, PackVersionRow, RunRow } from "./platform.js";
-import { listingToForm, type Listing } from "../packs/listing-shape.js";
+import { listingToForm, type DraftAuthor, type Listing } from "../packs/listing-shape.js";
 import type { CreatorRow } from "./creators.js";
 import type { Rating } from "./social.js";
 import type { InboxThread, MyThread } from "./messages.js";
@@ -1660,8 +1660,15 @@ function listingSections(l: Listing): string {
  * `---` line; `listingFromForm` in `src/packs/listing-shape.ts` is the other
  * half of that codec, and `listingToForm` here is the half that fills the
  * boxes, so a save with nothing changed round-trips unchanged.
+ *
+ * The FAQ box is the one whose help text depends on `author`, because what
+ * approval does with it does: a generated draft's FAQ is merged with what is
+ * live and the published answers win, a saved one's is published as it
+ * stands. Saving is what moves a draft from the first case to the second, so
+ * the box over a generated draft says that rather than implying an edit it
+ * will not make.
  */
-function listingEditor(slug: string, draft: Listing): string {
+function listingEditor(slug: string, draft: Listing, author: DraftAuthor): string {
   const f = listingToForm(draft);
   const field = (name: string, label: string, help: string, value: string, rows: number): string =>
     `<p><label><strong>${label}</strong><br>
@@ -1676,7 +1683,13 @@ ${field("scenarios", "What a session looks like",
 ${field("limitations", "Known limitations", "One per line. The ones you would want to be told.", f.limitations, 4)}
 ${field("faq", "Questions people ask",
     "One per block, blocks separated by a line of ---, lines labelled Q: and A:. An answer may run over "
-    + "several lines.", f.faq, 7)}
+    + "several lines. "
+    + (author === "human"
+      ? "This box is the whole FAQ: an answer you change here changes on the page, and one you delete "
+        + "leaves it."
+      : "This draft came from the generator, so approving it as it stands keeps every answer already "
+        + "published to the page, whatever this box says. Save the draft and it becomes yours — then this "
+        + "box is the whole FAQ, deletions included."), f.faq, 7)}
 ${field("requirements", "Requires", "One per line.", f.requirements, 3)}
   <button class="btn ghost" type="submit">Save the draft</button>
   <span style="${SECONDARY};margin-left:var(--s3)">Saving changes the draft only. Nothing here reaches a buyer
@@ -1699,6 +1712,8 @@ export function listingApprovalPage(args: {
   live: Listing | null;
   /** What a generator proposed, or null when there is nothing waiting. */
   draft: Listing | null;
+  /** Who saved the draft last, which decides what approving it does to the FAQ. */
+  draftAuthor: DraftAuthor;
   generatedAt: string | null;
   /** The published version the draft was generated from. */
   sourceVersion: number | null;
@@ -1740,15 +1755,18 @@ ${behind ? `<div class="note">This draft describes version ${args.sourceVersion}
   </div>
   <div class="card">
     <h3>Proposed</h3>
-    ${args.canApprove ? listingEditor(p.slug, draft) : listingSections(draft)}
+    ${args.canApprove ? listingEditor(p.slug, draft, args.draftAuthor) : listingSections(draft)}
   </div>
 </div>
 ${args.canApprove ? `<form method="post" action="/packs/${esc(p.slug)}/listing/approve" style="margin-top:var(--s4)">
   <button class="btn" type="submit">Approve and publish this listing</button>
 </form>
 <p class="lede" style="font-size:var(--t2)">Approving publishes the draft as it is saved above — edit it first if a
-sentence promises more than the pack delivers. Answers you published to the FAQ out of a buyer's question are kept,
-whatever the draft says.</p>`
+sentence promises more than the pack delivers. ${args.draftAuthor === "human"
+  ? `The FAQ goes with it: the questions in that box become the whole of the pack's FAQ, so an answer you
+corrected is corrected on the page and one you removed is removed from it.`
+  : `This draft came from the generator, so answers you published to the FAQ out of a buyer's question are kept,
+whatever it says. Save the draft first and the FAQ you saved is published instead, deletions and all.`}</p>`
   : `<p class="lede" style="margin-top:var(--s4)">Only an owner of this organisation can edit or publish a listing.
 This is what would be published.</p>`}`
   : `<p class="lede">There is no draft waiting. Generate one with

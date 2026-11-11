@@ -606,6 +606,15 @@ const MIGRATIONS = [
   // creator profile page selects by exactly this column — a sequential scan
   // of `packs` per profile load, and per catalog join.
   "CREATE INDEX IF NOT EXISTS packs_creator ON packs(creator_id)",
+  // Who wrote the draft, because approval cannot treat the two the same.
+  // A generator knows nothing of the answers a creator published out of a
+  // real buyer exchange, so approving its draft merges the FAQ and the live
+  // entries win. A person editing their own listing is the opposite case:
+  // what they saved is what they meant, deletions included. The default is
+  // 'generator' so every row that predates the column — and every row an
+  // older writer leaves unmarked — keeps exactly the behaviour it has today,
+  // which is the direction that cannot lose an answer.
+  "ALTER TABLE pack_listing_drafts ADD COLUMN authored_by TEXT NOT NULL DEFAULT 'generator'",
 ];
 
 /**

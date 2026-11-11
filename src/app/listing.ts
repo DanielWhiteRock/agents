@@ -19,7 +19,7 @@ import { NotTheAuthorError, PackConflictError } from "./authoring.js";
 import * as P from "./platform.js";
 import {
   faqFromJson, listingFromColumns, listingFromParts, mergeFaq,
-  type FaqEntry, type Listing, type ListingColumns,
+  type DraftAuthor, type FaqEntry, type Listing, type ListingColumns,
 } from "../packs/listing-shape.js";
 
 /**
@@ -30,9 +30,11 @@ import {
  * callers say `L.Listing` and `L.mergeFaq`, and the move is not their news.
  */
 export { listingFromParts, mergeFaq };
-export type { Listing };
+export type { DraftAuthor, Listing };
 
-type DraftRow = ListingColumns & { pack_id: string; generated_at: string; source_version: number | null };
+type DraftRow = ListingColumns & {
+  pack_id: string; generated_at: string; source_version: number | null; authored_by: string | null;
+};
 
 /** The listing currently approved and live on the pack. */
 export function listingOf(pack: P.PackRow): Listing {
@@ -46,8 +48,12 @@ export function hasListing(pack: P.PackRow): boolean {
     || l.faq.length > 0 || l.scenarios.length > 0 || l.requirements.length > 0;
 }
 
-/** A draft plus the two facts the approval screen needs about it. */
-export type PendingDraft = { listing: Listing; generatedAt: string; sourceVersion: number | null };
+/** A draft plus the three facts the approval screen needs about it. */
+export type PendingDraft = {
+  listing: Listing; generatedAt: string; sourceVersion: number | null;
+  /** Who saved it last, which decides what approval does with the FAQ. */
+  authoredBy: DraftAuthor;
+};
 
 /** The draft awaiting approval, with when it was generated and from what. */
 export async function draftWithMeta(packId: string): Promise<PendingDraft | null> {
@@ -58,6 +64,10 @@ export async function draftWithMeta(packId: string): Promise<PendingDraft | null
     listing: listingFromColumns(row),
     generatedAt: row.generated_at,
     sourceVersion: row.source_version == null ? null : Number(row.source_version),
+    // Anything but an explicit "human" is read as generator-written: an
+    // unmarked row is one this code did not write, and generator is the
+    // reading under which no published answer can be lost.
+    authoredBy: row.authored_by === "human" ? "human" : "generator",
   };
 }
 
@@ -123,35 +133,45 @@ function assertNotVerbatim(listing: Listing, instructions: string): void {
 }
 
 /**
- * Replace whatever draft exists for this pack with a freshly generated one.
+ * Replace whatever draft exists for this pack with one a person saved.
  *
- * Prefer `saveGeneratedDraft` for anything a model wrote: it carries the
- * live FAQ forward, which approval would otherwise delete.
+ * This is the human path, and the draft it writes is marked as such: the
+ * author takes responsibility for its contents, so approval publishes the
+ * FAQ exactly as they left it, deletions included. A human editing a
+ * generated draft flips it — the upsert below writes `authored_by` like any
+ * other column — which is the point: once somebody has read a generated FAQ
+ * and saved it, the entries in it are theirs.
+ *
+ * Use `saveGeneratedDraft` for anything a model wrote: a generator knows
+ * nothing of the answers published out of a buyer exchange, so its draft
+ * carries the live FAQ forward and can never delete one.
  */
 export async function saveDraft(
   packId: string, listing: Listing, sourceVersion: number | null,
 ): Promise<void> {
   const pack = await P.packById(packId);
   if (pack) assertNotVerbatim(listing, pack.instructions);
-  await writeDraft(packId, listing, sourceVersion);
+  await writeDraft(packId, listing, sourceVersion, "human");
 }
 
 /** The write itself, with nothing judged — every caller above guards first. */
 async function writeDraft(
-  packId: string, listing: Listing, sourceVersion: number | null,
+  packId: string, listing: Listing, sourceVersion: number | null, authoredBy: DraftAuthor,
 ): Promise<void> {
   const s = await sql();
   await s.query(
     `INSERT INTO pack_listing_drafts
-       (pack_id, description, use_cases, limitations, faq, scenarios, requirements, generated_at, source_version)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (pack_id, description, use_cases, limitations, faq, scenarios, requirements, generated_at, source_version,
+        authored_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (pack_id) DO UPDATE SET
        description = EXCLUDED.description, use_cases = EXCLUDED.use_cases, limitations = EXCLUDED.limitations,
        faq = EXCLUDED.faq, scenarios = EXCLUDED.scenarios, requirements = EXCLUDED.requirements,
-       generated_at = EXCLUDED.generated_at, source_version = EXCLUDED.source_version`,
+       generated_at = EXCLUDED.generated_at, source_version = EXCLUDED.source_version,
+       authored_by = EXCLUDED.authored_by`,
     [packId, listing.description, JSON.stringify(listing.useCases), JSON.stringify(listing.limitations),
       JSON.stringify(listing.faq), JSON.stringify(listing.scenarios), JSON.stringify(listing.requirements),
-      now(), sourceVersion]);
+      now(), sourceVersion, authoredBy]);
 }
 
 /**
@@ -182,7 +202,7 @@ export async function saveGeneratedDraft(
   await writeDraft(packId, {
     ...listing,
     faq: mergeFaq(live?.faq ?? [], listing.faq),
-  }, sourceVersion);
+  }, sourceVersion, "generator");
 }
 
 /**
@@ -251,26 +271,39 @@ export async function approveDraft(orgId: string, slug: string): Promise<void> {
   const isCurator = curator !== null && curator === orgId;
   if (!isAuthor && !isCurator) throw new NotTheAuthorError();
 
-  const draft = await draftFor(pack.id);
-  if (!draft) throw new PackConflictError("there is no draft to approve");
+  const pending = await draftWithMeta(pack.id);
+  if (!pending) throw new PackConflictError("there is no draft to approve");
+  const draft = pending.listing;
 
-  // The draft was seeded from the live FAQ when it was generated, but a
-  // creator can publish another answer out of the inbox in between — so the
-  // union is taken again here, at the moment of writing. Publishing a listing
-  // is never the thing that deletes an answer somebody wrote to a buyer.
+  // The FAQ is the one field whose publication depends on who wrote the draft.
+  //
+  // A generated draft was seeded from the live FAQ when it was generated, but
+  // a creator can publish another answer out of the inbox in between — so for
+  // a generator the union is taken again here, at the moment of writing.
+  // Publishing a *generated* listing is never the thing that deletes an
+  // answer somebody wrote to a buyer.
+  //
+  // A draft a person saved is the opposite case, and the merge was never
+  // meant to cover it: they read the questions in the box, changed them and
+  // pressed save, so their version is the whole FAQ — a corrected answer
+  // reaches the page and a deleted one leaves it. Without this branch nothing
+  // in the application could edit a live answer at all, while the screen
+  // said otherwise.
   //
   // "At the moment of writing" has to mean it: between this read and this
   // write, `publishToFaq` can land. So the pack is re-read each attempt, the
-  // union recomputed from what is actually stored, and the write conditional
+  // value recomputed from what is actually stored, and the write conditional
   // on that value — the same compare-and-set `updateFaq` makes, extended over
   // the other five columns this statement also sets. See `updateFaq` above
-  // for why this is not a transaction.
+  // for why this is not a transaction. On the human path the retry re-reads
+  // and then still writes the author's own list, which is what authoritative
+  // means: an answer published in that gap is one they did not keep.
   const s = await sql();
   for (let attempt = 1; attempt <= FAQ_WRITE_ATTEMPTS; attempt += 1) {
     const current = await P.packById(pack.id);
     if (!current) throw new PackConflictError(`no pack at /packs/${slug}`);
     const was = current.faq ?? "";
-    const faq = mergeFaq(listingOf(current).faq, draft.faq);
+    const faq = pending.authoredBy === "human" ? draft.faq : mergeFaq(listingOf(current).faq, draft.faq);
     const written = await s.query<{ id: string }>(
       `UPDATE packs SET description = $1, use_cases = $2, limitations = $3, faq = $4, scenarios = $5,
          requirements = $6, listing_approved_at = $7, listing_stale_at = NULL

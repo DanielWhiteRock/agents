@@ -26,6 +26,17 @@ export type Listing = {
   requirements: string[];
 };
 
+/**
+ * Who wrote the draft waiting on `pack_listing_drafts`.
+ *
+ * Here rather than in `src/app/listing.ts` for the same reason the shape is:
+ * the three layers that have to agree about it cannot all reach one another.
+ * `listing.ts` stores it, `server.ts` passes it along, and `views.ts` says
+ * what approval will do with it — and `views.ts` may not import `listing.ts`,
+ * which would pull the runtime into a render module's graph.
+ */
+export type DraftAuthor = "human" | "generator";
+
 /** The six stored columns, shared by `packs` and `pack_listing_drafts`. */
 export type ListingColumns = {
   description: string; use_cases: string; limitations: string;

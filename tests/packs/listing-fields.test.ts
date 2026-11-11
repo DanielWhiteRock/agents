@@ -4,7 +4,7 @@ import {
   packPage, catalogPage, creatorPage, creatorEditorPage, listingApprovalPage, type PackPageExtras,
 } from "../../src/app/views.js";
 import { hasListing, type Listing } from "../../src/app/listing.js";
-import { listingFromForm, listingToForm } from "../../src/packs/listing-shape.js";
+import { listingFromForm, listingToForm, type DraftAuthor } from "../../src/packs/listing-shape.js";
 import type { PackRow, PackVersionRow } from "../../src/app/platform.js";
 import type { CreatorRow } from "../../src/app/creators.js";
 
@@ -721,6 +721,9 @@ const approvalArgs = (over: Record<string, unknown> = {}) => ({
   pack: packRow(),
   live: null as Listing | null,
   draft: null as Listing | null,
+  // A generated draft is the default case, and the one an unmarked row reads
+  // as, so it is what these cases describe unless they say otherwise.
+  draftAuthor: "generator" as DraftAuthor,
   generatedAt: null as string | null,
   sourceVersion: null as number | null,
   currentVersion: 3 as number | null,
@@ -895,6 +898,46 @@ describe("editing a proposed listing", () => {
   it("takes an unlabelled first line as the question, so a hand-typed entry still lands", () => {
     const l = listingFromForm({ faq: "Does it write?\nA: No." });
     expect(l.faq).toEqual([{ q: "Does it write?", a: "No." }]);
+  });
+});
+
+// ------------------------------------------ the screen says what will happen
+//
+// `approveDraft` treats the FAQ differently depending on who wrote the draft:
+// a generated one is merged with what is live and the published answers win,
+// a saved one is published as it stands. The screen used to make one promise
+// for both — "Approving publishes the draft as it is saved above", which was
+// false for a generated draft's FAQ, next to a disclosure that published
+// answers are kept, which is false for a draft the author saved.
+
+describe("what the approval screen promises about the FAQ", () => {
+  const generated = (): string => listingApprovalPage(approvalArgs({
+    draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", draftAuthor: "generator",
+  }));
+  const human = (): string => listingApprovalPage(approvalArgs({
+    draft: FULL, generatedAt: "2026-11-10T09:00:00.000Z", draftAuthor: "human",
+  }));
+
+  it("tells a generated draft's approver that published answers are kept", () => {
+    expect(generated()).toMatch(/answers you published to the FAQ[\s\S]*?are kept/i);
+  });
+
+  it("does not make that promise over a draft the author saved, because it is not true there", () => {
+    expect(human()).not.toMatch(/are kept,?\s*\n?whatever/i);
+  });
+
+  it("tells the author of a saved draft that an answer they removed leaves the page", () => {
+    const h = human();
+    expect(h).toMatch(/whole of the pack's FAQ/i);
+    expect(h).toMatch(/removed from it/i);
+  });
+
+  it("says, over a generated draft, that saving the draft is what takes the FAQ over", () => {
+    expect(generated()).toMatch(/Save the draft first/i);
+  });
+
+  it("gives the two kinds of draft different copy, which is the whole point", () => {
+    expect(generated()).not.toEqual(human());
   });
 });
 
