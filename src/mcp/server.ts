@@ -40,7 +40,7 @@ export function buildServer(ctx: McpContext): McpServer {
       const v = await P.getVersion(r.pack_version_id);
       const pack = v ? await P.packById(v.pack_id) : undefined;
       return `${r.started_at.slice(0, 16).replace("T", " ")} · ${pack?.name ?? "?"} · ${r.model}`
-        + ` · ${r.output_tokens} out · ${r.active_seconds.toFixed(1)}s · ${pts(r.list_cost_cents * 1000)}`
+        + ` · ${r.output_tokens} out · ${r.active_seconds.toFixed(1)}s · ${pts(r.list_cost_cents)}`
         + ` · ${r.stop_reason ?? r.status} · ${r.id}`;
     }));
     return text(lines.join("\n"));
@@ -64,7 +64,7 @@ export function buildServer(ctx: McpContext): McpServer {
     const lines = rows.map((e) => `${e.created_at.slice(11, 19)} ${e.kind} ${e.payload.slice(0, 400)}`);
     return text([
       `Run ${run.id} · ${run.model} · ${run.output_tokens} output tokens`
-      + ` · ${run.active_seconds.toFixed(1)}s · cost ${pts(run.list_cost_cents * 1000)} of ${pts(run.budget_cents * 1000)}`,
+      + ` · ${run.active_seconds.toFixed(1)}s · cost ${pts(run.list_cost_cents)} of ${pts(run.budget_cents)}`,
       "",
       ...lines,
     ].join("\n"));
