@@ -9,113 +9,33 @@
  *
  * One-way import: this module may reach into `authoring.ts` for the
  * authority pattern and its error type; `authoring.ts` never reaches back.
+ * What both of them need — the shape of a listing, the JSON parsers and the
+ * FAQ merge — is in `src/packs/listing-shape.ts`, which imports nothing.
  */
 import { now, platformOrgId } from "./db.js";
 import { sql } from "./sql.js";
 import { DomainError } from "./errors.js";
 import { NotTheAuthorError, PackConflictError } from "./authoring.js";
 import * as P from "./platform.js";
+import {
+  listingFromColumns, listingFromParts, mergeFaq, type Listing, type ListingColumns,
+} from "../packs/listing-shape.js";
 
-export type Listing = {
-  description: string;
-  useCases: string[];
-  limitations: string[];
-  faq: Array<{ q: string; a: string }>;
-  scenarios: Array<{ brief: string; reached: string[]; output: string }>;
-  requirements: string[];
-};
-
-/** The six stored columns, shared by `packs` and `pack_listing_drafts`. */
-type ListingColumns = {
-  description: string; use_cases: string; limitations: string; faq: string; scenarios: string; requirements: string;
-};
+/**
+ * The shape itself lives in `src/packs/listing-shape.ts`, a leaf module, so
+ * `authoring.ts` and `messages.ts` can share it: this module imports
+ * `authoring.ts`, so nothing in `authoring.ts` may import this one back.
+ * Re-exported here because a listing is still this module's subject —
+ * callers say `L.Listing` and `L.mergeFaq`, and the move is not their news.
+ */
+export { listingFromParts, mergeFaq };
+export type { Listing };
 
 type DraftRow = ListingColumns & { pack_id: string; generated_at: string; source_version: number | null };
 
-/**
- * A column is stored as JSON, except it starts life as `''` rather than
- * `'[]'` — deliberate, so nothing has to be written before an author touches
- * it. `''` means empty, same as genuinely malformed JSON: either way, there
- * is nothing usable to show, so both fall through to the empty array.
- */
-function parseArray(raw: string): unknown[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-const text = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
-
-/** A list column as the page needs it: strings with something in them. */
-const strings = (raw: unknown): string[] =>
-  (Array.isArray(raw) ? raw : []).map(text).filter(Boolean);
-
-/**
- * Shape, not just type.
- *
- * `Array.isArray` was the whole check, and the page renders `s.reached.length`
- * and `f.q` straight off the element — so one stored scenario missing a field
- * took the entire pack page down with a 500 rather than dropping a card. The
- * columns hold whatever was written to them (a hand-fixed row, an older
- * writer, a generator), so the shape is settled here, once, on the way in.
- *
- * An entry with no heading — a scenario with no brief, a question with no
- * question — has nothing to render, so it is dropped rather than rendered as
- * an empty card.
- */
-function toFaq(raw: unknown[]): Array<{ q: string; a: string }> {
-  return raw
-    .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null)
-    .map((e) => ({ q: text(e["q"]), a: text(e["a"]) }))
-    .filter((e) => e.q.length > 0);
-}
-
-function toScenarios(raw: unknown[]): Array<{ brief: string; reached: string[]; output: string }> {
-  return raw
-    .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null)
-    .map((e) => ({ brief: text(e["brief"]), reached: strings(e["reached"]), output: text(e["output"]) }))
-    .filter((e) => e.brief.length > 0);
-}
-
-/**
- * Six fields of unknown provenance as one listing.
- *
- * The one place the shape is decided, so a column read back off `packs` and a
- * block of JSON a generator produced cannot disagree about what a scenario
- * is — `scripts/generate-listings.mjs` normalises through here too.
- */
-export function listingFromParts(parts: {
-  description?: unknown; useCases?: unknown; limitations?: unknown;
-  faq?: unknown; scenarios?: unknown; requirements?: unknown;
-}): Listing {
-  return {
-    description: text(parts.description),
-    useCases: strings(parts.useCases),
-    limitations: strings(parts.limitations),
-    faq: toFaq(Array.isArray(parts.faq) ? parts.faq : []),
-    scenarios: toScenarios(Array.isArray(parts.scenarios) ? parts.scenarios : []),
-    requirements: strings(parts.requirements),
-  };
-}
-
-function fromColumns(row: ListingColumns): Listing {
-  return listingFromParts({
-    description: row.description,
-    useCases: parseArray(row.use_cases),
-    limitations: parseArray(row.limitations),
-    faq: parseArray(row.faq),
-    scenarios: parseArray(row.scenarios),
-    requirements: parseArray(row.requirements),
-  });
-}
-
 /** The listing currently approved and live on the pack. */
 export function listingOf(pack: P.PackRow): Listing {
-  return fromColumns(pack);
+  return listingFromColumns(pack);
 }
 
 /** Whether a pack has any real listing content beyond its tagline. */
@@ -134,7 +54,7 @@ export async function draftWithMeta(packId: string): Promise<PendingDraft | null
   const row = await s.one<DraftRow>("SELECT * FROM pack_listing_drafts WHERE pack_id = $1", [packId]);
   if (!row) return null;
   return {
-    listing: fromColumns(row),
+    listing: listingFromColumns(row),
     generatedAt: row.generated_at,
     sourceVersion: row.source_version == null ? null : Number(row.source_version),
   };
@@ -231,27 +151,6 @@ async function writeDraft(
     [packId, listing.description, JSON.stringify(listing.useCases), JSON.stringify(listing.limitations),
       JSON.stringify(listing.faq), JSON.stringify(listing.scenarios), JSON.stringify(listing.requirements),
       now(), sourceVersion]);
-}
-
-/**
- * Two FAQs as one, the human-written entries first and winning.
- *
- * A question is the identity — asked twice, in whatever casing, it is one
- * entry — and the answer kept is the one from `live`, because that is the one
- * a creator wrote to a buyer who actually asked.
- */
-export function mergeFaq(
-  live: Array<{ q: string; a: string }>, proposed: Array<{ q: string; a: string }>,
-): Array<{ q: string; a: string }> {
-  const seen = new Set(live.map((f) => f.q.trim().toLowerCase()));
-  const out = [...live];
-  for (const entry of proposed) {
-    const key = entry.q.trim().toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push({ q: entry.q.trim(), a: entry.a.trim() });
-  }
-  return out;
 }
 
 /**

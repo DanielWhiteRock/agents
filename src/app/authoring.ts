@@ -7,6 +7,9 @@ import { parsePackMarkdown, type ParsedPack } from "../packs/import.js";
 import {
   findCommands, findHooks, findWorkflows, normaliseTree, validateTree, type PackTree,
 } from "../packs/tree.js";
+import {
+  faqFromJson, mergeFaq, scenariosFromJson, stringsFromJson,
+} from "../packs/listing-shape.js";
 
 /**
  * Creating, editing, withdrawing and deleting packs — the supply side.
@@ -321,21 +324,24 @@ export async function importPack(args: {
     // of just the instructions does not wipe a listing an author wrote in
     // the browser.
     descriptionLong: parsed.descriptionLong ?? existing?.description ?? "",
-    useCases: parsed.useCases.length
-      ? parsed.useCases
-      : existing ? JSON.parse(existing.use_cases || "[]") : [],
-    limitations: parsed.limitations.length
-      ? parsed.limitations
-      : existing ? JSON.parse(existing.limitations || "[]") : [],
-    faq: parsed.faq.length
-      ? parsed.faq
-      : existing ? JSON.parse(existing.faq || "[]") : [],
-    scenarios: parsed.scenarios.length
-      ? parsed.scenarios
-      : existing ? JSON.parse(existing.scenarios || "[]") : [],
-    requirements: parsed.requirements.length
-      ? parsed.requirements
-      : existing ? JSON.parse(existing.requirements || "[]") : [],
+    // Parsed through the shared shape module rather than `JSON.parse`: these
+    // columns are read back off a row this process did not necessarily write,
+    // and `listing.ts` makes "tolerate a malformed column" an explicit
+    // invariant everywhere else. A hand-fixed row should not make an import
+    // throw.
+    useCases: parsed.useCases.length ? parsed.useCases : stringsFromJson(existing?.use_cases),
+    limitations: parsed.limitations.length ? parsed.limitations : stringsFromJson(existing?.limitations),
+    // The FAQ is the one listing field that merges instead of replacing.
+    // Every other field is prose only the author writes, so a folder that
+    // states one is the author changing their mind. An FAQ entry can also
+    // arrive from a real buyer exchange — `publishToFaq` quotes a question
+    // and the creator's own answer onto this column — and a folder carrying
+    // a `faq:` block has no idea those exist. Replacing wholesale deleted
+    // them, with no way back but the thread they came from. The live entries
+    // win on a repeated question, same rule `approveDraft` follows.
+    faq: mergeFaq(faqFromJson(existing?.faq), parsed.faq),
+    scenarios: parsed.scenarios.length ? parsed.scenarios : scenariosFromJson(existing?.scenarios),
+    requirements: parsed.requirements.length ? parsed.requirements : stringsFromJson(existing?.requirements),
     builtOn: parsed.builtOn ?? existing?.built_on ?? "",
     extras: {
       ...(parsed.anthropicSkills.length ? { anthropicSkills: parsed.anthropicSkills } : {}),

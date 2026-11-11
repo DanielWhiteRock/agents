@@ -459,3 +459,56 @@ test("a malformed upload is refused rather than crashed on", async () => {
     assert.equal(survives, false, `${JSON.stringify(junk)} must not reach importPack`);
   }
 });
+
+test("a re-import carrying its own faq: block keeps the answers a creator published", async () => {
+  // The FAQ is the one listing field with a second writer: `publishToFaq`
+  // quotes a buyer's question and the creator's answer onto `packs.faq` out
+  // of the inbox. A folder stating `faq:` knows nothing about those, so
+  // replacing the column wholesale deleted every answer that came out of a
+  // real exchange, with no way back but the thread it came from.
+  const { orgId } = await org();
+  const slug = `faqmerge-${++n}`;
+  const agent = (faq) => `---\nname: FAQ Pack\nslug: ${slug}\nmodel: claude-opus-5\n${faq}---\nThe method.`;
+
+  await Auth.importPack({ orgId, files: [{ path: "agent.md",
+    text: agent("faq:\n  - q: Does it write?\n    a: No.\n") }] });
+
+  // Stands in for the inbox: an answer on the pack that no folder carries.
+  const s = await sql();
+  const pack = await P.getPack(slug);
+  const fromBuyer = [
+    ...JSON.parse(pack.faq),
+    { q: "Can it read a private repo?", a: "With a token, yes — we never store it." },
+  ];
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify(fromBuyer), pack.id]);
+
+  // The same folder again, its faq: block unchanged and one entry longer.
+  const again = await Auth.importPack({ orgId, files: [{ path: "agent.md",
+    text: agent("faq:\n  - q: Does it write?\n    a: No.\n  - q: Which models?\n    a: Opus, by default.\n") }] });
+
+  const faq = JSON.parse(again.pack.faq);
+  assert.deepEqual(faq.map((f) => f.q), [
+    "Does it write?", "Can it read a private repo?", "Which models?",
+  ], "the published answer survives, and the folder's new question is added");
+  assert.match(faq[1].a, /we never store it/, "the creator's own wording is kept verbatim");
+});
+
+test("a listing column holding junk does not make an import throw", async () => {
+  // `listing.ts` makes "tolerate a malformed column" an explicit invariant;
+  // importPack used to JSON.parse these columns bare, so one hand-fixed row
+  // turned a re-import into a 500.
+  const { orgId } = await org();
+  const slug = `junkcol-${++n}`;
+  const agent = `---\nname: Junk Columns\nslug: ${slug}\nmodel: claude-opus-5\n---\nThe method.`;
+  await Auth.importPack({ orgId, files: [{ path: "agent.md", text: agent }] });
+
+  const s = await sql();
+  const pack = await P.getPack(slug);
+  await s.query(
+    "UPDATE packs SET use_cases = $1, faq = $1, scenarios = $1, limitations = $1, requirements = $1 WHERE id = $2",
+    ["not json at all", pack.id]);
+
+  const again = await Auth.importPack({ orgId, files: [{ path: "agent.md", text: agent }] });
+  assert.deepEqual(JSON.parse(again.pack.use_cases), []);
+  assert.deepEqual(JSON.parse(again.pack.faq), []);
+});

@@ -22,6 +22,7 @@
 import { id, now } from "./db.js";
 import { sql } from "./sql.js";
 import { DomainError } from "./errors.js";
+import { faqFromJson } from "../packs/listing-shape.js";
 
 /** Thrown by `openThread` and `reply` for a body or subject with nothing in it, or a reference to a creator or pack that does not exist or does not line up. */
 export class MessagesInputError extends DomainError {
@@ -101,17 +102,6 @@ async function messagesOf(threadId: string): Promise<ThreadMessageRow[]> {
     "SELECT * FROM thread_messages WHERE thread_id = $1 ORDER BY created_at ASC, id ASC",
     [threadId],
   );
-}
-
-/** `''` and malformed JSON both mean "nothing usable" — same rule `listing.ts` uses. */
-function parseFaq(raw: string): Array<{ q: string; a: string }> {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 export type OpenThreadInput = {
@@ -284,7 +274,7 @@ export async function publishToFaq(
   if (answer.published_at) throw new MessagesInputError("this answer has already been published");
 
   const pack = await s.one<{ faq: string }>("SELECT faq FROM packs WHERE id = $1", [thread.pack_id]);
-  const faq = parseFaq(pack?.faq ?? "");
+  const faq = faqFromJson(pack?.faq);
   faq.push({ q: question.body, a: answer.body });
   const t = now();
   await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify(faq), thread.pack_id]);
