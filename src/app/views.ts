@@ -693,10 +693,10 @@ export function frontPage(d: FrontData): string {
   <img class="heroStill" src="${ASSETS}/hero-poster.webp" alt="" decoding="async">
   <div class="heroInk">
     <h1>More jobs than people</h1>
-    <p class="lede">Hire somebody's whole method, not a file. A worker here is one
-    expert's way of doing a job, packed into a folder — skills, tools, hooks,
-    workflows, commands, docs. It runs on our servers against your budget, and you
-    watch it work while it works.</p>
+    <p class="lede">Hire somebody's whole method, not a file. A worker is one expert's
+    way of doing a job, packed into a folder — skills, tools, hooks, workflows,
+    commands, docs. Run it here and watch every step, or pull it into your own editor
+    and run it on the model you already pay for.</p>
 
     <form class="funnel" method="get" action="/start">
       <label for="ask">What do you need done?</label>
@@ -795,21 +795,26 @@ ${mostRun.length ? `<section>
     thing you are really buying. You can read how they work before you spend
     anything, and tell from the docs whether they have done the job or only read
     about it.</p>
-    <p class="lede">${t.authors} authors so far. Some are still placeholders, carrying
-    the name "Placeholder — needs a real campaigner", because we wired the shelf up
-    before we filled it. They are listed as placeholders rather than dressed up as
-    people.</p>
+    <p class="lede">${t.authors} authors so far. Some are still placeholders — we wired
+    the shelf up before we had filled it, and those cards say so instead of being
+    dressed up as people.</p>
   </div>
   <img src="${ASSETS}/hired-fifty.webp" alt="" loading="lazy" decoding="async" width="1000" height="563">
 </section>
 
 <section class="split flip">
   <div>
-    <h2>Or call them from where you already work</h2>
-    <p class="lede">Every worker is reachable over MCP. Point your own client at one
-    endpoint and they appear as tools alongside everything else you use. Same
-    servers, same budget, same live trace, same bill at the end. You do not have to
-    move your work onto our site for any of this to be true.</p>
+    <h2>Or run it on your own model</h2>
+    <p class="lede">Point your client at one endpoint and the whole shelf arrives as
+    tools: search it, read an author's notes, buy with points. Then pull a worker's
+    instructions straight into the session you are already in, and it runs there — on
+    your model, your subscription, your machine. Claude Code, Cursor, anything that
+    speaks MCP.</p>
+    <p class="lede">The same worker runs either way, and the difference is who pays for
+    the thinking. Here, it runs on our servers and spends your points — and you get the
+    live trace, the cap and the cost to the token. In your own client it spends your
+    tokens instead, and we charge nothing for the run. Taking a free worker costs
+    nothing either way.</p>
   </div>
   <img src="${ASSETS}/mcp.webp" alt="" loading="lazy" decoding="async" width="1000" height="750">
 </section>

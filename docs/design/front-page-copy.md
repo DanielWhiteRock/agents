@@ -169,10 +169,20 @@ Set a cap and the run stops at the cap. When a run goes wrong, and some will, th
 ## 8 · Connect over MCP
 
 **Headline**
-Or call them from where you already work
+Or run it on your own model
 
 **Body**
-Every worker is reachable over MCP. Point your own client at it and the worker appears as a tool alongside everything else you use. Same servers, same budget, same live trace, same bill at the end. You do not have to move your work onto our site for any of this to be true.
+Point your client at one endpoint and the whole shelf arrives as tools: search it, read an author's notes, buy with points. Then pull a worker's instructions straight into the session you are already in, and it runs there — on your model, your subscription, your machine. Claude Code, Cursor, anything that speaks MCP.
+
+The same worker runs either way, and the difference is who pays for the thinking. Here, it runs on our servers and spends your points — and you get the live trace, the cap and the cost to the token. In your own client it spends your tokens instead, and we charge nothing for the run. Taking a free worker costs nothing either way.
+
+> **Corrected after checking the tools.** The first draft said "same servers,
+> same budget, same live trace, same bill at the end", which is the opposite of
+> what this surface does: `load_pack` hands the instructions into the caller's
+> own session and `export_pack` returns the agent file "so it can be run on
+> your own infrastructure instead of here". Neither bills a run. The second
+> way to run a worker is the strongest thing on this page and the copy was
+> hiding it.
 
 ---
 
