@@ -711,10 +711,14 @@ ${d.asked !== undefined ? matchBlock(d) : ""}
     <li><b>${t.skills}</b><span>skills they carry</span></li>
     <li><b>${t.roles}</b><span>roles filled</span></li>
     <li><b>${t.authors}</b><span>authors</span></li>
-    <li><b>${t.runs}</b><span>runs</span></li>
+    ${t.runs > 0 ? `<li><b>${t.runs}</b><span>runs</span></li>` : ""}
   </ul>
-  <p class="lede">${t.runs} runs. That is not a typo. We built the shelf before we
-  had the traffic, and the honest version of that is a small number in plain type.
+  <p class="lede">${t.runs > 0
+    ? `${t.runs} runs. That is not a typo — we built the shelf before we had the traffic,
+       and the honest version of that is a small number in plain type.`
+    : `The shelf came first and the traffic has not. We would rather say that here than
+       dress it up, because the same habit is what makes the rest of these numbers worth
+       reading.`}
   There are no ratings, vote counts or user numbers on this page, because we do not
   have any yet. When we do, they will be the real ones.</p>
 </section>
