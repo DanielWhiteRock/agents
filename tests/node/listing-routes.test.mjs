@@ -434,6 +434,24 @@ test("a hand-written draft that pastes the method back is refused with the reaso
   assert.equal(await L.draftFor(pack.id), null, "nothing was written");
 });
 
+test("a submission with every box empty is refused on the page, and the draft stays", async () => {
+  const { pack, cookie } = await authorWithPack();
+  await L.saveGeneratedDraft(pack.id, DRAFT, 1);
+
+  const res = await fetch(`${server.baseUrl}/packs/${pack.slug}/listing`, form(cookie, {
+    description: "", useCases: "", limitations: "", requirements: "", faq: "", scenarios: "",
+  }));
+  assert.equal(res.status, 303);
+  const location = res.headers.get("location");
+  assert.match(decodeURIComponent(location), /every field was blank/, "and not a bare ?saved=1");
+
+  assert.equal((await L.draftFor(pack.id)).description, DRAFT.description, "the draft was not overwritten");
+
+  // The refusal is something the author actually reads, not only a parameter.
+  const page = await (await fetch(`${server.baseUrl}${location}`, { headers: { cookie } })).text();
+  assert.match(page, /every field was blank/);
+});
+
 test("a stranger cannot edit another organisation's draft", async () => {
   const { pack } = await authorWithPack();
   await L.saveDraft(pack.id, DRAFT, 1);

@@ -41,11 +41,15 @@ export function listingOf(pack: P.PackRow): Listing {
   return listingFromColumns(pack);
 }
 
-/** Whether a pack has any real listing content beyond its tagline. */
-export function hasListing(pack: P.PackRow): boolean {
-  const l = listingOf(pack);
+/** Whether a listing says anything at all — one field with something in it. */
+export function hasContent(l: Listing): boolean {
   return l.description.trim().length > 0 || l.useCases.length > 0 || l.limitations.length > 0
     || l.faq.length > 0 || l.scenarios.length > 0 || l.requirements.length > 0;
+}
+
+/** Whether a pack has any real listing content beyond its tagline. */
+export function hasListing(pack: P.PackRow): boolean {
+  return hasContent(listingOf(pack));
 }
 
 /** A draft plus the three facts the approval screen needs about it. */
@@ -93,6 +97,33 @@ export class ListingVerbatimError extends DomainError {
       `that draft repeats the pack's own instructions verbatim ("${run}…") — `
       + `a listing describes what the worker does, it does not quote the method`,
       409, "ListingVerbatimError");
+  }
+}
+
+/**
+ * A save with nothing in it at all.
+ *
+ * `POST /packs/:slug/listing` upserts whatever arrives, so a submission with
+ * all six boxes blank replaced a generated draft with an empty one and said
+ * nothing — a draft gone and a model call to get it back.
+ *
+ * Refused outright rather than only when the pack has no live content,
+ * because the exception would permit exactly the case with the most to lose:
+ * an all-empty POST against a pack that *does* have an approved listing
+ * destroys the draft and then, approved, blanks the page. An all-empty form
+ * is also the shape an accident takes — a submit with the fields never
+ * filled, a resubmitted empty form — and it is indistinguishable from the
+ * deliberate version. Nothing is unreachable as a result: any five fields can
+ * be emptied, the FAQ included, so every field can still be cleared and
+ * published. Taking a listing off the page altogether is what withdrawing the
+ * pack is for, and that is a reviewable action rather than a blank form.
+ */
+export class ListingEmptyError extends DomainError {
+  constructor() {
+    super(
+      "every field was blank, so nothing was saved and the draft you had is still there — "
+      + "fill in at least one, or withdraw the pack if you want it off the shelf altogether",
+      409, "ListingEmptyError");
   }
 }
 
@@ -149,6 +180,9 @@ function assertNotVerbatim(listing: Listing, instructions: string): void {
 export async function saveDraft(
   packId: string, listing: Listing, sourceVersion: number | null,
 ): Promise<void> {
+  // Emptiness first: it needs no pack row, and an empty listing cannot
+  // repeat the instructions anyway.
+  if (!hasContent(listing)) throw new ListingEmptyError();
   const pack = await P.packById(packId);
   if (pack) assertNotVerbatim(listing, pack.instructions);
   await writeDraft(packId, listing, sourceVersion, "human");

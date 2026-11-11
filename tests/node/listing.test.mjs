@@ -323,6 +323,43 @@ test("a draft left unmarked is read as the generator's, which is the side that l
     "an unmarked draft is merged, so the published answer survives");
 });
 
+// --------------------------------------------------- a save with nothing in it
+//
+// The upsert takes whatever arrives, so a submission with all six boxes blank
+// used to replace a generated draft with an empty one and say nothing: the
+// draft gone, and a model call to get it back.
+
+const EMPTY = {
+  description: "", useCases: [], limitations: [], faq: [], scenarios: [], requirements: [],
+};
+
+test("a save with every field empty is refused, and the draft that was there survives", async () => {
+  const { pack } = await makePack();
+  await L.saveGeneratedDraft(pack.id, DRAFT, 1);
+
+  await assert.rejects(L.saveDraft(pack.id, EMPTY, 1), /every field was blank/);
+
+  const still = await L.draftWithMeta(pack.id);
+  assert.equal(still.listing.description, DRAFT.description, "the draft is exactly as it was");
+  assert.equal(still.authoredBy, "generator", "and the refused save did not claim it either");
+});
+
+test("emptying five of the six fields is a real listing, and publishes", async () => {
+  // The refusal is only for a submission with nothing in it at all — every
+  // individual field, the FAQ included, can still be cleared and published.
+  const { orgId, pack } = await makePack();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2", [JSON.stringify([PUBLISHED_ANSWER]), pack.id]);
+
+  await L.saveDraft(pack.id, { ...EMPTY, description: "Audits a price list, and nothing else." }, 1);
+  await L.approveDraft(orgId, pack.slug);
+
+  const live = L.listingOf(await P.getPack(pack.slug));
+  assert.equal(live.description, "Audits a price list, and nothing else.");
+  assert.deepEqual(live.faq, [], "including the FAQ the author emptied");
+  assert.deepEqual(live.useCases, []);
+});
+
 test("approving never drops an answer published after the draft was generated", async () => {
   const { orgId, pack } = await makePack();
   await L.saveGeneratedDraft(pack.id, { ...DRAFT, faq: [{ q: "Which currencies?", a: "USD only." }] }, 1);
