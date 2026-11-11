@@ -419,7 +419,13 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
       ...(creator.bio.trim() ? ["", creator.bio.trim()] : []),
       ...(links.length ? ["", "Links:", ...links.map((l) => `- ${l.label}: ${l.url}`)] : []),
       "",
-      `${stats.packs} pack${stats.packs === 1 ? "" : "s"} · ${stats.runs} run${stats.runs === 1 ? "" : "s"}`
+      // M6: `creatorStats().packs` counts packs of any status; `packs` here
+      // is already listed-only (`listedPacksByCreator`), and the list
+      // printed just below must agree with the count printed here — so the
+      // count is the rendered list's own length, not the stats row's.
+      // `runs` and `orgs` still come from `creatorStats`, which the
+      // website's creator page shares and which this does not touch.
+      `${packs.length} pack${packs.length === 1 ? "" : "s"} · ${stats.runs} run${stats.runs === 1 ? "" : "s"}`
       + ` · ${stats.orgs} org${stats.orgs === 1 ? "" : "s"}`
       + (rating.average != null ? ` · ${rating.average.toFixed(1)}/5 (${rating.count} ratings)` : ""),
       "",

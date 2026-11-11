@@ -177,6 +177,9 @@ test("pack_details carries the listing, the permissions rail and the creator", a
   for (const needle of ["Reads your code", "bash, write", "runs", "version", "Use cases", "Fix a failing CI build"]) {
     assert.match(out, new RegExp(needle), `expected to find ${JSON.stringify(needle)} in:\n${out}`);
   }
+  // M7: this pack has no creator claimed — an inverted ternary could print
+  // "(creator: null)" or similar and still pass every assertion above.
+  assert.doesNotMatch(out, /\(creator:/);
 });
 
 test("pack_details shows the creator handle once a pack is claimed", async () => {
