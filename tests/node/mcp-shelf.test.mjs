@@ -256,3 +256,32 @@ test("get_popular week ignores a run from last month", async () => {
   assert.doesNotMatch(await callTool(token, "get_popular", { timeframe: "week" }), /senior-engineer/);
   assert.match(await callTool(token, "get_popular", { timeframe: "all_time" }), /senior-engineer/);
 });
+
+// ------------------------------------------------------------------- Task 5
+
+test("get_author lists the creator's packs and their stats", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  const pack = await listedPack({ slug: `mcp-author-senior-engineer-${++n}`, name: "Author Senior Engineer" });
+  const creatorAuthor = await A.signUp({
+    email: email("author-creator"), name: "Creator", password: "correct-horse", orgName: `Author Creator Co ${n}`,
+  });
+  const handle = `author-handle-${++n}`;
+  const creator = await Creators.upsertCreator({
+    userId: creatorAuthor.userId, orgId: creatorAuthor.orgId, handle, displayName: "Author Creator",
+  });
+  const s = await sql();
+  await s.query("UPDATE packs SET creator_id = $1 WHERE id = $2", [creator.id, pack.id]);
+
+  const out = await callTool(token, "get_author", { handle });
+  assert.match(out, /senior-engineer/);
+  assert.match(out, /\d+ packs?/);
+});
+
+test("an unknown handle is not found, not an empty profile", async () => {
+  const cookie = await signUpCookie(server.baseUrl, { email: email("buyer") });
+  const token = await mintToken(cookie);
+
+  assert.match(await callTool(token, "get_author", { handle: "nobody" }), /no such creator/i);
+});

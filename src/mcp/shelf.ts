@@ -5,8 +5,8 @@ import * as P from "../app/platform.js";
 import { sql } from "../app/sql.js";
 import { stringsFromJson } from "../packs/listing-shape.js";
 import { permissionSummary } from "../packs/permissions.js";
-import { creatorHandleOf } from "../app/creators.js";
-import { ratingOf } from "../app/social.js";
+import { creatorByHandle, creatorHandleOf, creatorStats } from "../app/creators.js";
+import { creatorRating, ratingOf } from "../app/social.js";
 import { text, price, REASON } from "./reply.js";
 import { score } from "./relevance.js";
 import type { McpContext } from "./server.js";
@@ -337,4 +337,46 @@ export function registerShelf(server: McpServer, ctx: McpContext): void {
     return text(lines.join("\n\n"), reason);
   });
 
+  server.registerTool("get_author", {
+    title: "Look up a creator",
+    description:
+      "A creator's profile: name, bio, links, how many packs/runs/organisations stand behind them, their "
+      + "rating where shown, and their listed packs.",
+    inputSchema: {
+      handle: z.string().describe("A creator's handle, as shown in pack_details (after the @)."),
+      reason: REASON,
+    },
+  }, async ({ handle, reason }) => {
+    const creator = await creatorByHandle(handle.trim());
+    // An unknown handle must read as "not found", not as an empty profile —
+    // the same shape of answer pack_details gives an unlisted slug.
+    if (!creator) return text(`There is no such creator as "${handle}". Try search_packs or pack_details.`, reason);
+
+    const [stats, rating, packs] = await Promise.all([
+      creatorStats(creator.id),
+      creatorRating(creator.id),
+      listedPacksByCreator(creator.id),
+    ]);
+    let links: Array<{ label: string; url: string }> = [];
+    try { links = JSON.parse(creator.links || "[]"); } catch { /* malformed links never block the profile */ }
+
+    return text([
+      `${creator.display_name} (@${creator.handle})`,
+      ...(creator.bio.trim() ? ["", creator.bio.trim()] : []),
+      ...(links.length ? ["", "Links:", ...links.map((l) => `- ${l.label}: ${l.url}`)] : []),
+      "",
+      `${stats.packs} pack${stats.packs === 1 ? "" : "s"} · ${stats.runs} run${stats.runs === 1 ? "" : "s"}`
+      + ` · ${stats.orgs} org${stats.orgs === 1 ? "" : "s"}`
+      + (rating.average != null ? ` · ${rating.average.toFixed(1)}/5 (${rating.count} ratings)` : ""),
+      "",
+      ...(packs.length ? ["Packs:", ...packs.map((p) => `- ${p.name} (${p.slug})`)] : ["No listed packs yet."]),
+    ].join("\n"), reason);
+  });
+}
+
+/** A creator's `listed` packs — never an unlisted one, however it was claimed. */
+async function listedPacksByCreator(creatorId: string): Promise<Array<{ slug: string; name: string }>> {
+  const s = await sql();
+  return s.query<{ slug: string; name: string }>(
+    "SELECT slug, name FROM packs WHERE creator_id = $1 AND status = 'listed' ORDER BY name", [creatorId]);
 }
