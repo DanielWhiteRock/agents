@@ -589,6 +589,87 @@ test("publishing an answer and approving a listing at the same time loses neithe
   assert.equal(await L.draftFor(pack.id), null, "the draft was consumed exactly once");
 });
 
+/**
+ * The third writer of `packs.faq`: a folder's own `faq:` block, merged by
+ * `importPack`. The merge stops a re-import deleting a published answer it
+ * knows nothing about. The compare-and-set below stops the *read* it merged
+ * from going stale under it, which is the same loss by a different route.
+ *
+ * This first case pins the merge, end to end, with both writers in flight —
+ * not the condition: the interleaving Node actually produces here runs the
+ * two writes in order, so it would pass without a guard. The case after it is
+ * the one that fails if the condition goes.
+ */
+test("a folder re-import and an inbox publish at the same time lose neither answer", async () => {
+  const { author, pack, creator, thread, question, answer } = await packWithThread();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+
+  const files = [{
+    path: "agent.md",
+    text: `---\nname: ${pack.name}\nslug: ${pack.slug}\nmodel: claude-opus-5\n`
+      + `faq:\n  - q: From the folder?\n    a: Yes.\n---\n${INPUT.instructions}`,
+  }];
+
+  // Both read-modify-write cycles in flight at once, the same interleaving the
+  // approval test above drives.
+  await Promise.all([
+    M.publishToFaq(creator.id, thread.id, question.id, answer.id),
+    Auth.importPack({ orgId: author.orgId, files }),
+  ]);
+
+  const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
+  assert.ok(questions.includes("Already live?"), "the entry that was already live survives");
+  assert.ok(questions.includes("From the folder?"), "the folder's own entry landed");
+  assert.ok(questions.includes(question.body),
+    "and so does the answer published out of the inbox while the import was running");
+});
+
+test("an import's write computed from a stale FAQ read lands nothing at all", async () => {
+  const { author, pack, creator, thread, question, answer } = await packWithThread();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+
+  // What the import reads before it merges the folder's own entries in.
+  const was = (await P.packById(pack.id)).faq ?? "";
+
+  // The creator publishes an answer out of the inbox in the gap — the whole
+  // of the window the merge cannot see, because it already read the column.
+  await M.publishToFaq(creator.id, thread.id, question.id, answer.id);
+
+  // The import's write, still carrying the value it computed from that read.
+  // Refused, and nothing written — which is what the retry re-reads on.
+  await assert.rejects(
+    Auth.updatePack(author.orgId, pack.slug, {
+      ...INPUT, slug: pack.slug,
+      faq: [{ q: "Already live?", a: "Yes." }, { q: "From the folder?", a: "Yes." }],
+    }, { faq: was }),
+    /same time/);
+
+  const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
+  assert.ok(questions.includes(question.body), "the answer published in the gap survives");
+  assert.ok(!questions.includes("From the folder?"), "and the stale write landed nothing");
+});
+
+test("an import's write with the FAQ it really read goes through", async () => {
+  // The other half of the condition: it refuses a stale write, not every write.
+  const { author, pack } = await packWithThread();
+  const s = await sql();
+  await s.query("UPDATE packs SET faq = $1 WHERE id = $2",
+    [JSON.stringify([{ q: "Already live?", a: "Yes." }]), pack.id]);
+  const was = (await P.packById(pack.id)).faq ?? "";
+
+  await Auth.updatePack(author.orgId, pack.slug, {
+    ...INPUT, slug: pack.slug,
+    faq: [{ q: "Already live?", a: "Yes." }, { q: "From the folder?", a: "Yes." }],
+  }, { faq: was });
+
+  const questions = JSON.parse((await P.packById(pack.id)).faq).map((f) => f.q);
+  assert.deepEqual(questions, ["Already live?", "From the folder?"]);
+});
+
 test("a changelog note is written once per version, and a repeat is ignored rather than thrown", async () => {
   // The insert used to carry no ON CONFLICT. Today the only racer is stopped
   // earlier by `pack_versions`' UNIQUE (pack_id, version), so this is defence

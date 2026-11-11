@@ -14,7 +14,7 @@
  */
 import { now, platformOrgId } from "./db.js";
 import { sql } from "./sql.js";
-import { DomainError } from "./errors.js";
+import { DomainError, FAQ_WRITE_ATTEMPTS, FaqContendedError } from "./errors.js";
 import { NotTheAuthorError, PackConflictError } from "./authoring.js";
 import * as P from "./platform.js";
 import {
@@ -29,7 +29,7 @@ import {
  * Re-exported here because a listing is still this module's subject —
  * callers say `L.Listing` and `L.mergeFaq`, and the move is not their news.
  */
-export { listingFromParts, mergeFaq };
+export { listingFromParts, mergeFaq, FaqContendedError };
 export type { DraftAuthor, Listing };
 
 type DraftRow = ListingColumns & {
@@ -240,11 +240,12 @@ export async function saveGeneratedDraft(
 }
 
 /**
- * `packs.faq` has two writers, and both of them read it, change it in memory
- * and write the whole column back: `approveDraft` here, and
+ * `packs.faq` has three writers, and each of them reads it, changes it in
+ * memory and writes the whole column back: `approveDraft` here,
  * `publishToFaq` in `messages.ts`, where a creator quotes a buyer's question
- * and their own answer onto the page. Interleave those two read-modify-write
- * cycles and the loser's entry is gone — the exact content loss the FAQ merge
+ * and their own answer onto the page, and `importPack`'s merge in
+ * `authoring.ts`, where a folder's own `faq:` block arrives. Interleave two of
+ * those read-modify-write cycles and the loser's entry is gone — the exact content loss the FAQ merge
  * exists to prevent, arrived at from the other direction.
  *
  * There is no transaction primitive to reach for: `src/app/sql.ts` exposes
@@ -258,15 +259,11 @@ export async function saveGeneratedDraft(
  * and an older row can hold SQL NULL where a newer one holds `''` — and in
  * both dialects `NULL = NULL` is not true, which would turn a retry loop
  * into a guaranteed failure on exactly those rows.
+ *
+ * `FAQ_WRITE_ATTEMPTS` and `FaqContendedError` live in `errors.ts` because
+ * `authoring.ts` needs them too and may not import this module; re-exported
+ * above, since the condition is this module's subject.
  */
-const FAQ_WRITE_ATTEMPTS = 5;
-
-export class FaqContendedError extends DomainError {
-  constructor() {
-    super("the FAQ was being written by somebody else at the same time — try that again",
-      409, "FaqContendedError");
-  }
-}
 
 /**
  * Read `packs.faq`, let the caller decide what it should become, and write it

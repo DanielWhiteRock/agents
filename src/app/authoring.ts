@@ -1,6 +1,6 @@
 import { id, now, platformOrgId } from "./db.js";
 import { sql } from "./sql.js";
-import { DomainError } from "./errors.js";
+import { DomainError, FAQ_WRITE_ATTEMPTS, FaqContendedError } from "./errors.js";
 import * as P from "./platform.js";
 import type { PackDefinition } from "../packs/types.js";
 import { parsePackMarkdown, type ParsedPack } from "../packs/import.js";
@@ -8,7 +8,7 @@ import {
   findCommands, findHooks, findWorkflows, normaliseTree, validateTree, type PackTree,
 } from "../packs/tree.js";
 import {
-  faqFromJson, mergeFaq, scenariosFromJson, stringsFromJson,
+  faqFromJson, mergeFaq, scenariosFromJson, stringsFromJson, type FaqEntry,
 } from "../packs/listing-shape.js";
 
 /**
@@ -159,20 +159,33 @@ export async function createPack(orgId: string, input: PackInput): Promise<P.Pac
   return (await P.getPack(slug))!;
 }
 
-/** Only the author's organisation may edit, and a slug never changes. */
-export async function updatePack(orgId: string, slug: string, input: PackInput): Promise<P.PackRow> {
+/**
+ * Only the author's organisation may edit, and a slug never changes.
+ *
+ * `expect.faq` makes the whole statement conditional on `packs.faq` still
+ * holding the value the caller computed its own `input.faq` from, and raises
+ * `FaqContendedError` when it does not. Only the FAQ needs it: every other
+ * listing field is prose one author writes, while `packs.faq` has three
+ * read-modify-write writers and losing the race there deletes an answer a
+ * creator wrote to a buyer. See `updateFaq` in `listing.ts` for why this is a
+ * compare-and-set and not a transaction.
+ */
+export async function updatePack(
+  orgId: string, slug: string, input: PackInput, expect?: { faq: string },
+): Promise<P.PackRow> {
   const pack = await P.getPack(slug);
   if (!pack) throw new PackConflictError(`no pack at /packs/${slug}`);
   if (pack.author_org_id !== orgId) throw new NotTheAuthorError();
   validate(input);
   const s = await sql();
-  await s.query(
+  const guard = expect ? " AND COALESCE(faq, '') = $23" : "";
+  const written = await s.query<{ id: string }>(
     `UPDATE packs SET name = $1, tagline = $2, author = $3, price_points = $4, upgrade_points = $5,
        model = $6, effort = $7, pinned_models = $8, extras = $9, instructions = $10,
        author_payout_email = $11, tags = $13, image = $14, role = $15,
        description = $16, use_cases = $17, limitations = $18, faq = $19, requirements = $20, built_on = $21,
        scenarios = $22
-     WHERE id = $12`,
+     WHERE id = $12${guard} RETURNING id`,
     [input.name.trim(), input.tagline.trim(), input.author.trim() || pack.author,
       input.pricePoints, input.upgradePoints, input.model.trim(), input.effort ?? "",
       JSON.stringify(input.pinnedModels ?? []), JSON.stringify(input.extras ?? {}),
@@ -188,7 +201,15 @@ export async function updatePack(orgId: string, slug: string, input: PackInput):
       input.faq ? JSON.stringify(input.faq) : pack.faq,
       input.requirements ? JSON.stringify(input.requirements) : pack.requirements,
       input.builtOn?.trim() ?? pack.built_on,
-      input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios]);
+      input.scenarios ? JSON.stringify(input.scenarios) : pack.scenarios,
+      ...(expect ? [expect.faq] : [])]);
+  // A conditional write that matched nothing means somebody else wrote the
+  // FAQ between the caller's read and this statement. Nothing here changed,
+  // so the caller can re-read, merge again and run the whole thing — which is
+  // what `importPack` below does. Without `expect` there is no condition to
+  // miss and a zero-row result can only be the row having been deleted
+  // mid-call, which is left as it was rather than made a new failure mode.
+  if (expect && written.length === 0) throw new FaqContendedError();
   // Undefined means this caller never mentioned the field (the plain
   // details-form save, for instance) and the stored set is left alone;
   // an explicit array — including an empty one — replaces it, so re-importing
@@ -293,6 +314,37 @@ export async function submittedPacks(): Promise<P.PackRow[]> {
 export type UploadFile = { path: string; text: string };
 
 /**
+ * `updatePack`, with the folder's FAQ merged over whatever is stored at the
+ * moment of writing rather than whatever was stored when the import started.
+ *
+ * The merge itself is Ruling 12's rule from the other side: a folder's `faq:`
+ * block knows nothing of the answers `publishToFaq` put on the page out of a
+ * real buyer exchange, so the live entries win and a re-import can only add.
+ * But reading the column, merging in memory and writing the whole thing back
+ * is the same lost-update shape `approveDraft` and `publishToFaq` already
+ * guard against: an inbox publish landing in that gap was simply erased by
+ * the import. So the value is recomputed from what is actually stored and the
+ * write is conditional on it, retrying on a miss — the loser re-reads,
+ * re-merges and writes again, and nobody's answer disappears.
+ */
+async function updateMergingFaq(
+  orgId: string, slug: string, input: PackInput, proposed: FaqEntry[],
+): Promise<P.PackRow> {
+  for (let attempt = 1; attempt <= FAQ_WRITE_ATTEMPTS; attempt += 1) {
+    const current = await P.getPack(slug);
+    if (!current) throw new PackConflictError(`no pack at /packs/${slug}`);
+    const was = current.faq ?? "";
+    try {
+      return await updatePack(
+        orgId, slug, { ...input, faq: mergeFaq(faqFromJson(was), proposed) }, { faq: was });
+    } catch (e) {
+      if (!(e instanceof FaqContendedError)) throw e;
+    }
+  }
+  throw new FaqContendedError();
+}
+
+/**
  * Create or update a pack from uploaded files.
  *
  * Fields the file does not carry keep whatever the existing pack has, or take a
@@ -350,6 +402,10 @@ export async function importPack(args: {
     // throw.
     useCases: parsed.useCases.length ? parsed.useCases : stringsFromJson(existing?.use_cases),
     limitations: parsed.limitations.length ? parsed.limitations : stringsFromJson(existing?.limitations),
+    // The FAQ is the one listing field that merges instead of replacing, and
+    // the merge is recomputed under a compare-and-set in
+    // `updateMergingFaq` below — this value is the one a *new* pack is
+    // created with, where there is nothing to merge with and nobody to race.
     // The FAQ is the one listing field that merges instead of replacing.
     // Every other field is prose only the author writes, so a folder that
     // states one is the author changing their mind. An FAQ entry can also
@@ -372,7 +428,7 @@ export async function importPack(args: {
   const created = !existing;
   if (existing && existing.author_org_id !== args.orgId) throw new NotTheAuthorError();
   const pack = existing
-    ? await updatePack(args.orgId, slug, input)
+    ? await updateMergingFaq(args.orgId, slug, input, parsed.faq)
     : await createPack(args.orgId, input);
 
   const { warnings } = await P.savePackTree(pack.id, tree);
